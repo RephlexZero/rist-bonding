@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "gst-inspect ristdispatcher",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "/usr/bin/gst-inspect-1.0",
+      "args": ["ristdispatcher"],
+      "cwd": "${workspaceFolder}",
+      "stopAtEntry": false,
+      "MIMode": "gdb"
+    }
+  ]
+}
