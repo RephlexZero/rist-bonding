@@ -80,18 +80,16 @@ impl ObjectImpl for ControllerImpl {
             .chain_function(|_pad, parent, buffer| {
                 // Simple passthrough - forward to src pad
                 match parent.and_then(|p| p.downcast_ref::<DynBitrate>()) {
-                    Some(element) => {
-                        match element.static_pad("src") {
-                            Some(srcpad) => {
-                                gst::trace!(CAT, "Forwarding buffer through dynbitrate");
-                                srcpad.push(buffer)
-                            }
-                            None => {
-                                gst::error!(CAT, "No source pad found");
-                                Err(gst::FlowError::Error)
-                            }
+                    Some(element) => match element.static_pad("src") {
+                        Some(srcpad) => {
+                            gst::trace!(CAT, "Forwarding buffer through dynbitrate");
+                            srcpad.push(buffer)
                         }
-                    }
+                        None => {
+                            gst::error!(CAT, "No source pad found");
+                            Err(gst::FlowError::Error)
+                        }
+                    },
                     None => {
                         gst::error!(CAT, "Failed to get element reference");
                         Err(gst::FlowError::Error)
@@ -128,7 +126,7 @@ impl ObjectImpl for ControllerImpl {
                     .blurb("The encoder element to control bitrate for")
                     .build(),
                 glib::ParamSpecObject::builder::<gst::Element>("rist")
-                    .nick("RIST element") 
+                    .nick("RIST element")
                     .blurb("The RIST sink element to read statistics from")
                     .build(),
                 glib::ParamSpecUInt::builder("min-kbps")
@@ -258,17 +256,17 @@ impl ControllerImpl {
         // Read ristsink "stats" property -> GstStructure "rist/x-sender-stats"
         let rist = { self.inner.rist.lock().clone() };
         let encoder = { self.inner.encoder.lock().clone() };
-        
+
         if rist.is_none() {
             gst::trace!(CAT, "No RIST element configured, skipping adjustment");
             return;
         }
-        
+
         if encoder.is_none() {
             gst::trace!(CAT, "No encoder element configured, skipping adjustment");
             return;
         }
-        
+
         let _rist = rist.unwrap();
         let encoder = encoder.unwrap();
 
@@ -285,23 +283,33 @@ impl ControllerImpl {
         let since = last_change
             .map(|t| now.duration_since(t))
             .unwrap_or(Duration::from_secs(1));
-        
+
         if since < Duration::from_millis(800) {
             return; // Too soon to change
         }
 
         let mut new_kbps = current_kbps;
-        
+
         // TODO: Implement proper RIST stats parsing when ristsink is available
         // For now, just implement a basic oscillation for demonstration
         if current_kbps >= max {
             new_kbps = current_kbps.saturating_sub(step).max(min);
-            gst::info!(CAT, "Decreasing bitrate from {} to {} kbps", current_kbps, new_kbps);
+            gst::info!(
+                CAT,
+                "Decreasing bitrate from {} to {} kbps",
+                current_kbps,
+                new_kbps
+            );
         } else if current_kbps <= min {
             new_kbps = (current_kbps + step).min(max);
-            gst::info!(CAT, "Increasing bitrate from {} to {} kbps", current_kbps, new_kbps);
+            gst::info!(
+                CAT,
+                "Increasing bitrate from {} to {} kbps",
+                current_kbps,
+                new_kbps
+            );
         }
-        
+
         if new_kbps != current_kbps {
             encoder.set_property("bitrate", &new_kbps);
             *self.inner.last_change.lock() = Some(now);

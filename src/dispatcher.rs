@@ -103,19 +103,19 @@ impl ObjectImpl for DispatcherImpl {
                 // Choose output
                 let mut st = inner.state.lock();
                 let srcpads = inner.srcpads.lock();
-                
+
                 if st.weights.is_empty() {
                     gst::warning!(CAT, "No weights configured, using default");
                     st.weights.push(1.0);
                 }
-                
+
                 if srcpads.is_empty() {
                     gst::warning!(CAT, "No source pads available");
                     drop(st);
                     drop(srcpads);
                     return Err(gst::FlowError::NotNegotiated);
                 }
-                
+
                 // Weighted round-robin selection
                 let next_out = pick_output_index(&st.weights, st.next_out);
                 st.next_out = next_out;
@@ -180,10 +180,14 @@ impl ObjectImpl for DispatcherImpl {
                                 .into_iter()
                                 .map(|w| if w.is_finite() && w >= 0.0 { w } else { 1.0 })
                                 .collect();
-                            
+
                             if !valid_weights.is_empty() {
                                 self.inner.state.lock().weights = valid_weights;
-                                gst::info!(CAT, "Set weights: {:?}", self.inner.state.lock().weights);
+                                gst::info!(
+                                    CAT,
+                                    "Set weights: {:?}",
+                                    self.inner.state.lock().weights
+                                );
                             } else {
                                 gst::warning!(CAT, "Invalid weights JSON, using default [1.0]");
                                 self.inner.state.lock().weights = vec![1.0];
@@ -332,27 +336,27 @@ fn pick_output_index(weights: &[f64], prev: usize) -> usize {
         gst::warning!(CAT, "Empty weights array, using index 0");
         return 0;
     }
-    
+
     let n = weights.len();
     let mut best = 0usize;
     let mut best_score = f64::NEG_INFINITY;
-    
+
     for (i, &w) in weights.iter().enumerate() {
         if !w.is_finite() || w < 0.0 {
             gst::warning!(CAT, "Invalid weight at index {}: {}", i, w);
             continue;
         }
-        
+
         // Rotate priority to prevent sticky choice
         let rotation_penalty = ((i + n - (prev % n)) % n) as f64 * 1e-6;
         let score = w - rotation_penalty;
-        
+
         if score > best_score {
             best = i;
             best_score = score;
         }
     }
-    
+
     // Ensure we return a valid index
     best.min(n.saturating_sub(1))
 }
