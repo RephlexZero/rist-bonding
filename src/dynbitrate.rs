@@ -6,6 +6,16 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+// Logging category
+use once_cell::sync::Lazy;
+static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
+    gst::DebugCategory::new(
+        "dynbitrate",
+        gst::DebugColorFlags::empty(),
+        Some("Dynamic Bitrate Controller"),
+    )
+});
+
 // Element: dynbitrate
 // Bin with two mandatory child properties:
 //   - property "encoder" (Element) : upstream encoder whose "bitrate" we set (kbps)
@@ -69,12 +79,24 @@ impl ObjectImpl for ControllerImpl {
             .name("sink")
             .chain_function(|_pad, parent, buffer| {
                 // Simple passthrough - forward to src pad
-                if let Some(element) = parent.and_then(|p| p.downcast_ref::<DynBitrate>()) {
-                    if let Some(srcpad) = element.static_pad("src") {
-                        return srcpad.push(buffer);
+                match parent.and_then(|p| p.downcast_ref::<DynBitrate>()) {
+                    Some(element) => {
+                        match element.static_pad("src") {
+                            Some(srcpad) => {
+                                gst::trace!(CAT, "Forwarding buffer through dynbitrate");
+                                srcpad.push(buffer)
+                            }
+                            None => {
+                                gst::error!(CAT, "No source pad found");
+                                Err(gst::FlowError::Error)
+                            }
+                        }
+                    }
+                    None => {
+                        gst::error!(CAT, "Failed to get element reference");
+                        Err(gst::FlowError::Error)
                     }
                 }
-                Err(gst::FlowError::Error)
             })
             .build();
 
@@ -101,24 +123,52 @@ impl ObjectImpl for ControllerImpl {
         use once_cell::sync::Lazy;
         static PROPS: Lazy<Vec<glib::ParamSpec>> = Lazy::new(|| {
             vec![
-                glib::ParamSpecObject::builder::<gst::Element>("encoder").build(),
-                glib::ParamSpecObject::builder::<gst::Element>("rist").build(),
+                glib::ParamSpecObject::builder::<gst::Element>("encoder")
+                    .nick("Encoder element")
+                    .blurb("The encoder element to control bitrate for")
+                    .build(),
+                glib::ParamSpecObject::builder::<gst::Element>("rist")
+                    .nick("RIST element") 
+                    .blurb("The RIST sink element to read statistics from")
+                    .build(),
                 glib::ParamSpecUInt::builder("min-kbps")
+                    .nick("Minimum bitrate (kbps)")
+                    .blurb("Minimum allowed bitrate in kilobits per second")
+                    .minimum(100)
+                    .maximum(100000)
                     .default_value(500)
                     .build(),
                 glib::ParamSpecUInt::builder("max-kbps")
+                    .nick("Maximum bitrate (kbps)")
+                    .blurb("Maximum allowed bitrate in kilobits per second")
+                    .minimum(500)
+                    .maximum(100000)
                     .default_value(8000)
                     .build(),
                 glib::ParamSpecUInt::builder("step-kbps")
+                    .nick("Step size (kbps)")
+                    .blurb("Bitrate adjustment step size in kilobits per second")
+                    .minimum(50)
+                    .maximum(5000)
                     .default_value(250)
                     .build(),
                 glib::ParamSpecDouble::builder("target-loss-pct")
+                    .nick("Target loss percentage")
+                    .blurb("Target packet loss percentage for bitrate adjustment")
+                    .minimum(0.0)
+                    .maximum(10.0)
                     .default_value(0.5)
                     .build(),
                 glib::ParamSpecUInt64::builder("min-rtx-rtt-ms")
+                    .nick("Minimum RTX RTT (ms)")
+                    .blurb("Minimum retransmission round-trip time in milliseconds")
+                    .minimum(10)
+                    .maximum(1000)
                     .default_value(40)
                     .build(),
                 glib::ParamSpecBoolean::builder("downscale-keyunit")
+                    .nick("Force keyframe on downscale")
+                    .blurb("Force keyframe generation when downscaling bitrate")
                     .default_value(true)
                     .build(),
             ]
@@ -208,36 +258,52 @@ impl ControllerImpl {
         // Read ristsink "stats" property -> GstStructure "rist/x-sender-stats"
         let rist = { self.inner.rist.lock().clone() };
         let encoder = { self.inner.encoder.lock().clone() };
-        if rist.is_none() || encoder.is_none() {
+        
+        if rist.is_none() {
+            gst::trace!(CAT, "No RIST element configured, skipping adjustment");
             return;
         }
+        
+        if encoder.is_none() {
+            gst::trace!(CAT, "No encoder element configured, skipping adjustment");
+            return;
+        }
+        
         let _rist = rist.unwrap();
         let encoder = encoder.unwrap();
 
-        // For now, just implement a basic placeholder
-        // TODO: Implement proper RIST stats parsing when ristsink is available
+        // Get current bitrate
+        let current_kbps: u32 = encoder.property("bitrate");
+
         let min = *self.inner.min_kbps.lock();
         let max = *self.inner.max_kbps.lock();
         let step = *self.inner.step_kbps.lock();
 
-        let current_kbps: u32 = encoder.property("bitrate");
-        let mut kbps = current_kbps;
+        // Simple time-based adjustment for demonstration
         let now = Instant::now();
         let last_change = *self.inner.last_change.lock();
         let since = last_change
             .map(|t| now.duration_since(t))
             .unwrap_or(Duration::from_secs(1));
-        let can_change = since > Duration::from_millis(800);
+        
+        if since < Duration::from_millis(800) {
+            return; // Too soon to change
+        }
 
-        if can_change {
-            // Simple oscillation for demonstration
-            // In production, this would read RIST stats to make decisions
-            if kbps >= max {
-                kbps = kbps.saturating_sub(step).max(min);
-            } else if kbps <= min {
-                kbps = (kbps + step).min(max);
-            }
-            encoder.set_property("bitrate", &kbps);
+        let mut new_kbps = current_kbps;
+        
+        // TODO: Implement proper RIST stats parsing when ristsink is available
+        // For now, just implement a basic oscillation for demonstration
+        if current_kbps >= max {
+            new_kbps = current_kbps.saturating_sub(step).max(min);
+            gst::info!(CAT, "Decreasing bitrate from {} to {} kbps", current_kbps, new_kbps);
+        } else if current_kbps <= min {
+            new_kbps = (current_kbps + step).min(max);
+            gst::info!(CAT, "Increasing bitrate from {} to {} kbps", current_kbps, new_kbps);
+        }
+        
+        if new_kbps != current_kbps {
+            encoder.set_property("bitrate", &new_kbps);
             *self.inner.last_change.lock() = Some(now);
         }
     }

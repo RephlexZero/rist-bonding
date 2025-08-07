@@ -5,6 +5,16 @@ use gstreamer as gst;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
+// Logging category
+use once_cell::sync::Lazy;
+static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
+    gst::DebugCategory::new(
+        "ristdispatcher",
+        gst::DebugColorFlags::empty(),
+        Some("RIST Dispatcher"),
+    )
+});
+
 // Element: ristdispatcher
 // One sink pad (chain-based), N request src pads: src_%u
 // For use as ristsink "dispatcher"; ristsink will request src pads for bonded sessions.
@@ -82,26 +92,45 @@ impl ObjectImpl for DispatcherImpl {
         let sinkpad = gst::Pad::builder_from_template(&tmpl_sink)
             .name("sink")
             .chain_function(move |_pad, _parent, buf| {
-                let inner = inner_weak.upgrade().ok_or(gst::FlowError::Flushing)?;
+                let inner = match inner_weak.upgrade() {
+                    Some(inner) => inner,
+                    None => {
+                        gst::error!(CAT, "Failed to upgrade inner reference");
+                        return Err(gst::FlowError::Flushing);
+                    }
+                };
 
                 // Choose output
                 let mut st = inner.state.lock();
                 let srcpads = inner.srcpads.lock();
-                if st.weights.is_empty() || srcpads.is_empty() {
+                
+                if st.weights.is_empty() {
+                    gst::warning!(CAT, "No weights configured, using default");
+                    st.weights.push(1.0);
+                }
+                
+                if srcpads.is_empty() {
+                    gst::warning!(CAT, "No source pads available");
                     drop(st);
                     drop(srcpads);
                     return Err(gst::FlowError::NotNegotiated);
                 }
+                
                 // Weighted round-robin selection
                 let next_out = pick_output_index(&st.weights, st.next_out);
                 st.next_out = next_out;
                 let idx = next_out;
                 drop(st);
 
-                if let Some(outpad) = srcpads.get(idx) {
-                    outpad.push(buf)
-                } else {
-                    Err(gst::FlowError::Error)
+                match srcpads.get(idx) {
+                    Some(outpad) => {
+                        gst::trace!(CAT, "Forwarding buffer to output pad {}", idx);
+                        outpad.push(buf)
+                    }
+                    None => {
+                        gst::error!(CAT, "Invalid output pad index: {}", idx);
+                        Err(gst::FlowError::Error)
+                    }
                 }
             })
             .build();
@@ -119,12 +148,20 @@ impl ObjectImpl for DispatcherImpl {
             vec![
                 glib::ParamSpecString::builder("weights")
                     .nick("Initial weights JSON")
+                    .blurb("JSON array of initial link weights, e.g., [1.0, 1.0, 2.0]")
+                    .default_value(Some("[1.0]"))
                     .build(),
                 glib::ParamSpecUInt64::builder("rebalance-interval-ms")
+                    .nick("Rebalance interval (ms)")
+                    .blurb("How often to recompute weights from statistics in milliseconds")
+                    .minimum(100)
+                    .maximum(10000)
                     .default_value(500)
                     .build(),
                 glib::ParamSpecString::builder("strategy")
-                    .default_value("ewma")
+                    .nick("Load balancing strategy")
+                    .blurb("Strategy for weight updates: 'aimd' or 'ewma'")
+                    .default_value(Some("ewma"))
                     .build(),
             ]
         });
@@ -134,14 +171,35 @@ impl ObjectImpl for DispatcherImpl {
     fn set_property(&self, id: usize, value: &glib::Value, _pspec: &glib::ParamSpec) {
         match id {
             0 => {
-                // weights
+                // weights - parse JSON array
                 if let Ok(Some(s)) = value.get::<Option<String>>() {
-                    if let Ok(v) = serde_json::from_str::<Vec<f64>>(&s) {
-                        self.inner.state.lock().weights = v;
+                    match serde_json::from_str::<Vec<f64>>(&s) {
+                        Ok(weights) => {
+                            // Validate weights
+                            let valid_weights: Vec<f64> = weights
+                                .into_iter()
+                                .map(|w| if w.is_finite() && w >= 0.0 { w } else { 1.0 })
+                                .collect();
+                            
+                            if !valid_weights.is_empty() {
+                                self.inner.state.lock().weights = valid_weights;
+                                gst::info!(CAT, "Set weights: {:?}", self.inner.state.lock().weights);
+                            } else {
+                                gst::warning!(CAT, "Invalid weights JSON, using default [1.0]");
+                                self.inner.state.lock().weights = vec![1.0];
+                            }
+                        }
+                        Err(e) => {
+                            gst::warning!(CAT, "Failed to parse weights JSON: {}", e);
+                        }
                     }
                 }
             }
-            1 => *self.inner.rebalance_interval_ms.lock() = value.get::<u64>().unwrap_or(500),
+            1 => {
+                let interval = value.get::<u64>().unwrap_or(500).max(100).min(10000);
+                *self.inner.rebalance_interval_ms.lock() = interval;
+                gst::debug!(CAT, "Set rebalance interval: {} ms", interval);
+            }
             2 => {
                 let s = value
                     .get::<Option<String>>()
@@ -156,6 +214,7 @@ impl ObjectImpl for DispatcherImpl {
                     Strategy::Ewma
                 };
                 *self.inner.strategy.lock() = strategy;
+                gst::debug!(CAT, "Set strategy: {:?}", strategy);
             }
             _ => {}
         }
@@ -267,21 +326,35 @@ impl ElementImpl for DispatcherImpl {
     }
 }
 
-// Simple weighted selection with stride to avoid bursts
+// Weighted selection with bounds checking and fallback
 fn pick_output_index(weights: &[f64], prev: usize) -> usize {
-    // Convert to cumulative and pick next bucket after prev
-    let n = weights.len().max(1);
+    if weights.is_empty() {
+        gst::warning!(CAT, "Empty weights array, using index 0");
+        return 0;
+    }
+    
+    let n = weights.len();
     let mut best = 0usize;
-    let mut best_score = f64::MIN;
+    let mut best_score = f64::NEG_INFINITY;
+    
     for (i, &w) in weights.iter().enumerate() {
-        // rotate priority to prevent sticky choice
-        let score = w - ((i + n - (prev % n)) % n) as f64 * 1e-6;
+        if !w.is_finite() || w < 0.0 {
+            gst::warning!(CAT, "Invalid weight at index {}: {}", i, w);
+            continue;
+        }
+        
+        // Rotate priority to prevent sticky choice
+        let rotation_penalty = ((i + n - (prev % n)) % n) as f64 * 1e-6;
+        let score = w - rotation_penalty;
+        
         if score > best_score {
             best = i;
             best_score = score;
         }
     }
-    best
+    
+    // Ensure we return a valid index
+    best.min(n.saturating_sub(1))
 }
 
 pub fn register(plugin: &gst::Plugin) -> Result<(), glib::BoolError> {

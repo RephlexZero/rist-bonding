@@ -3,7 +3,7 @@ name = "gst-rist-smart"
 version = "0.1.0"
 edition = "2021"
 description = "Rust GStreamer elements: RIST-aware dispatcher and dynamic bitrate controller"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 
 [lib]
 name = "gstristsmart"

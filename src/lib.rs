@@ -20,7 +20,7 @@ gst::plugin_define!(
     env!("CARGO_PKG_DESCRIPTION"),
     plugin_init,
     env!("CARGO_PKG_VERSION"),
-    "LGPL-2.1+",
+    "MIT",
     env!("CARGO_PKG_NAME"),
     "gst-rist-smart",
     "https://github.com/user/repo",
