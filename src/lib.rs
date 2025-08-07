@@ -22,7 +22,7 @@ gst::plugin_define!(
     env!("CARGO_PKG_VERSION"),
     "MIT OR Apache-2.0",
     env!("CARGO_PKG_NAME"),
-    env!("CARGO_PKG_NAME"),
+    "gst-rist-smart",
     "https://github.com/user/repo",
     "2025-01-01"
 );

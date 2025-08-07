@@ -27,6 +27,10 @@ pub struct ControllerInner {
     last_change: Mutex<Option<Instant>>,
 }
 
+glib::wrapper! {
+    pub struct DynBitrate(ObjectSubclass<ControllerImpl>) @extends gst::Element, gst::Object;
+}
+
 #[derive(Default)]
 pub struct ControllerImpl {
     inner: Arc<ControllerInner>,
@@ -171,10 +175,6 @@ impl ControllerImpl {
             *self.inner.last_change.lock() = Some(now);
         }
     }
-}
-
-glib::wrapper! {
-    pub struct DynBitrate(ObjectSubclass<ControllerImpl>) @extends gst::Element, gst::Object;
 }
 
 pub fn register(plugin: &gst::Plugin) -> Result<(), glib::BoolError> {

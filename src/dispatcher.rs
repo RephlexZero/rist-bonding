@@ -46,6 +46,11 @@ impl Default for Strategy {
     }
 }
 
+// Public wrapper type so GStreamer can instantiate it
+glib::wrapper! {
+    pub struct Dispatcher(ObjectSubclass<DispatcherImpl>) @extends gst::Element, gst::Object;
+}
+
 // Subclass implementation
 #[derive(Default)]
 pub struct DispatcherImpl {
@@ -55,7 +60,7 @@ pub struct DispatcherImpl {
 #[glib::object_subclass]
 impl ObjectSubclass for DispatcherImpl {
     const NAME: &'static str = "ristdispatcher";
-    type Type = super::Dispatcher;
+    type Type = Dispatcher;
     type ParentType = gst::Element;
 }
 
@@ -271,11 +276,6 @@ fn pick_output_index(weights: &[f64], prev: usize) -> usize {
         }
     }
     best
-}
-
-// Public wrapper type so GStreamer can instantiate it
-glib::wrapper! {
-    pub struct Dispatcher(ObjectSubclass<DispatcherImpl>) @extends gst::Element, gst::Object;
 }
 
 pub fn register(plugin: &gst::Plugin) -> Result<(), glib::BoolError> {
