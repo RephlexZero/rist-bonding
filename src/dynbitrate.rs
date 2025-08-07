@@ -46,9 +46,46 @@ impl ObjectSubclass for ControllerImpl {
 impl ObjectImpl for ControllerImpl {
     fn constructed(&self) {
         self.parent_constructed();
+        let obj = self.obj();
+
+        // Create simple passthrough pads
+        let sink_template = gst::PadTemplate::new(
+            "sink",
+            gst::PadDirection::Sink,
+            gst::PadPresence::Always,
+            &gst::Caps::new_any(),
+        )
+        .unwrap();
+
+        let src_template = gst::PadTemplate::new(
+            "src",
+            gst::PadDirection::Src,
+            gst::PadPresence::Always,
+            &gst::Caps::new_any(),
+        )
+        .unwrap();
+
+        let sinkpad = gst::Pad::builder_from_template(&sink_template)
+            .name("sink")
+            .chain_function(|_pad, parent, buffer| {
+                // Simple passthrough - forward to src pad
+                if let Some(element) = parent.and_then(|p| p.downcast_ref::<DynBitrate>()) {
+                    if let Some(srcpad) = element.static_pad("src") {
+                        return srcpad.push(buffer);
+                    }
+                }
+                Err(gst::FlowError::Error)
+            })
+            .build();
+
+        let srcpad = gst::Pad::builder_from_template(&src_template)
+            .name("src")
+            .build();
+
+        obj.add_pad(&sinkpad).unwrap();
+        obj.add_pad(&srcpad).unwrap();
 
         // Install a periodic tick to poll ristsink stats and adjust bitrate
-        let obj = self.obj();
         let weak = obj.downgrade();
         gst::glib::timeout_add_local(Duration::from_millis(500), move || {
             if let Some(obj) = weak.upgrade() {
@@ -115,7 +152,10 @@ impl ObjectImpl for ControllerImpl {
             5 => self.inner.target_loss_pct.lock().to_value(),
             6 => self.inner.rtt_floor_ms.lock().to_value(),
             7 => true.to_value(), // downscale-keyunit default
-            _ => unimplemented!(),
+            _ => {
+                // Return a safe default value for unknown properties
+                "".to_value()
+            }
         }
     }
 }
@@ -134,6 +174,32 @@ impl ElementImpl for ControllerImpl {
             )
         });
         Some(&*ELEMENT_METADATA)
+    }
+
+    fn pad_templates() -> &'static [gst::PadTemplate] {
+        use once_cell::sync::Lazy;
+        static PAD_TEMPLATES: Lazy<Vec<gst::PadTemplate>> = Lazy::new(|| {
+            let caps = gst::Caps::new_any();
+
+            let sink_pad_template = gst::PadTemplate::new(
+                "sink",
+                gst::PadDirection::Sink,
+                gst::PadPresence::Always,
+                &caps,
+            )
+            .unwrap();
+
+            let src_pad_template = gst::PadTemplate::new(
+                "src",
+                gst::PadDirection::Src,
+                gst::PadPresence::Always,
+                &caps,
+            )
+            .unwrap();
+
+            vec![sink_pad_template, src_pad_template]
+        });
+        PAD_TEMPLATES.as_ref()
     }
 }
 

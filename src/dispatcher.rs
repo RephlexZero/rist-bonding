@@ -88,11 +88,14 @@ impl ObjectImpl for DispatcherImpl {
                 let mut st = inner.state.lock();
                 let srcpads = inner.srcpads.lock();
                 if st.weights.is_empty() || srcpads.is_empty() {
+                    drop(st);
+                    drop(srcpads);
                     return Err(gst::FlowError::NotNegotiated);
                 }
                 // Weighted round-robin selection
-                st.next_out = pick_output_index(&st.weights, st.next_out);
-                let idx = st.next_out;
+                let next_out = pick_output_index(&st.weights, st.next_out);
+                st.next_out = next_out;
+                let idx = next_out;
                 drop(st);
 
                 if let Some(outpad) = srcpads.get(idx) {
@@ -173,7 +176,10 @@ impl ObjectImpl for DispatcherImpl {
                     Strategy::Ewma => "ewma".to_value(),
                 }
             }
-            _ => unimplemented!(),
+            _ => {
+                // Return a safe default value for unknown properties
+                "".to_value()
+            }
         }
     }
 }
@@ -237,9 +243,9 @@ impl ElementImpl for DispatcherImpl {
             .unwrap_or_else(|| format!("src_{}", idx));
         let pad = gst::Pad::builder_from_template(templ)
             .name(&pad_name)
-            .activatemode_function(|_, _, _, _| Ok(()))
-            .event_function(|_, _, _| true)
-            .query_function(|_, _, _| false)
+            .activatemode_function(|_pad, _parent, _mode, _active| Ok(()))
+            .event_function(|_pad, _parent, _event| true)
+            .query_function(|_pad, _parent, _query| false)
             .build();
         self.obj().add_pad(&pad).ok()?;
         srcpads.push(pad.clone());

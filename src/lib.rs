@@ -16,11 +16,11 @@ fn plugin_init(plugin: &gst::Plugin) -> Result<(), glib::BoolError> {
 }
 
 gst::plugin_define!(
-    gstristsmart,
+    ristsmart,
     env!("CARGO_PKG_DESCRIPTION"),
     plugin_init,
     env!("CARGO_PKG_VERSION"),
-    "MIT OR Apache-2.0",
+    "LGPL-2.1+",
     env!("CARGO_PKG_NAME"),
     "gst-rist-smart",
     "https://github.com/user/repo",
