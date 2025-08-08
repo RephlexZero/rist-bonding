@@ -1,275 +1,254 @@
-# RIST Smart GStreamer Plugin
+# RISTSmart Plugin
 
-A GStreamer plugin written in Rust providing RIST-aware load balancing and dynamic bitrate control elements.
+This repository contains two GStreamer elements that help with Reliable Internet Stream Transport (RIST) bonding and rate control:
 
-## Elements
+* **`ristdispatcher`** — a lightweight, chain‑based dispatcher that fan‑outs an RTP stream to multiple per‑link branches and routes buffers using **manual per‑link weights**.
+* **`dynbitrate`** — a simple bitrate controller intended to adjust an encoder’s `bitrate` property over time (currently a scaffold with basic behaviour; see *Limitations*).
 
-### ristdispatcher
+> Plugin ID: **`ristsmart`** (see `lib.rs`)
+>
+> Elements provided: `ristdispatcher`, `dynbitrate`
 
-A RIST-aware packet dispatcher that performs intelligent load balancing across multiple bonded connections.
+---
 
-**Features:**
-- Weighted round-robin distribution
-- Support for multiple output pads via request pads
-- Configurable load balancing strategies (AIMD, EWMA)
-- JSON-based weight configuration with validation
-- Real-time logging and monitoring
-
-**Properties:**
-- `weights`: JSON array string of initial link weights (e.g., `"[1.0, 2.0, 1.5]"`)
-- `rebalance-interval-ms`: How often to recompute weights (100-10000ms, default: 500)
-- `strategy`: Load balancing strategy - `"aimd"` or `"ewma"` (default: `"ewma"`)
-
-**Pad Templates:**
-- Sink: `application/x-rtp` (always available)
-- Src: `application/x-rtp` (request pads named `src_%u`)
-
-**Usage:**
-```bash
-# Basic dispatcher with single output
-gst-launch-1.0 videotestsrc ! x264enc ! rtph264pay ! ristdispatcher ! fakesink
-
-# Dispatcher with weighted outputs and properties
-gst-launch-1.0 videotestsrc ! x264enc ! rtph264pay ! \
-    ristdispatcher weights="[2.0,1.0]" strategy=aimd name=disp ! fakesink \
-    disp. ! fakesink
-```
-
-### dynbitrate
-
-Dynamic bitrate controller that adjusts encoder bitrate based on network conditions. Currently implements a passthrough element with property framework ready for RIST statistics integration.
-
-**Features:**
-- Passthrough element for any stream type
-- Property-based encoder and RIST element configuration
-- Configurable bitrate adjustment parameters
-- Timer-based adjustment framework (ready for statistics integration)
-
-**Properties:**
-- `encoder`: The encoder element reference to control (GstElement object)
-- `rist`: The RIST sink element reference for statistics (GstElement object)  
-- `min-kbps`: Minimum allowed bitrate (100-100000, default: 500)
-- `max-kbps`: Maximum allowed bitrate (500-100000, default: 8000)
-- `step-kbps`: Bitrate adjustment step size (50-5000, default: 250)
-- `target-loss-pct`: Target packet loss percentage (0.0-10.0, default: 0.5)
-- `min-rtx-rtt-ms`: Minimum retransmission RTT threshold (10-1000ms, default: 40)
-- `downscale-keyunit`: Force keyframe on bitrate decrease (boolean, default: true)
-
-**Pad Templates:**
-- Sink: `ANY` (always available)
-- Src: `ANY` (always available)
-
-**Usage:**
-```bash
-# Basic passthrough
-gst-launch-1.0 videotestsrc ! dynbitrate ! fakesink
-
-# With properties (element references must be set programmatically)
-gst-launch-1.0 videotestsrc ! dynbitrate min-kbps=1000 max-kbps=5000 ! fakesink
-```
-
-## Building
+## 1) Build & Install
 
 ### Prerequisites
+
+* GStreamer 1.20+ headers and runtime
+* Rust 1.75+ and Cargo
+* `gstreamer`/`glib` Rust crates (managed via Cargo)
+
+### Build
+
 ```bash
-# Ubuntu/Debian
-sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev pkg-config
-
-# Fedora/RHEL
-sudo dnf install gstreamer1-devel gstreamer1-plugins-base-devel pkgconfig
-
-# Arch Linux  
-sudo pacman -S gstreamer gst-plugins-base pkgconf
+cargo build --release
 ```
 
-### Compilation
+### Registering the plugin
+
+Ensure the compiled shared library is on GStreamer’s plugin path. For local testing:
+
 ```bash
-# Development build
-PKG_CONFIG_PATH=/usr/lib/pkgconfig cargo build
-
-# Release build
-PKG_CONFIG_PATH=/usr/lib/pkgconfig cargo build --release
-
-# Install the plugin system-wide (optional)
-sudo cp target/release/libgstristsmart.so /usr/lib/x86_64-linux-gnu/gstreamer-1.0/
-```
-
-## Testing
-
-### Plugin Discovery
-```bash
-# Set plugin path for testing
-export GST_PLUGIN_PATH=target/debug
-
-# Inspect the plugin
+export GST_PLUGIN_PATH="$(pwd)/target/release"
+# Verify:
 gst-inspect-1.0 ristsmart
-
-# Inspect individual elements
-gst-inspect-1.0 ristdispatcher
-gst-inspect-1.0 dynbitrate
 ```
 
-### Functional Tests
-```bash
-# Test ristdispatcher basic functionality
-gst-launch-1.0 videotestsrc num-buffers=10 ! x264enc ! rtph264pay ! ristdispatcher ! fakesink
+---
 
-# Test ristdispatcher with properties
-gst-launch-1.0 videotestsrc num-buffers=10 ! x264enc ! rtph264pay ! \
-    ristdispatcher weights="[3.0,1.0]" strategy=aimd ! fakesink
+## 2) Element: `ristdispatcher`
 
-# Test dynbitrate passthrough
-gst-launch-1.0 videotestsrc num-buffers=10 ! dynbitrate ! fakesink
+**Category:** Filter/Network
+**Pads:**
 
-# Test dynbitrate with properties  
-gst-launch-1.0 videotestsrc num-buffers=10 ! \
-    dynbitrate min-kbps=1000 max-kbps=5000 step-kbps=500 ! fakesink
+* **sink** (Always): `application/x-rtp`
+* **src\_%u** (Request): `application/x-rtp`
+
+`ristdispatcher` is designed to be connected upstream of `ristsink`. The RIST sink will **request one `src_%u` pad per bonded link** and link each branch to its own `queue ! ristrtxsend ! ...` chain.
+
+### 2.1 Behaviour
+
+* **Routing:** For every incoming RTP buffer on the **sink** pad, the dispatcher selects one `src_%u` according to a **weight vector** and pushes the buffer to that pad.
+* **Selection algorithm:** Deterministic **weighted pick** with a tiny rotation penalty to avoid always choosing the same index on ties.
+* **Manual weights:** You can set an initial weight vector (JSON) that biases traffic per link.
+
+> ⚠️ **Runtime pad changes:** The current implementation assumes the set of bonded links is **stable while PLAYING**. Adding/removing RIST links after negotiation may require re‑(PAUSED→PLAYING) or upstream renegotiation.
+
+### 2.2 Properties
+
+| Name                    | Type                          | Default  | Description                                                                  |
+| ----------------------- | ----------------------------- | -------- | ---------------------------------------------------------------------------- |
+| `weights`               | `string` (JSON array)         | `[1.0]`  | Initial per‑link weights. Example: `[2.0,1.0,1.0]` biases the first link 2×. |
+| `rebalance-interval-ms` | `uint64`                      | `500`    | Reserved for future dynamic weight recomputation. Not used in this build.    |
+| `strategy`              | `string` (`"ewma"`\|`"aimd"`) | `"ewma"` | Reserved for future recompute strategy. Not used in this build.              |
+
+### 2.3 Example: programmatic setup (Rust)
+
+```rust
+use gstreamer as gst;
+use gst::prelude::*;
+
+gst::init().unwrap();
+
+let pipeline = gst::Pipeline::new();
+let pay = gst::ElementFactory::make("rtph264pay").property("pt", 96).build().unwrap();
+let ext = gst::ElementFactory::make("ristrtpext").build().unwrap();
+let sink = gst::ElementFactory::make("ristsink").build().unwrap();
+let disp = gst::ElementFactory::make("ristdispatcher").build().unwrap();
+
+disp.set_property("weights", Some("[2.0,1.0]")); // bias link #0
+
+// Attach dispatcher to ristsink (object-typed property → must be set in code)
+sink.set_property("dispatcher", &disp);
+// Configure bonded endpoints on ristsink (two links shown)
+sink.set_property("bonding-addresses", &"10.0.0.1:5004,11.0.0.1:5006");
+
+pipeline.add_many([&pay, &ext, &disp, &sink]).unwrap();
+gst::Element::link_many([&pay, &ext, &disp, &sink]).unwrap();
+
+pipeline.set_state(gst::State::Playing).unwrap();
 ```
 
-### Troubleshooting
-```bash
-# Clear GStreamer registry cache if elements aren't found
-rm -rf ~/.cache/gstreamer-1.0/
+> **Note:** The `dispatcher` property is a **GObject** (element) reference. It cannot be set from `gst-launch-1.0`; set it programmatically as above.
 
-# Enable debug output
-GST_DEBUG=3 gst-launch-1.0 [pipeline...]
+### 2.4 Example topologies
 
-# Check for plugin loading issues
-GST_DEBUG=GST_PLUGIN_LOADING:5 gst-inspect-1.0 ristsmart
+* **2‑link bonding with manual bias**
+
+```
+... ! rtph264pay pt=96 ! ristrtpext ! ristdispatcher weights="[3.0,1.0]" ! ristsink bonding-addresses=ipA:portA,ipB:portB
 ```
 
-## Architecture
+(Weights shown inline for illustration; set via code.)
 
-The plugin implements two main components designed for RIST bonding scenarios:
+* **1→N split before per‑link senders**
 
-### RIST Dispatcher
-- **Input**: Single RTP stream via sink pad
-- **Output**: Multiple RTP streams via request source pads
-- **Logic**: Weighted round-robin distribution based on configurable weights
-- **Monitoring**: Comprehensive logging with configurable debug categories
-
-### Dynamic Bitrate Controller  
-- **Input**: Any stream type via sink pad
-- **Output**: Passthrough to source pad
-- **Logic**: Timer-based framework ready for RIST statistics integration
-- **Properties**: Full configuration interface for encoder control parameters
-
-Both elements integrate seamlessly with existing GStreamer pipelines and provide extensive property-based configuration.
-
-## Development Status
-
-- ✅ **Core functionality**: Both elements fully operational
-- ✅ **Property system**: Complete with validation and documentation  
-- ✅ **Error handling**: Comprehensive logging and graceful fallbacks
-- ✅ **Pipeline integration**: Full GStreamer compatibility
-- 🔄 **RIST integration**: Framework ready, awaiting RIST statistics API
-- 🔄 **Advanced features**: Placeholder for future NACK/RTT-based algorithms
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-A Rust GStreamer plugin crate providing two custom elements for intelligent RIST streaming:
-
-- **ristdispatcher** — A dispatcher element for `ristsink`'s `dispatcher` property that routes RTP packets across multiple RIST sessions using NACK/RTT-aware load balancing (not just round-robin).
-- **dynbitrate** — A controller element that monitors `ristsink` stats and dynamically adjusts an upstream encoder's bitrate to maintain stability across bonded cellular links.
-
-## Features
-
-- **Smart Load Balancing**: Routes packets based on link health (RTT, packet loss) rather than simple round-robin
-- **Dynamic Bitrate Control**: AIMD-based rate control that adapts encoder bitrate based on RIST session statistics
-- **Cellular Link Optimization**: Designed for bonded cellular connections with automatic keyframe insertion on bitrate reductions
-
-## Building
-
-This project requires GStreamer 1.24+ and the GStreamer Rust bindings.
-
-```bash
-# Install GStreamer development packages (Ubuntu/Debian)
-sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
-
-# Build the plugin
-PKG_CONFIG_PATH=/usr/lib/pkgconfig cargo build --release
-
-# The plugin will be built as target/release/libgstristsmart.so
+```
+RTP → ristrtpext → ristdispatcher → src_0 → queue → ristrtxsend → ...
+                              ↘ src_1 → queue → ristrtxsend → ...
 ```
 
-## Installation
+### 2.5 Notes & caveats
 
-Copy the built plugin to your GStreamer plugin directory:
+* **Events/queries:** This build’s src‑pad event/query handlers are minimal. Plan pipelines so negotiation completes **before** PLAYING and avoid hot‑adding links.
+* **Caps:** Both sink and src pads use `application/x-rtp`.
+* **Error handling:** If the chosen `src_%u` is missing, the element reports an error (no automatic fallback chain).
 
-```bash
-# System-wide installation
-sudo cp target/release/libgstristsmart.so /usr/lib/gstreamer-1.0/
+---
 
-# Or set GST_PLUGIN_PATH for local usage
-export GST_PLUGIN_PATH=$PWD/target/release:$GST_PLUGIN_PATH
+## 3) Element: `dynbitrate`
+
+**Category:** Filter/Network
+**Pads:**
+
+* **sink** (Always): `ANY`
+* **src** (Always): `ANY`
+
+`dynbitrate` is a control element meant to sit **beside** your main media chain. It periodically inspects a configured RIST sink and adjusts an encoder’s `bitrate` property in kilobits per second.
+
+### 3.1 Properties
+
+| Name                | Type         | Default | Description                                                           |
+| ------------------- | ------------ | ------- | --------------------------------------------------------------------- |
+| `encoder`           | `GstElement` | `NULL`  | The encoder whose `bitrate` (kbps) will be adjusted (e.g. `x264enc`). |
+| `rist`              | `GstElement` | `NULL`  | The `ristsink` to read stats from (scaffold).                         |
+| `min-kbps`          | `uint`       | `500`   | Minimum bitrate.                                                      |
+| `max-kbps`          | `uint`       | `8000`  | Maximum bitrate.                                                      |
+| `step-kbps`         | `uint`       | `250`   | Adjustment step per tick.                                             |
+| `target-loss-pct`   | `double`     | `0.5`   | Target packet loss percentage (reserved).                             |
+| `min-rtx-rtt-ms`    | `uint64`     | `40`    | Minimum retransmission RTT (reserved).                                |
+| `downscale-keyunit` | `bool`       | `true`  | (Reserved) Force keyframe on downscale.                               |
+
+### 3.2 Current behaviour
+
+* A 500 ms timer calls `tick()`.
+* If `encoder` is set and exposes a `bitrate` property (in **kbps**), the element performs a simple **guarded oscillation** between `min-kbps` and `max-kbps` using `step-kbps`.
+* Hooks are present to read `rist` statistics (`rist/x-sender-stats` struct) but **parsing/adaptation logic is not implemented in this build**.
+
+### 3.3 Example: programmatic setup (Rust)
+
+```rust
+let ctrl = gst::ElementFactory::make("dynbitrate").build().unwrap();
+ctrl.set_property("encoder", &encoder_element);
+ctrl.set_property("rist", &ristsink);
+ctrl.set_property("min-kbps", 1500u32);
+ctrl.set_property("max-kbps", 8000u32);
+ctrl.set_property("step-kbps", 500u32);
 ```
 
-## Troubleshooting
+> **Encoders:** `x264enc` uses `bitrate` in **kbps**. Other encoders may use different units/property names; adapt accordingly.
 
-If the plugin doesn't load, check:
+---
 
-```bash
-# Verify the plugin loads
-GST_DEBUG=2 GST_PLUGIN_PATH=target/debug gst-inspect-1.0 2>&1 | grep -i gstristsmart
+## 4) End‑to‑end examples
 
-# Test individual elements (when plugin loads correctly)
-GST_PLUGIN_PATH=target/debug gst-inspect-1.0 ristdispatcher
-GST_PLUGIN_PATH=target/debug gst-inspect-1.0 dynbitrate
-```
-
-Note: The plugin registration may need additional fixes for proper GStreamer integration. The core elements are implemented but may require debugging for full functionality.
-
-## Usage
-
-### Basic RIST Sender with Smart Dispatcher
-
-```bash
-GST_PLUGIN_PATH=$PWD/target/debug \
-gst-launch-1.0 \
-  v4l2src device=/dev/video0 ! videoconvert ! \
-  x265enc tune=zerolatency key-int-max=60 bitrate=4000 ! h265parse config-interval=-1 ! \
-  rtph265pay pt=96 mtu=1200 aggregate-mode=zero-latency ! \
-  ristsink \
-    dispatcher=ristdispatcher \
-    bonding-addresses="10.0.0.2:5004,10.0.1.2:5004,10.0.2.2:5004" \
-    stats-update-interval=500
-```
-
-### RIST Receiver
+### 4.1 Two‑link bonding, manual bias, x264 encoding
 
 ```bash
-gst-launch-1.0 \
-  ristsrc address=0.0.0.0 port=5004 encoding-name="H265" \
-    bonding-addresses="0.0.0.0:5004,0.0.0.0:5006,0.0.0.0:5008" ! \
-  rtph265depay ! h265parse ! avdec_h265 ! autovideosink sync=false
+# Pseudocode-ish: dispatcher must be set from an app, not from gst-launch
+appsrc is-live=true ! videoconvert ! x264enc bitrate=4000 tune=zerolatency ! \
+  rtph264pay pt=96 ! ristrtpext ! ristdispatcher ! ristsink \
+  bonding-addresses="10.0.0.1:5004,11.0.0.1:5006"
+# In code:
+// disp.set_property("weights", Some("[3.0,1.0]"));
+// sink.set_property("dispatcher", &disp);
 ```
 
-## Element Properties
+### 4.2 Add `dynbitrate` control
 
-### ristdispatcher
+Place `dynbitrate` anywhere in the pipeline graph (it has pass‑through pads) or keep it unattached and only use it as a controller.
 
-- `weights`: JSON array of initial link weights, e.g., `"[1.0, 0.8, 1.2]"`
-- `rebalance-interval-ms`: How often to recompute weights from stats (default: 500ms)
-- `strategy`: Weight update strategy - "aimd" or "ewma" (default: "ewma")
+```rust
+pipeline.add_many([&ctrl]).unwrap();
+ctrl.set_property("encoder", &x264enc);
+ctrl.set_property("rist", &ristsink);
+ctrl.set_property("min-kbps", 2500u32);
+ctrl.set_property("max-kbps", 9000u32);
+ctrl.set_property("step-kbps", 500u32);
+```
 
-### dynbitrate
+---
 
-- `encoder`: Reference to the encoder element whose bitrate to control
-- `rist`: Reference to the ristsink element to read stats from
-- `min-kbps`: Minimum bitrate in kbps (default: 500)
-- `max-kbps`: Maximum bitrate in kbps (default: 8000)
-- `step-kbps`: Bitrate adjustment step size (default: 250)
-- `target-loss-pct`: Target packet loss percentage (default: 0.5%)
-- `min-rtx-rtt-ms`: Minimum RTT threshold in milliseconds (default: 40)
-- `downscale-keyunit`: Force keyframe on bitrate reduction (default: true)
+## 5) Troubleshooting
 
-## License
+* **“dispatcher” cannot be set from gst‑launch:** Correct — it’s an object‑typed property. Set it in code.
+* **No traffic on one link:** Check `weights` JSON length: it should be ≥ the number of requested `src_%u` pads (i.e., links). Missing entries default to `1.0` during validation.
+* **Caps negotiation issues:** Ensure RTP caps are set **before** PLAYING. This build does not replay sticky events to new pads.
+* **Encoder bitrate has no effect:** Verify the encoder element actually has a `bitrate` (kbps) property. For non‑x264 encoders, property names/units differ.
+* **Debugging:**
 
-This project is licensed under either of
+  ```bash
+  GST_DEBUG=ristdispatcher:6,dynbitrate:5,ristsink:5,*:2 your-app
+  ```
 
-- Apache License, Version 2.0
-- MIT License
+---
 
-at your option.
+## 6) Performance & Tuning Tips
+
+* **Weights:** Start with equal weights `[1,1,...]`, then bias toward the lower‑loss/lower‑RTT path.
+* **Queueing:** Keep per‑link `queue` elements with enough buffers to absorb jitter.
+* **RTT/Loss feedback:** For future dynamic balancing, plan to parse `ristsink`’s stats and maintain an EWMA of goodput and RTX rate per link.
+
+---
+
+## 7) Limitations (this build)
+
+* `ristdispatcher` currently uses **manual** weights only. `rebalance-interval-ms` and `strategy` are reserved for future use.
+* Minimal event/query handling on pads → avoid hot‑adding/removing links while PLAYING.
+* `dynbitrate` does **not** yet adapt based on real `ristsink` statistics; it performs a bounded oscillation as a placeholder.
+
+---
+
+## 8) Roadmap (suggested)
+
+* **Dispatcher pad semantics:** upstream event/query forwarding and sticky event replay to support hot‑plugging links mid‑stream.
+* **Dynamic weights:** periodic recompute via EWMA/AIMD using per‑link stats sourced from `ristsink`.
+* **`dynbitrate` integration:** parse `rist/x-sender-stats` and coordinate decisions with the dispatcher (single source of truth for link quality).
+* **Signals/metrics:** expose `weights-changed`, and counters (per‑link dispatched packets, loss, RTT EWMA) for observability.
+
+---
+
+## 9) API Quick Reference
+
+### `ristdispatcher`
+
+* **Factory name:** `ristdispatcher`
+* **Pads:** `sink` (Always, `application/x-rtp`), `src_%u` (Request, `application/x-rtp`)
+* **Key properties:**
+
+  * `weights` (string JSON) → `[f64; N]`
+  * `rebalance-interval-ms` (u64) → reserved
+  * `strategy` (string: `ewma|aimd`) → reserved
+
+### `dynbitrate`
+
+* **Factory name:** `dynbitrate`
+* **Pads:** `sink` (Always, ANY), `src` (Always, ANY)
+* **Key properties:** `encoder` (GstElement), `rist` (GstElement), `min-kbps`, `max-kbps`, `step-kbps`, `target-loss-pct`, `min-rtx-rtt-ms`, `downscale-keyunit`
+
+---
+
+**License:** MIT (per `lib.rs` plugin registration)
+
+**Contact:** Maintainer field is set to “Jake” in element metadata.
