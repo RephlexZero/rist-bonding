@@ -80,6 +80,7 @@ pub struct DispatcherInner {
     rebalance_interval_ms: Mutex<u64>,
     strategy: Mutex<Strategy>,
     caps_any: Mutex<bool>,
+    auto_balance: Mutex<bool>,
     // RIST stats polling
     rist_element: Mutex<Option<gst::Element>>,
     stats_timeout_id: Mutex<Option<glib::SourceId>>,
@@ -119,24 +120,18 @@ impl ObjectImpl for DispatcherImpl {
         self.parent_constructed();
         let obj = self.obj();
 
-        // Create sink pad (chain function)
-        let use_any_caps = *self.inner.caps_any.lock();
-        let caps = if use_any_caps {
-            gst::Caps::new_any()
-        } else {
-            gst::Caps::builder("application/x-rtp").build()
-        };
-
-        let tmpl_sink = gst::PadTemplate::new(
-            "sink",
-            gst::PadDirection::Sink,
-            gst::PadPresence::Always,
-            &caps,
-        )
-        .unwrap();
+        // Create sink pad - use the single sink template
+        // Actual caps are controlled by the caps-any property via template caps
+        
+        // Get the single sink template and create pad from it
+        let sink_template = Self::pad_templates()
+            .iter()
+            .find(|tmpl| tmpl.name() == "sink")
+            .unwrap();
 
         let inner_weak = Arc::downgrade(&self.inner);
-        let sinkpad = gst::Pad::builder_from_template(&tmpl_sink)
+        let inner_weak_query = Arc::downgrade(&self.inner);
+        let sinkpad = gst::Pad::builder_from_template(sink_template)
             .name("sink")
             .chain_function(move |_pad, _parent, buf| {
                 let inner = match inner_weak.upgrade() {
@@ -288,6 +283,32 @@ impl ObjectImpl for DispatcherImpl {
                     }
                 }
             })
+            .query_function({
+                move |_pad, _parent, query| {
+                    let inner = match inner_weak_query.upgrade() {
+                        Some(inner) => inner,
+                        None => return false,
+                    };
+                    
+                    // Handle caps query based on caps-any property
+                    match query.view_mut() {
+                        gst::QueryViewMut::Caps(caps_query) => {
+                            let use_any_caps = *inner.caps_any.lock();
+                            let caps = if use_any_caps {
+                                gst::Caps::new_any()
+                            } else {
+                                gst::Caps::builder("application/x-rtp").build()
+                            };
+                            caps_query.set_result(&caps);
+                            true
+                        }
+                        _ => {
+                            // Default handling for other queries
+                            gst::Pad::query_default(_pad, _parent, query)
+                        }
+                    }
+                }
+            })
             .build();
         obj.add_pad(&sinkpad).unwrap();
         *self.inner.sinkpad.lock() = Some(sinkpad);
@@ -322,6 +343,11 @@ impl ObjectImpl for DispatcherImpl {
                     .nick("Use ANY caps")
                     .blurb("Use ANY caps instead of application/x-rtp for broader compatibility")
                     .default_value(false)
+                    .build(),
+                glib::ParamSpecBoolean::builder("auto-balance")
+                    .nick("Auto balance")
+                    .blurb("Enable automatic rebalancing timer (disable when using external controller like dynbitrate)")
+                    .default_value(true)
                     .build(),
                 glib::ParamSpecObject::builder::<gst::Element>("rist")
                     .nick("RIST element")
@@ -363,15 +389,20 @@ impl ObjectImpl for DispatcherImpl {
                                 .collect();
 
                             if !valid_weights.is_empty() {
-                                self.inner.state.lock().weights = valid_weights;
+                                self.inner.state.lock().weights = valid_weights.clone();
                                 gst::info!(
                                     CAT,
                                     "Set weights: {:?}",
                                     self.inner.state.lock().weights
                                 );
+                                
+                                // Emit weights-changed signal for external updates
+                                let weights_json = serde_json::to_string(&valid_weights).unwrap_or_default();
+                                self.obj().emit_by_name::<()>("weights-changed", &[&weights_json]);
                             } else {
                                 gst::warning!(CAT, "Invalid weights JSON, using default [1.0]");
                                 self.inner.state.lock().weights = vec![1.0];
+                                self.obj().emit_by_name::<()>("weights-changed", &[&"[1.0]".to_string()]);
                             }
                         }
                         Err(e) => {
@@ -384,6 +415,9 @@ impl ObjectImpl for DispatcherImpl {
                 let interval = value.get::<u64>().unwrap_or(500).max(100).min(10000);
                 *self.inner.rebalance_interval_ms.lock() = interval;
                 gst::debug!(CAT, "Set rebalance interval: {} ms", interval);
+                
+                // Restart timer immediately with new interval
+                self.start_rebalancer_timer();
             }
             2 => {
                 let s = value
@@ -407,6 +441,18 @@ impl ObjectImpl for DispatcherImpl {
                 gst::debug!(CAT, "Set caps-any: {}", caps_any);
             }
             4 => {
+                let auto_balance = value.get::<bool>().unwrap_or(true);
+                *self.inner.auto_balance.lock() = auto_balance;
+                gst::debug!(CAT, "Set auto-balance: {}", auto_balance);
+                
+                // Start or stop timer based on auto-balance setting
+                if auto_balance {
+                    self.start_rebalancer_timer();
+                } else {
+                    self.stop_rebalancer_timer();
+                }
+            }
+            5 => {
                 let rist = value.get::<Option<gst::Element>>().ok().flatten();
                 *self.inner.rist_element.lock() = rist.clone();
                 gst::debug!(CAT, "Set RIST element: {:?}", rist.is_some());
@@ -436,8 +482,9 @@ impl ObjectImpl for DispatcherImpl {
                 }
             }
             3 => self.inner.caps_any.lock().to_value(),
-            4 => self.inner.rist_element.lock().to_value(),
-            5 => {
+            4 => self.inner.auto_balance.lock().to_value(),
+            5 => self.inner.rist_element.lock().to_value(),
+            6 => {
                 // current-weights (readonly)
                 let weights = &self.inner.state.lock().weights;
                 let json = serde_json::to_string(weights).unwrap_or_default();
@@ -470,32 +517,25 @@ impl ElementImpl for DispatcherImpl {
     fn pad_templates() -> &'static [gst::PadTemplate] {
         use once_cell::sync::Lazy;
         static PAD_TEMPLATES: Lazy<Vec<gst::PadTemplate>> = Lazy::new(|| {
-            // Support both strict RTP caps and ANY caps for compatibility
-            let rtp_caps = gst::Caps::builder("application/x-rtp").build();
+            // Single sink template with ANY caps - actual caps controlled by caps-any property
             let any_caps = gst::Caps::new_any();
 
-            let sink_pad_template_rtp = gst::PadTemplate::new(
+            let sink_pad_template = gst::PadTemplate::new(
                 "sink",
                 gst::PadDirection::Sink,
                 gst::PadPresence::Always,
-                &rtp_caps,
+                &any_caps,
             )
             .unwrap();
 
+            // Request src templates for both RTP and ANY caps
+            let rtp_caps = gst::Caps::builder("application/x-rtp").build();
+            
             let src_pad_template_rtp = gst::PadTemplate::new(
                 "src_%u",
                 gst::PadDirection::Src,
                 gst::PadPresence::Request,
                 &rtp_caps,
-            )
-            .unwrap();
-
-            // Also provide ANY templates for broader compatibility
-            let sink_pad_template_any = gst::PadTemplate::new(
-                "sink_any",
-                gst::PadDirection::Sink,
-                gst::PadPresence::Always,
-                &any_caps,
             )
             .unwrap();
 
@@ -507,7 +547,7 @@ impl ElementImpl for DispatcherImpl {
             )
             .unwrap();
 
-            vec![sink_pad_template_rtp, src_pad_template_rtp, sink_pad_template_any, src_pad_template_any]
+            vec![sink_pad_template, src_pad_template_rtp, src_pad_template_any]
         });
         PAD_TEMPLATES.as_ref()
     }
@@ -653,6 +693,13 @@ impl ElementImpl for DispatcherImpl {
 
 impl DispatcherImpl {
     fn start_rebalancer_timer(&self) {
+        // Check auto_balance setting
+        let auto_balance = *self.inner.auto_balance.lock();
+        if !auto_balance {
+            gst::debug!(CAT, "Auto-balance disabled, not starting rebalancer timer");
+            return;
+        }
+        
         let inner_weak = Arc::downgrade(&self.inner);
         let interval_ms = *self.inner.rebalance_interval_ms.lock();
         
@@ -675,6 +722,13 @@ impl DispatcherImpl {
         
         *self.inner.stats_timeout_id.lock() = Some(timeout_id);
         gst::debug!(CAT, "Started rebalancer timer with interval {} ms", interval_ms);
+    }
+
+    fn stop_rebalancer_timer(&self) {
+        if let Some(existing_id) = self.inner.stats_timeout_id.lock().take() {
+            existing_id.remove();
+            gst::debug!(CAT, "Stopped rebalancer timer");
+        }
     }
 
     fn start_stats_polling(&self) {

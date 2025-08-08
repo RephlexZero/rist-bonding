@@ -184,7 +184,18 @@ impl ObjectImpl for ControllerImpl {
             4 => *self.inner.step_kbps.lock() = value.get::<u32>().unwrap_or(250),
             5 => *self.inner.target_loss_pct.lock() = value.get::<f64>().unwrap_or(0.5),
             6 => *self.inner.rtt_floor_ms.lock() = value.get::<u64>().unwrap_or(40),
-            7 => *self.inner.dispatcher.lock() = value.get::<Option<gst::Element>>().ok().flatten(),
+            7 => {
+                let disp = value.get::<Option<gst::Element>>().ok().flatten();
+                *self.inner.dispatcher.lock() = disp.clone();
+                
+                // Disable auto-balance on the dispatcher when dynbitrate is connected
+                if let Some(ref dispatcher) = disp {
+                    dispatcher.set_property("auto-balance", false);
+                    gst::info!(CAT, "Connected to dispatcher and disabled auto-balance to prevent dueling controllers");
+                } else {
+                    gst::debug!(CAT, "Disconnected from dispatcher");
+                }
+            }
             _ => {}
         }
     }
