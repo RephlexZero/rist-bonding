@@ -247,7 +247,7 @@ impl ObjectImpl for DispatcherImpl {
             .query_function({
                 let inner_weak = Arc::downgrade(&self.inner);
                 move |_pad, _parent, query| {
-                    let _inner = match inner_weak.upgrade() {
+                    let inner = match inner_weak.upgrade() {
                         Some(inner) => inner,
                         None => {
                             gst::error!(CAT, "Failed to upgrade inner reference in query function");
@@ -255,8 +255,18 @@ impl ObjectImpl for DispatcherImpl {
                         }
                     };
 
-                    // For sink pad queries, we can be conservative and answer permissively
-                    // or forward downstream. For now, handle basic caps queries.
+                    // Forward downstream queries to a linked src pad
+                    let srcpads = inner.srcpads.lock();
+                    
+                    // Find the first linked src pad for forwarding
+                    for srcpad in srcpads.iter() {
+                        if srcpad.is_linked() {
+                            gst::trace!(CAT, "Forwarding sink query {:?} to src pad {}", query.type_(), srcpad.name());
+                            return srcpad.peer_query(query);
+                        }
+                    }
+                    
+                    // If no linked pads, handle conservatively
                     match query.view() {
                         gst::QueryView::Caps(_) => {
                             // Let GStreamer handle caps queries with our pad template
@@ -264,6 +274,14 @@ impl ObjectImpl for DispatcherImpl {
                         }
                         gst::QueryView::AcceptCaps(_) => {
                             // Accept caps conservatively
+                            false
+                        }
+                        gst::QueryView::Latency(_) => {
+                            // Return a reasonable latency estimate if we can't forward
+                            false
+                        }
+                        gst::QueryView::Allocation(_) => {
+                            // Let downstream handle allocation
                             false
                         }
                         _ => false
@@ -274,9 +292,9 @@ impl ObjectImpl for DispatcherImpl {
         obj.add_pad(&sinkpad).unwrap();
         *self.inner.sinkpad.lock() = Some(sinkpad);
 
-        // Initial one src pad to start; ristsink will request more via request_new_pad
-        // We expose a request pad template so ristsink can ask for as many as there are bonded links.
-        // Note: templates are added in the pad_templates() method above
+        // Start the rebalancer timer even without RIST element
+        // This provides basic weight adjustment capabilities
+        self.start_rebalancer_timer();
     }
 
     fn properties() -> &'static [glib::ParamSpec] {
@@ -515,7 +533,22 @@ impl ElementImpl for DispatcherImpl {
 
         let pad = gst::Pad::builder_from_template(templ)
             .name(&pad_name)
-            .activatemode_function(|_pad, _parent, _mode, _active| Ok(()))
+            .activatemode_function(move |pad, _parent, mode, active| {
+                match mode {
+                    gst::PadMode::Push => {
+                        gst::debug!(CAT, "Activating pad {} in push mode: {}", pad.name(), active);
+                        Ok(())
+                    }
+                    gst::PadMode::Pull => {
+                        gst::debug!(CAT, "Pull mode not supported for pad {}", pad.name());
+                        Err(gst::LoggableError::new(
+                            *CAT,
+                            glib::bool_error!("Pull mode not supported")
+                        ))
+                    }
+                    _ => Ok(())
+                }
+            })
             .event_function({
                 let sinkpad = sinkpad.clone();
                 move |_pad, _parent, event| {
@@ -604,15 +637,23 @@ impl ElementImpl for DispatcherImpl {
                 state.link_stats.remove(pos);
             }
             
-            gst::info!(CAT, "Released src pad at index {}, cleaned up weights and stats", pos);
+            // Fix next_out if it points past the end
+            let new_len = srcpads.len();
+            if new_len > 0 && state.next_out >= new_len {
+                state.next_out = new_len - 1;
+                gst::debug!(CAT, "Adjusted next_out from {} to {}", state.next_out + new_len, state.next_out);
+            } else if new_len == 0 {
+                state.next_out = 0;
+            }
+            
+            gst::info!(CAT, "Released src pad at index {}, cleaned up weights and stats, {} pads remaining", pos, new_len);
         }
     }
 }
 
 impl DispatcherImpl {
-    fn start_stats_polling(&self) {
+    fn start_rebalancer_timer(&self) {
         let inner_weak = Arc::downgrade(&self.inner);
-        let obj_weak = self.obj().downgrade();
         let interval_ms = *self.inner.rebalance_interval_ms.lock();
         
         // Stop any existing polling
@@ -625,11 +666,6 @@ impl DispatcherImpl {
                 Some(inner) => inner,
                 None => return glib::ControlFlow::Break,
             };
-            
-            let _obj = match obj_weak.upgrade() {
-                Some(obj) => obj,
-                None => return glib::ControlFlow::Break,
-            };
 
             // Poll RIST stats and update weights
             Self::poll_rist_stats_and_update_weights(&inner);
@@ -638,7 +674,12 @@ impl DispatcherImpl {
         });
         
         *self.inner.stats_timeout_id.lock() = Some(timeout_id);
-        gst::debug!(CAT, "Started stats polling with interval {} ms", interval_ms);
+        gst::debug!(CAT, "Started rebalancer timer with interval {} ms", interval_ms);
+    }
+
+    fn start_stats_polling(&self) {
+        // Just restart the timer with current settings
+        self.start_rebalancer_timer();
     }
     
     fn poll_rist_stats_and_update_weights(inner: &DispatcherInner) {

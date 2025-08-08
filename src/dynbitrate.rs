@@ -267,86 +267,171 @@ impl ControllerImpl {
             return;
         }
 
-        let _rist = rist.unwrap();
+        let rist = rist.unwrap();
         let encoder = encoder.unwrap();
 
-        // If we have a dispatcher, coordinate with its rebalancing
-        let should_adjust = if let Some(ref disp) = dispatcher {
-            // Check if dispatcher is currently stable (not rebalancing)
-            let disp_weights: glib::Value = disp.property("current-weights");
-            if let Ok(Some(weights_str)) = disp_weights.get::<Option<String>>() {
-                if let Ok(weights) = serde_json::from_str::<Vec<f64>>(&weights_str) {
-                    // Only adjust if weights seem stable (not changing rapidly)
-                    let weight_variance: f64 = weights.iter().map(|w| (w - 1.0 / weights.len() as f64).powi(2)).sum::<f64>() / weights.len() as f64;
-                    weight_variance < 0.1 // Low variance = stable weights
-                } else {
-                    true // If we can't parse, proceed with adjustment
-                }
-            } else {
-                true // No weights available, proceed
+        // Parse RIST stats and possibly drive dispatcher weights
+        let stats_value: glib::Value = rist.property("stats");
+        if let Ok(Some(structure)) = stats_value.get::<Option<gst::Structure>>() {
+            gst::debug!(CAT, "Got RIST stats structure: {}", structure.to_string());
+            
+            // If we have a dispatcher, compute and set weights based on stats
+            if let Some(ref disp) = dispatcher {
+                self.update_dispatcher_weights(&structure, disp);
             }
+            
+            // Update bitrate based on aggregate stats
+            self.update_bitrate_from_stats(&structure, &encoder);
         } else {
-            true // No dispatcher, proceed normally
-        };
-
-        if !should_adjust {
-            gst::trace!(CAT, "Dispatcher is rebalancing, skipping bitrate adjustment");
-            return;
+            // Fall back to simple adjustment if no stats available
+            self.simple_bitrate_adjustment(&encoder);
         }
-
+    }
+    
+    fn update_dispatcher_weights(&self, stats: &gst::Structure, dispatcher: &gst::Element) {
+        // Extract per-session stats and compute EWMA weights
+        let mut weights = Vec::new();
+        let mut session_idx = 0;
+        
+        // Try to find session-based stats
+        loop {
+            let session_key = format!("session-{}", session_idx);
+            
+            // Check if this session exists in the stats
+            if let Ok(sent_original) = stats.get::<u64>(&format!("{}.sent-original-packets", session_key))
+                .or_else(|_| stats.get::<u64>("sent-original-packets")) {
+                
+                let sent_retrans = stats.get::<u64>(&format!("{}.sent-retransmitted-packets", session_key))
+                    .or_else(|_| stats.get::<u64>("sent-retransmitted-packets"))
+                    .unwrap_or(0);
+                
+                let rtt_ms = stats.get::<f64>(&format!("{}.round-trip-time", session_key))
+                    .or_else(|_| stats.get::<f64>("round-trip-time"))
+                    .unwrap_or(50.0);
+                
+                // Simple EWMA-based weight calculation
+                let total_sent = sent_original + sent_retrans;
+                let rtx_rate = if total_sent > 0 {
+                    sent_retrans as f64 / total_sent as f64
+                } else {
+                    0.0
+                };
+                
+                // Base weight from goodput (inverse of RTX rate and RTT)
+                let mut weight = 1.0 / (1.0 + 0.1 * rtx_rate); // Penalty for retransmissions
+                weight /= 1.0 + 0.01 * (rtt_ms / 100.0);       // Penalty for high RTT
+                weight = weight.max(0.05);                       // Floor to prevent starvation
+                
+                weights.push(weight);
+                session_idx += 1;
+                
+                gst::debug!(CAT, "Session {}: sent={}, rtx={}, rtt={:.1}ms, weight={:.3}", 
+                          session_idx-1, sent_original, sent_retrans, rtt_ms, weight);
+            } else {
+                // No more sessions
+                break;
+            }
+        }
+        
+        // If we found multi-session stats, normalize and set dispatcher weights
+        if weights.len() > 1 {
+            let total: f64 = weights.iter().sum();
+            if total > 0.0 {
+                for w in &mut weights {
+                    *w /= total;
+                }
+            }
+            
+            let weights_json = serde_json::to_string(&weights).unwrap_or_default();
+            dispatcher.set_property("weights", &weights_json);
+            gst::info!(CAT, "Updated dispatcher weights: {}", weights_json);
+        }
+    }
+    
+    fn update_bitrate_from_stats(&self, stats: &gst::Structure, encoder: &gst::Element) {
+        // Get aggregate loss rate and RTT
+        let total_original = stats.get::<u64>("sent-original-packets").unwrap_or(0);
+        let total_retrans = stats.get::<u64>("sent-retransmitted-packets").unwrap_or(0);
+        let avg_rtt = stats.get::<f64>("round-trip-time").unwrap_or(50.0);
+        
+        if total_original == 0 {
+            return; // No data yet
+        }
+        
+        let total_sent = total_original + total_retrans;
+        let loss_rate = total_retrans as f64 / total_sent as f64;
+        
+        let target_loss = *self.inner.target_loss_pct.lock() / 100.0;
+        let rtt_threshold = *self.inner.rtt_floor_ms.lock() as f64;
+        
         // Get current bitrate
         let current_kbps: u32 = encoder.property("bitrate");
-
+        let min = *self.inner.min_kbps.lock();
+        let max = *self.inner.max_kbps.lock();
+        let step = *self.inner.step_kbps.lock();
+        
+        // Rate limiting
+        let now = Instant::now();
+        let last_change = *self.inner.last_change.lock();
+        let since = last_change
+            .map(|t| now.duration_since(t))
+            .unwrap_or(Duration::from_secs(1));
+            
+        if since < Duration::from_millis(1200) {
+            return; // Too soon to change
+        }
+        
+        let mut new_kbps = current_kbps;
+        
+        // Adjust based on loss rate and RTT
+        if loss_rate > target_loss || avg_rtt > rtt_threshold {
+            // Decrease bitrate due to high loss or RTT
+            new_kbps = current_kbps.saturating_sub(step).max(min);
+            gst::info!(CAT, "Decreasing bitrate from {} to {} kbps (loss={:.2}%, rtt={:.1}ms)", 
+                      current_kbps, new_kbps, loss_rate * 100.0, avg_rtt);
+        } else if loss_rate < target_loss * 0.5 && avg_rtt < rtt_threshold * 0.8 {
+            // Increase bitrate due to good conditions
+            new_kbps = (current_kbps + step).min(max);
+            gst::info!(CAT, "Increasing bitrate from {} to {} kbps (loss={:.2}%, rtt={:.1}ms)", 
+                      current_kbps, new_kbps, loss_rate * 100.0, avg_rtt);
+        }
+        
+        if new_kbps != current_kbps {
+            encoder.set_property("bitrate", &new_kbps);
+            *self.inner.last_change.lock() = Some(now);
+        }
+    }
+    
+    fn simple_bitrate_adjustment(&self, encoder: &gst::Element) {
+        // Fallback to simple oscillation if no stats
+        let current_kbps: u32 = encoder.property("bitrate");
         let min = *self.inner.min_kbps.lock();
         let max = *self.inner.max_kbps.lock();
         let step = *self.inner.step_kbps.lock();
 
-        // Simple time-based adjustment for demonstration
         let now = Instant::now();
         let last_change = *self.inner.last_change.lock();
         let since = last_change
             .map(|t| now.duration_since(t))
             .unwrap_or(Duration::from_secs(1));
 
-        if since < Duration::from_millis(1200) { // Longer delay when coordinating with dispatcher
+        if since < Duration::from_millis(1200) {
             return; // Too soon to change
         }
 
         let mut new_kbps = current_kbps;
 
-        // TODO: Implement proper RIST stats parsing when ristsink is available
-        // For now, just implement a basic oscillation for demonstration
         if current_kbps >= max {
             new_kbps = current_kbps.saturating_sub(step).max(min);
-            gst::info!(
-                CAT,
-                "Decreasing bitrate from {} to {} kbps",
-                current_kbps,
-                new_kbps
-            );
+            gst::info!(CAT, "Decreasing bitrate from {} to {} kbps (demo mode)", current_kbps, new_kbps);
         } else if current_kbps <= min {
             new_kbps = (current_kbps + step).min(max);
-            gst::info!(
-                CAT,
-                "Increasing bitrate from {} to {} kbps",
-                current_kbps,
-                new_kbps
-            );
+            gst::info!(CAT, "Increasing bitrate from {} to {} kbps (demo mode)", current_kbps, new_kbps);
         }
 
         if new_kbps != current_kbps {
             encoder.set_property("bitrate", &new_kbps);
             *self.inner.last_change.lock() = Some(now);
-            
-            // Notify dispatcher if available that we changed bitrate
-            if let Some(ref disp) = dispatcher {
-                gst::debug!(CAT, "Notified dispatcher of bitrate change to {} kbps", new_kbps);
-                let structure = gst::Structure::builder("bitrate-changed")
-                    .field("new-bitrate", &new_kbps)
-                    .build();
-                let message = gst::message::Application::new(structure);
-                let _ = disp.post_message(message);
-            }
         }
     }
 }
