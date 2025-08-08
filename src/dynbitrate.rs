@@ -29,6 +29,7 @@ static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
 pub struct ControllerInner {
     encoder: Mutex<Option<gst::Element>>, // e.g. x265enc
     rist: Mutex<Option<gst::Element>>,    // the ristsink
+    dispatcher: Mutex<Option<gst::Element>>, // the rist dispatcher for coordination
     min_kbps: Mutex<u32>,
     max_kbps: Mutex<u32>,
     step_kbps: Mutex<u32>,
@@ -106,8 +107,9 @@ impl ObjectImpl for ControllerImpl {
         obj.add_pad(&srcpad).unwrap();
 
         // Install a periodic tick to poll ristsink stats and adjust bitrate
+        // Use the same interval as dispatcher to avoid conflicts
         let weak = obj.downgrade();
-        gst::glib::timeout_add_local(Duration::from_millis(500), move || {
+        gst::glib::timeout_add_local(Duration::from_millis(750), move || { // Offset slightly from dispatcher
             if let Some(obj) = weak.upgrade() {
                 obj.imp().tick();
                 glib::ControlFlow::Continue
@@ -164,10 +166,9 @@ impl ObjectImpl for ControllerImpl {
                     .maximum(1000)
                     .default_value(40)
                     .build(),
-                glib::ParamSpecBoolean::builder("downscale-keyunit")
-                    .nick("Force keyframe on downscale")
-                    .blurb("Force keyframe generation when downscaling bitrate")
-                    .default_value(true)
+                glib::ParamSpecObject::builder::<gst::Element>("dispatcher")
+                    .nick("Dispatcher element")
+                    .blurb("The RIST dispatcher element to coordinate with for unified control")
                     .build(),
             ]
         });
@@ -183,9 +184,7 @@ impl ObjectImpl for ControllerImpl {
             4 => *self.inner.step_kbps.lock() = value.get::<u32>().unwrap_or(250),
             5 => *self.inner.target_loss_pct.lock() = value.get::<f64>().unwrap_or(0.5),
             6 => *self.inner.rtt_floor_ms.lock() = value.get::<u64>().unwrap_or(40),
-            7 => {
-                let _ = value.get::<bool>(); /* stored via property API if needed */
-            }
+            7 => *self.inner.dispatcher.lock() = value.get::<Option<gst::Element>>().ok().flatten(),
             _ => {}
         }
     }
@@ -199,7 +198,7 @@ impl ObjectImpl for ControllerImpl {
             4 => self.inner.step_kbps.lock().to_value(),
             5 => self.inner.target_loss_pct.lock().to_value(),
             6 => self.inner.rtt_floor_ms.lock().to_value(),
-            7 => true.to_value(), // downscale-keyunit default
+            7 => self.inner.dispatcher.lock().to_value(),
             _ => {
                 // Return a safe default value for unknown properties
                 "".to_value()
@@ -256,6 +255,7 @@ impl ControllerImpl {
         // Read ristsink "stats" property -> GstStructure "rist/x-sender-stats"
         let rist = { self.inner.rist.lock().clone() };
         let encoder = { self.inner.encoder.lock().clone() };
+        let dispatcher = { self.inner.dispatcher.lock().clone() };
 
         if rist.is_none() {
             gst::trace!(CAT, "No RIST element configured, skipping adjustment");
@@ -269,6 +269,30 @@ impl ControllerImpl {
 
         let _rist = rist.unwrap();
         let encoder = encoder.unwrap();
+
+        // If we have a dispatcher, coordinate with its rebalancing
+        let should_adjust = if let Some(ref disp) = dispatcher {
+            // Check if dispatcher is currently stable (not rebalancing)
+            let disp_weights: glib::Value = disp.property("current-weights");
+            if let Ok(Some(weights_str)) = disp_weights.get::<Option<String>>() {
+                if let Ok(weights) = serde_json::from_str::<Vec<f64>>(&weights_str) {
+                    // Only adjust if weights seem stable (not changing rapidly)
+                    let weight_variance: f64 = weights.iter().map(|w| (w - 1.0 / weights.len() as f64).powi(2)).sum::<f64>() / weights.len() as f64;
+                    weight_variance < 0.1 // Low variance = stable weights
+                } else {
+                    true // If we can't parse, proceed with adjustment
+                }
+            } else {
+                true // No weights available, proceed
+            }
+        } else {
+            true // No dispatcher, proceed normally
+        };
+
+        if !should_adjust {
+            gst::trace!(CAT, "Dispatcher is rebalancing, skipping bitrate adjustment");
+            return;
+        }
 
         // Get current bitrate
         let current_kbps: u32 = encoder.property("bitrate");
@@ -284,7 +308,7 @@ impl ControllerImpl {
             .map(|t| now.duration_since(t))
             .unwrap_or(Duration::from_secs(1));
 
-        if since < Duration::from_millis(800) {
+        if since < Duration::from_millis(1200) { // Longer delay when coordinating with dispatcher
             return; // Too soon to change
         }
 
@@ -313,6 +337,16 @@ impl ControllerImpl {
         if new_kbps != current_kbps {
             encoder.set_property("bitrate", &new_kbps);
             *self.inner.last_change.lock() = Some(now);
+            
+            // Notify dispatcher if available that we changed bitrate
+            if let Some(ref disp) = dispatcher {
+                gst::debug!(CAT, "Notified dispatcher of bitrate change to {} kbps", new_kbps);
+                let structure = gst::Structure::builder("bitrate-changed")
+                    .field("new-bitrate", &new_kbps)
+                    .build();
+                let message = gst::message::Application::new(structure);
+                let _ = disp.post_message(message);
+            }
         }
     }
 }

@@ -23,6 +23,6 @@ gst::plugin_define!(
     "MIT",
     env!("CARGO_PKG_NAME"),
     "gst-rist-smart",
-    "https://github.com/user/repo",
+    "https://github.com/RephlexZero/rist-bonding",
     "2025-01-01"
 );
