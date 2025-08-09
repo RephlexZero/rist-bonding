@@ -12,12 +12,12 @@ import threading
 
 app = Flask(__name__)
 
-# Current network state
+# Current network state with race track defaults
 current_state = {
-    'latency_ms': 50,
-    'loss_pct': 1.0,
-    'bandwidth_mbps': 20,
-    'jitter_ms': 5,
+    'latency_ms': 80,
+    'loss_pct': 2.0,
+    'bandwidth_mbps': 7,
+    'jitter_ms': 15,
     'interface': 'eth0',
     'last_update': time.time()
 }
@@ -78,12 +78,18 @@ def update_network():
 
 @app.route('/preset/<preset_name>')
 def apply_preset(preset_name):
-    """Apply network preset"""
+    """Apply network preset for race track conditions"""
     presets = {
-        'good-4g': {'latency_ms': 50, 'loss_pct': 1.0, 'bandwidth_mbps': 20, 'jitter_ms': 5},
-        'poor-4g': {'latency_ms': 150, 'loss_pct': 5.0, 'bandwidth_mbps': 10, 'jitter_ms': 20},
-        '5g': {'latency_ms': 20, 'loss_pct': 0.1, 'bandwidth_mbps': 100, 'jitter_ms': 2},
-        'variable': {'latency_ms': 75, 'loss_pct': 2.0, 'bandwidth_mbps': 30, 'jitter_ms': 10}
+        # Race track specific profiles based on real-world data
+        'race-track-best': {'latency_ms': 80, 'loss_pct': 2.0, 'bandwidth_mbps': 7, 'jitter_ms': 15},
+        'race-track-variable-1': {'latency_ms': 120, 'loss_pct': 4.0, 'bandwidth_mbps': 1.5, 'jitter_ms': 25},
+        'race-track-variable-2': {'latency_ms': 140, 'loss_pct': 6.0, 'bandwidth_mbps': 0.8, 'jitter_ms': 30},
+        'race-track-variable-3': {'latency_ms': 160, 'loss_pct': 8.0, 'bandwidth_mbps': 0.4, 'jitter_ms': 40},
+        # Legacy presets for backwards compatibility
+        'good-4g': {'latency_ms': 80, 'loss_pct': 2.0, 'bandwidth_mbps': 7, 'jitter_ms': 15},  # Map to best race track
+        'poor-4g': {'latency_ms': 120, 'loss_pct': 4.0, 'bandwidth_mbps': 1.5, 'jitter_ms': 25},  # Map to variable-1
+        '5g': {'latency_ms': 80, 'loss_pct': 2.0, 'bandwidth_mbps': 7, 'jitter_ms': 15},  # Map to best race track
+        'variable': {'latency_ms': 140, 'loss_pct': 6.0, 'bandwidth_mbps': 0.8, 'jitter_ms': 30}  # Map to variable-2
     }
     
     if preset_name not in presets:

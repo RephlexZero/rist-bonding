@@ -32,19 +32,21 @@ echo
 echo "4. Demonstrating Network Bonding Concepts"
 echo "----------------------------------------"
 echo "The RIST bonding plugin provides:"
-echo "  • ristdispatcher: Intelligent load balancing across 4G/5G links"
-echo "  • dynbitrate: Adaptive bitrate control based on network conditions"
+echo "  • ristdispatcher: Intelligent load balancing across cellular links"
+echo "  • dynbitrate: Adaptive bitrate control for race track conditions"
 echo "  • Automatic weight adjustment using EWMA/AIMD strategies"
 echo "  • Real-time statistics and performance monitoring"
+echo "  • Optimized for variable cellular conditions (250kbps-7Mbps range)"
 echo
 
 echo "5. Network Simulation Capabilities"
 echo "--------------------------------"
-echo "Test infrastructure simulates:"
-echo "  • Good 4G: 50ms latency, 1% loss, 20Mbps"
-echo "  • Poor 4G: 150ms latency, 5% loss, 10Mbps"
-echo "  • 5G: 20ms latency, 0.1% loss, 100Mbps"
-echo "  • Variable: Dynamic conditions changing over time"
+echo "Test infrastructure simulates real race track conditions:"
+echo "  • Best Link: 80ms latency, 2% loss, ~7Mbps (up to 7000kbps)"
+echo "  • Variable Link 1: 120ms latency, 4% loss, ~1.5Mbps"
+echo "  • Variable Link 2: 140ms latency, 6% loss, ~0.8Mbps"
+echo "  • Variable Link 3: 160ms latency, 8% loss, ~0.4Mbps"
+echo "  • All links vary dynamically (250kbps-7000kbps) to simulate race track coverage"
 echo
 
 echo "6. Generated Test Artifacts"

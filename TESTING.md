@@ -14,12 +14,14 @@ The test infrastructure provides:
 
 ## Network Simulation Profiles
 
-The test infrastructure simulates four different network conditions:
+The test infrastructure simulates real-world race track cellular network conditions:
 
-1. **Good 4G**: 50ms latency, 1% loss, 20Mbps bandwidth
-2. **Poor 4G**: 150ms latency, 5% loss, 10Mbps bandwidth  
-3. **5G**: 20ms latency, 0.1% loss, 100Mbps bandwidth
-4. **Variable**: Dynamic conditions that change over time
+1. **Best Race Track Link**: 80ms latency, 2% loss, ~7Mbps bandwidth (up to 7000kbps)
+2. **Variable Link 1**: 120ms latency, 4% loss, ~1.5Mbps bandwidth (varies 250kbps-1500kbps)  
+3. **Variable Link 2**: 140ms latency, 6% loss, ~0.8Mbps bandwidth (varies 250kbps-1500kbps)
+4. **Variable Link 3**: 160ms latency, 8% loss, ~0.4Mbps bandwidth (varies 250kbps-1500kbps)
+
+All links use variable conditions that change dynamically every 15-45 seconds to simulate moving through different coverage areas on a race track. This reflects real-world conditions where cellular coverage varies significantly based on track location, with the best links achieving around 7Mbps and typical links varying between 250kbps to 1.5Mbps.
 
 ## Quick Start
 
@@ -62,10 +64,10 @@ docker logs -f rist-sender
 docker logs -f rist-receiver
 
 # Check network simulation APIs
-curl http://localhost:8091/status  # Good 4G network
-curl http://localhost:8092/status  # Poor 4G network
-curl http://localhost:8093/status  # 5G network
-curl http://localhost:8094/status  # Variable network
+curl http://localhost:8091/status  # Best race track link
+curl http://localhost:8092/status  # Variable race track link 1
+curl http://localhost:8093/status  # Variable race track link 2
+curl http://localhost:8094/status  # Variable race track link 3
 
 # Cleanup
 docker-compose down

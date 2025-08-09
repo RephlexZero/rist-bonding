@@ -15,9 +15,9 @@ services:
       - network4
     environment:
       - BONDING_ADDRESSES=network1:5004,network2:5005,network3:5006,network4:5007
-      - VIDEO_BITRATE=4000
-      - VIDEO_WIDTH=1920
-      - VIDEO_HEIGHT=1080
+      - VIDEO_BITRATE=2000
+      - VIDEO_WIDTH=1280
+      - VIDEO_HEIGHT=720
       - VIDEO_FPS=30
     volumes:
       - ./test-results:/app/test-results
@@ -53,7 +53,7 @@ services:
       - network-sim-4
     command: ["./scripts/receiver-bonding.sh"]
 
-  # Network simulators for different cellular conditions
+  # Network simulators for race track cellular conditions
   network-sim-1:
     build:
       context: .
@@ -69,15 +69,15 @@ services:
     ports:
       - "8091:8090"  # Control API
     environment:
-      - NETWORK_TYPE=good-4g
-      - LATENCY_MS=50
-      - LOSS_PCT=1.0
-      - BANDWIDTH_MBPS=20
-      - JITTER_MS=5
+      - NETWORK_TYPE=race-track-best
+      - LATENCY_MS=80
+      - LOSS_PCT=2.0
+      - BANDWIDTH_MBPS=7
+      - JITTER_MS=15
     volumes:
       - ./test-results:/app/test-results
       - ./scripts:/app/scripts
-    command: ["./scripts/simulate-network.sh", "good-4g"]
+    command: ["./scripts/simulate-network.sh", "race-track-best"]
 
   network-sim-2:
     build:
@@ -94,15 +94,15 @@ services:
     ports:
       - "8092:8090"  # Control API
     environment:
-      - NETWORK_TYPE=poor-4g
-      - LATENCY_MS=150
-      - LOSS_PCT=5.0
-      - BANDWIDTH_MBPS=10
-      - JITTER_MS=20
+      - NETWORK_TYPE=race-track-variable-1
+      - LATENCY_MS=120
+      - LOSS_PCT=4.0
+      - BANDWIDTH_MBPS=1.5
+      - JITTER_MS=25
     volumes:
       - ./test-results:/app/test-results
       - ./scripts:/app/scripts
-    command: ["./scripts/simulate-network.sh", "poor-4g"]
+    command: ["./scripts/simulate-network.sh", "race-track-variable-1"]
 
   network-sim-3:
     build:
@@ -119,15 +119,15 @@ services:
     ports:
       - "8093:8090"  # Control API
     environment:
-      - NETWORK_TYPE=5g
-      - LATENCY_MS=20
-      - LOSS_PCT=0.1
-      - BANDWIDTH_MBPS=100
-      - JITTER_MS=2
+      - NETWORK_TYPE=race-track-variable-2
+      - LATENCY_MS=140
+      - LOSS_PCT=6.0
+      - BANDWIDTH_MBPS=0.8
+      - JITTER_MS=30
     volumes:
       - ./test-results:/app/test-results
       - ./scripts:/app/scripts
-    command: ["./scripts/simulate-network.sh", "5g"]
+    command: ["./scripts/simulate-network.sh", "race-track-variable-2"]
 
   network-sim-4:
     build:
@@ -144,15 +144,15 @@ services:
     ports:
       - "8094:8090"  # Control API
     environment:
-      - NETWORK_TYPE=variable
-      - LATENCY_MS=75
-      - LOSS_PCT=2.0
-      - BANDWIDTH_MBPS=30
-      - JITTER_MS=10
+      - NETWORK_TYPE=race-track-variable-3
+      - LATENCY_MS=160
+      - LOSS_PCT=8.0
+      - BANDWIDTH_MBPS=0.4
+      - JITTER_MS=40
     volumes:
       - ./test-results:/app/test-results
       - ./scripts:/app/scripts
-    command: ["./scripts/simulate-network.sh", "variable"]
+    command: ["./scripts/simulate-network.sh", "race-track-variable-3"]
 
 networks:
   network1:
