@@ -1,2 +1,52 @@
+# Rust build artifacts
 target/
 .cargo/
+Cargo.lock
+
+# Test results and logs
+results/
+logs/
+*.log
+
+# Network simulation temporary files
+/tmp/netsim_*
+*.pcap
+
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.env
+venv/
+env/
+
+# Metrics and reports (generated files)
+metrics.json
+summary.md
+final_summary.md
+*_stats*.txt
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# System files
+*.tmp
+*.temp
+.cache/
+
+# Coverage reports
+htmlcov/
+.coverage
+coverage.xml
+
+# Temporary network configuration backups
+network_backup_*
+
+# GStreamer debug logs
+GST_DEBUG_*

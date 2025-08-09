@@ -1,0 +1,132 @@
+name: CI with Network Emulation
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Nightly run at 2 AM UTC
+    - cron: '0 2 * * *'
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install System Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libgstreamer1.0-dev \
+          libgstreamer-plugins-base1.0-dev \
+          libgstreamer-plugins-bad1.0-dev \
+          gstreamer1.0-plugins-base \
+          gstreamer1.0-plugins-good \
+          gstreamer1.0-plugins-bad \
+          gstreamer1.0-plugins-ugly \
+          gstreamer1.0-libav \
+          iproute2 \
+          netcat-openbsd \
+          jq \
+          python3 \
+          python3-pip \
+          python3-yaml
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: x86_64-unknown-linux-gnu
+
+    - name: Cache Cargo
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Build Plugin (Release)
+      run: |
+        PKG_CONFIG_PATH=/usr/lib/pkgconfig cargo build --release
+        echo "Built plugin at: $(ls -la target/release/*.so)"
+
+    - name: Verify Plugin Installation
+      run: |
+        export GST_PLUGIN_PATH="$(pwd)/target/release"
+        gst-inspect-1.0 ristdispatcher | cat
+        echo "---"
+        gst-inspect-1.0 dynbitrate | cat
+
+    - name: Set Network Capabilities
+      run: |
+        # Ensure we can create network namespaces
+        sudo sysctl -w net.ipv4.ip_forward=1
+        sudo modprobe dummy
+
+    - name: Run Test Scenarios
+      run: |
+        # Determine which scenarios to run based on trigger
+        if [ "${{ github.event_name }}" = "schedule" ]; then
+          export SCENARIOS="S0 S1 S2 S3 S4"
+          export DURATION_MULTIPLIER="2"  # Longer runs for nightly
+        else
+          export SCENARIOS="S0 S1 S2"  # Quick run for PRs
+          export DURATION_MULTIPLIER="1"
+        fi
+        
+        echo "Running scenarios: $SCENARIOS with duration multiplier: $DURATION_MULTIPLIER"
+        
+        for scenario in $SCENARIOS; do
+          echo "=== Running scenario $scenario ==="
+          sudo bash netsim/run_scenario.sh "$scenario" "$DURATION_MULTIPLIER"
+          
+          # Check if scenario passed
+          if [ ! -f "results/${scenario}/metrics.json" ]; then
+            echo "ERROR: Scenario $scenario failed - no metrics generated"
+            exit 1
+          fi
+          
+          # Extract pass/fail from metrics
+          PASSED=$(jq -r '.verdicts.overall_pass' "results/${scenario}/metrics.json")
+          if [ "$PASSED" != "true" ]; then
+            echo "ERROR: Scenario $scenario failed validation"
+            cat "results/${scenario}/summary.md"
+            exit 1
+          fi
+          
+          echo "✅ Scenario $scenario passed"
+        done
+
+    - name: Generate Final Report
+      run: |
+        python3 metrics/generate_final_report.py results/
+
+    - name: Upload Test Artifacts
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-results-${{ github.sha }}
+        path: |
+          results/
+          logs/
+        retention-days: 7
+
+    - name: Add Summary to Job
+      if: always()
+      run: |
+        if [ -f "results/final_summary.md" ]; then
+          cat results/final_summary.md >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ No final summary generated" >> $GITHUB_STEP_SUMMARY
+        fi
+
+  # Future: Add matrix builds for different GStreamer versions
+  # matrix:
+  #   gst-version: ["1.20", "1.22", "1.24"]

@@ -1,0 +1,87 @@
+name: S1-variable-bandwidth
+description: "Variable bandwidth sweep with staggered 10s transitions"
+duration_sec: 60
+acceptance_criteria:
+  delivered_bitrate_pct: 85
+  loss_after_recovery_pct: 1.0
+  max_stall_ms: 500
+  utilization_balance_threshold: 0.7
+
+links:
+  - id: 1
+    schedule:
+      - time_sec: 0
+        rate_kbps: 1500
+        loss_pct: 0.5
+        latency_ms: 20
+        jitter_ms: 5
+      - time_sec: 10
+        rate_kbps: 750
+      - time_sec: 20
+        rate_kbps: 250
+      - time_sec: 30
+        rate_kbps: 1500
+        
+  - id: 2
+    schedule:
+      - time_sec: 0
+        rate_kbps: 750
+        loss_pct: 0.5
+        latency_ms: 15
+        jitter_ms: 5
+      - time_sec: 10
+        rate_kbps: 250
+      - time_sec: 20
+        rate_kbps: 1500
+      - time_sec: 40
+        rate_kbps: 750
+        
+  - id: 3
+    schedule:
+      - time_sec: 0
+        rate_kbps: 250
+        loss_pct: 0.5
+        latency_ms: 40
+        jitter_ms: 10
+      - time_sec: 20
+        rate_kbps: 1500
+      - time_sec: 50
+        rate_kbps: 500
+        
+  - id: 4
+    schedule:
+      - time_sec: 0
+        rate_kbps: 1500
+        loss_pct: 0.5
+        latency_ms: 80
+        jitter_ms: 20
+      - time_sec: 15
+        rate_kbps: 250
+      - time_sec: 35
+        rate_kbps: 1000
+      - time_sec: 55
+        rate_kbps: 1500
+
+expected_capacity:
+  - time_sec: 0
+    total_kbps: 3750
+    comment: "Initial aggregate: 1500+750+250+1500"
+  - time_sec: 10
+    total_kbps: 2750
+    comment: "After first transition: 750+250+250+1500"
+  - time_sec: 15
+    total_kbps: 1250
+    comment: "After second transition: 750+250+250+250"
+  - time_sec: 20
+    total_kbps: 2750
+    comment: "After third transition: 250+1500+1500+250"
+  - time_sec: 30
+    total_kbps: 3750
+    comment: "After fourth transition: 1500+1500+1500+250"
+
+pipeline:
+  encoder_bitrate_kbps: 2800
+  test_pattern: "ball"
+  resolution: "640x480"
+  framerate: 30
+  keyframe_interval: 60

@@ -1,0 +1,103 @@
+name: S2-burst-loss
+description: "Burst loss patterns with periodic 300ms windows at 20-30% on rotating links"
+duration_sec: 45
+acceptance_criteria:
+  delivered_bitrate_pct: 85
+  loss_after_recovery_pct: 1.0
+  max_stall_ms: 500
+  utilization_balance_threshold: 0.7
+
+links:
+  - id: 1
+    schedule:
+      - time_sec: 0
+        rate_kbps: 1200
+        loss_pct: 1.5
+        latency_ms: 25
+        jitter_ms: 8
+        
+  - id: 2
+    schedule:
+      - time_sec: 0
+        rate_kbps: 1200
+        loss_pct: 1.5
+        latency_ms: 25
+        jitter_ms: 8
+        
+  - id: 3
+    schedule:
+      - time_sec: 0
+        rate_kbps: 1200
+        loss_pct: 1.5
+        latency_ms: 25
+        jitter_ms: 8
+        
+  - id: 4
+    schedule:
+      - time_sec: 0
+        rate_kbps: 1200
+        loss_pct: 1.5
+        latency_ms: 25
+        jitter_ms: 8
+
+# Burst events (special syntax for burst loss applications)
+burst_events:
+  - time_sec: 5
+    link_id: 1
+    loss_pct: 25
+    duration_ms: 300
+    comment: "First burst on link 1"
+    
+  - time_sec: 10
+    link_id: 2
+    loss_pct: 30
+    duration_ms: 300
+    comment: "Burst on link 2"
+    
+  - time_sec: 15
+    link_id: 3
+    loss_pct: 25
+    duration_ms: 300
+    comment: "Burst on link 3"
+    
+  - time_sec: 20
+    link_id: 4
+    loss_pct: 30
+    duration_ms: 300
+    comment: "Burst on link 4"
+    
+  - time_sec: 25
+    link_id: 1
+    loss_pct: 20
+    duration_ms: 300
+    comment: "Second burst on link 1"
+    
+  - time_sec: 30
+    link_id: 2
+    loss_pct: 25
+    duration_ms: 300
+    comment: "Second burst on link 2"
+    
+  - time_sec: 35
+    link_id: 3
+    loss_pct: 30
+    duration_ms: 300
+    comment: "Second burst on link 3"
+    
+  - time_sec: 40
+    link_id: 4
+    loss_pct: 25
+    duration_ms: 300
+    comment: "Second burst on link 4"
+
+expected_capacity:
+  - time_sec: 0
+    total_kbps: 4800
+    comment: "All links at 1200 kbps"
+
+pipeline:
+  encoder_bitrate_kbps: 2400
+  test_pattern: "ball"
+  resolution: "640x480"
+  framerate: 30
+  keyframe_interval: 60

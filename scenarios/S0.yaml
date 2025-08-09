@@ -1,0 +1,56 @@
+name: S0-baseline
+description: "Baseline sanity test - all 4 links at optimal conditions"
+duration_sec: 30
+acceptance_criteria:
+  delivered_bitrate_pct: 85
+  loss_after_recovery_pct: 1.0
+  max_stall_ms: 500
+  utilization_balance_threshold: 0.7
+
+# Link configuration over time
+links:
+  - id: 1
+    schedule:
+      - time_sec: 0
+        rate_kbps: 1500
+        loss_pct: 0.5
+        latency_ms: 15
+        jitter_ms: 5
+        
+  - id: 2
+    schedule:
+      - time_sec: 0
+        rate_kbps: 1500
+        loss_pct: 0.5
+        latency_ms: 15
+        jitter_ms: 5
+        
+  - id: 3
+    schedule:
+      - time_sec: 0
+        rate_kbps: 1500
+        loss_pct: 0.5
+        latency_ms: 15
+        jitter_ms: 5
+        
+  - id: 4
+    schedule:
+      - time_sec: 0
+        rate_kbps: 1500
+        loss_pct: 0.5
+        latency_ms: 15
+        jitter_ms: 5
+
+# Expected aggregate capacity over time (for validation)
+expected_capacity:
+  - time_sec: 0
+    total_kbps: 6000
+    comment: "All links at full capacity"
+
+# Pipeline configuration
+pipeline:
+  encoder_bitrate_kbps: 2500
+  test_pattern: "ball"
+  resolution: "640x480"
+  framerate: 30
+  keyframe_interval: 60

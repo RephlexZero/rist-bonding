@@ -1,0 +1,110 @@
+name: S4-asymmetric-latency
+description: "Asymmetric latency/jitter with different capacities and RTTs per link"
+duration_sec: 50
+acceptance_criteria:
+  delivered_bitrate_pct: 85
+  loss_after_recovery_pct: 1.0
+  max_stall_ms: 500
+  utilization_balance_threshold: 0.70  # Top 2 links should carry 70% combined
+  max_receiver_jitter_ms: 100
+
+links:
+  - id: 1
+    name: "fast_low_latency"
+    schedule:
+      - time_sec: 0
+        rate_kbps: 1500
+        loss_pct: 0.3
+        latency_ms: 10
+        jitter_ms: 5
+        comment: "Premium link - fast, low latency"
+        
+  - id: 2
+    name: "medium_latency"
+    schedule:
+      - time_sec: 0
+        rate_kbps: 1000
+        loss_pct: 0.8
+        latency_ms: 40
+        jitter_ms: 10
+        comment: "Medium capacity, moderate latency"
+        
+  - id: 3
+    name: "slow_high_latency"
+    schedule:
+      - time_sec: 0
+        rate_kbps: 500
+        loss_pct: 1.2
+        latency_ms: 80
+        jitter_ms: 15
+        comment: "Slower link with higher latency"
+        
+  - id: 4
+    name: "backup_highest_latency"
+    schedule:
+      - time_sec: 0
+        rate_kbps: 250
+        loss_pct: 1.8
+        latency_ms: 120
+        jitter_ms: 20
+        comment: "Backup link - highest latency, lowest capacity"
+
+# Optional: Some dynamic changes to test rebalancing
+dynamic_events:
+  - time_sec: 20
+    link_id: 1
+    change_type: "bandwidth"
+    new_value: 800
+    comment: "Throttle premium link temporarily"
+    
+  - time_sec: 35
+    link_id: 1
+    change_type: "bandwidth" 
+    new_value: 1500
+    comment: "Restore premium link"
+    
+  - time_sec: 25
+    link_id: 4
+    change_type: "bandwidth"
+    new_value: 600
+    comment: "Improve backup link temporarily"
+    
+  - time_sec: 45
+    link_id: 4
+    change_type: "bandwidth"
+    new_value: 250
+    comment: "Restore backup link to original capacity"
+
+expected_capacity:
+  - time_sec: 0
+    total_kbps: 3250
+    comment: "1500+1000+500+250"
+    link_weights: [0.46, 0.31, 0.15, 0.08]  # Expected proportional usage
+  - time_sec: 20
+    total_kbps: 2550
+    comment: "800+1000+500+250 after premium throttle"
+    link_weights: [0.31, 0.39, 0.20, 0.10]
+  - time_sec: 25
+    total_kbps: 2900
+    comment: "800+1000+500+600 both changes active"
+    link_weights: [0.28, 0.34, 0.17, 0.21]
+
+# Specific tests for this scenario
+validation_tests:
+  - name: "reorder_tolerance"
+    description: "Verify receiver handles packet reordering from different RTTs"
+    
+  - name: "proportional_utilization" 
+    description: "Verify traffic distribution roughly matches link capacity ratios"
+    expected_top2_share: 0.70  # Links 1&2 should carry 70%+ combined
+    
+  - name: "jitter_absorption"
+    description: "Receiver jitter should be bounded despite input jitter differences"
+    max_output_jitter_ms: 100
+
+pipeline:
+  encoder_bitrate_kbps: 2800
+  test_pattern: "ball"
+  resolution: "640x480" 
+  framerate: 30
+  keyframe_interval: 60
