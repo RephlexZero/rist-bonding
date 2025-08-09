@@ -1,0 +1,50 @@
+# Network Simulation Container
+FROM ubuntu:24.04
+
+# Install network simulation tools
+RUN apt-get update && apt-get install -y \
+    iproute2 \
+    iptables \
+    netfilter-persistent \
+    iptables-persistent \
+    tc \
+    wondershaper \
+    netem \
+    bridge-utils \
+    net-tools \
+    tcpdump \
+    iperf3 \
+    netcat-openbsd \
+    curl \
+    jq \
+    python3 \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python packages for network simulation
+RUN pip3 install --break-system-packages \
+    psutil \
+    flask \
+    requests
+
+WORKDIR /app
+
+# Copy network simulation scripts
+COPY scripts/network-sim/ ./scripts/
+
+# Make scripts executable
+RUN chmod +x scripts/*.sh scripts/*.py
+
+# Create necessary directories
+RUN mkdir -p /var/log/network-sim
+
+# Enable IP forwarding and other network features
+RUN echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf && \
+    echo 'net.ipv4.conf.all.rp_filter=0' >> /etc/sysctl.conf && \
+    echo 'net.ipv4.conf.default.rp_filter=0' >> /etc/sysctl.conf
+
+# Expose control API port
+EXPOSE 8090
+
+# Default command
+CMD ["./scripts/network-sim.sh"]

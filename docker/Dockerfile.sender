@@ -1,0 +1,58 @@
+# RIST Test Sender Docker Image
+FROM ubuntu:24.04
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    libgstreamer1.0-dev \
+    libgstreamer-plugins-base1.0-dev \
+    libgstreamer-plugins-bad1.0-dev \
+    libglib2.0-dev \
+    pkg-config \
+    gstreamer1.0-tools \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly \
+    gstreamer1.0-libav \
+    gstreamer1.0-rtsp \
+    ffmpeg \
+    netcat-openbsd \
+    iproute2 \
+    iperf3 \
+    tcpdump \
+    python3 \
+    python3-pip \
+    python3-gi \
+    python3-gi-cairo \
+    gir1.2-gst-rtsp-server-1.0 \
+    curl \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python packages for statistics
+RUN pip3 install --break-system-packages \
+    psutil \
+    matplotlib \
+    numpy \
+    pandas \
+    requests
+
+# Create application directory
+WORKDIR /app
+
+# Copy the plugin
+COPY target/release/libgstristsmart.so /usr/lib/x86_64-linux-gnu/gstreamer-1.0/
+ENV GST_PLUGIN_PATH=/usr/lib/x86_64-linux-gnu/gstreamer-1.0
+
+# Copy test scripts
+COPY scripts/sender/ ./scripts/
+COPY test-data/ ./test-data/
+
+# Make scripts executable
+RUN chmod +x scripts/*.sh scripts/*.py
+
+# Expose ports for RIST connections
+EXPOSE 5004-5010
+
+# Default command
+CMD ["./scripts/sender.sh"]

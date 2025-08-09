@@ -1,0 +1,181 @@
+version: '3.8'
+
+services:
+  # RIST sender with bonding plugin
+  rist-sender:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.sender
+    container_name: rist-sender
+    hostname: rist-sender
+    networks:
+      - network1
+      - network2
+      - network3
+      - network4
+    environment:
+      - BONDING_ADDRESSES=network1:5004,network2:5005,network3:5006,network4:5007
+      - VIDEO_BITRATE=4000
+      - VIDEO_WIDTH=1920
+      - VIDEO_HEIGHT=1080
+      - VIDEO_FPS=30
+    volumes:
+      - ./test-results:/app/test-results
+      - ./scripts:/app/scripts
+    depends_on:
+      - network-sim-1
+      - network-sim-2
+      - network-sim-3
+      - network-sim-4
+    command: ["./scripts/sender-bonding.sh"]
+
+  # RIST receiver
+  rist-receiver:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.receiver
+    container_name: rist-receiver
+    hostname: rist-receiver
+    networks:
+      - network1
+      - network2
+      - network3
+      - network4
+    ports:
+      - "8080:8080"  # Statistics API
+    volumes:
+      - ./test-results:/app/test-results
+      - ./scripts:/app/scripts
+    depends_on:
+      - network-sim-1
+      - network-sim-2
+      - network-sim-3
+      - network-sim-4
+    command: ["./scripts/receiver-bonding.sh"]
+
+  # Network simulators for different cellular conditions
+  network-sim-1:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.network-sim
+    container_name: rist-network-1
+    hostname: network1
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    networks:
+      - network1
+    ports:
+      - "8091:8090"  # Control API
+    environment:
+      - NETWORK_TYPE=good-4g
+      - LATENCY_MS=50
+      - LOSS_PCT=1.0
+      - BANDWIDTH_MBPS=20
+      - JITTER_MS=5
+    volumes:
+      - ./test-results:/app/test-results
+      - ./scripts:/app/scripts
+    command: ["./scripts/simulate-network.sh", "good-4g"]
+
+  network-sim-2:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.network-sim
+    container_name: rist-network-2
+    hostname: network2
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    networks:
+      - network2
+    ports:
+      - "8092:8090"  # Control API
+    environment:
+      - NETWORK_TYPE=poor-4g
+      - LATENCY_MS=150
+      - LOSS_PCT=5.0
+      - BANDWIDTH_MBPS=10
+      - JITTER_MS=20
+    volumes:
+      - ./test-results:/app/test-results
+      - ./scripts:/app/scripts
+    command: ["./scripts/simulate-network.sh", "poor-4g"]
+
+  network-sim-3:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.network-sim
+    container_name: rist-network-3
+    hostname: network3
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    networks:
+      - network3
+    ports:
+      - "8093:8090"  # Control API
+    environment:
+      - NETWORK_TYPE=5g
+      - LATENCY_MS=20
+      - LOSS_PCT=0.1
+      - BANDWIDTH_MBPS=100
+      - JITTER_MS=2
+    volumes:
+      - ./test-results:/app/test-results
+      - ./scripts:/app/scripts
+    command: ["./scripts/simulate-network.sh", "5g"]
+
+  network-sim-4:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.network-sim
+    container_name: rist-network-4
+    hostname: network4
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    networks:
+      - network4
+    ports:
+      - "8094:8090"  # Control API
+    environment:
+      - NETWORK_TYPE=variable
+      - LATENCY_MS=75
+      - LOSS_PCT=2.0
+      - BANDWIDTH_MBPS=30
+      - JITTER_MS=10
+    volumes:
+      - ./test-results:/app/test-results
+      - ./scripts:/app/scripts
+    command: ["./scripts/simulate-network.sh", "variable"]
+
+networks:
+  network1:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.1.0/24
+  network2:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.2.0/24
+  network3:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.3.0/24
+  network4:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.4.0/24
