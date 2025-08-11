@@ -557,8 +557,9 @@ impl ObjectImpl for DispatcherImpl {
     }
 
     fn set_property(&self, id: usize, value: &glib::Value, _pspec: &glib::ParamSpec) {
+        gst::debug!(CAT, "Property setter called with id: {}", id);
         match id {
-            0 => {
+            1 => {
                 // weights - parse JSON array
                 if let Ok(Some(s)) = value.get::<Option<String>>() {
                     match serde_json::from_str::<Vec<f64>>(&s) {
@@ -595,7 +596,7 @@ impl ObjectImpl for DispatcherImpl {
                     }
                 }
             }
-            1 => {
+            2 => {
                 let interval = value.get::<u64>().unwrap_or(500).max(100).min(10000);
                 *self.inner.rebalance_interval_ms.lock() = interval;
                 gst::debug!(CAT, "Set rebalance interval: {} ms", interval);
@@ -603,7 +604,7 @@ impl ObjectImpl for DispatcherImpl {
                 // Restart timer immediately with new interval
                 self.start_rebalancer_timer();
             }
-            2 => {
+            3 => {
                 let s = value
                     .get::<Option<String>>()
                     .unwrap_or(Some("ewma".to_string()));
@@ -619,12 +620,12 @@ impl ObjectImpl for DispatcherImpl {
                 *self.inner.strategy.lock() = strategy;
                 gst::debug!(CAT, "Set strategy: {:?}", strategy);
             }
-            3 => {
+            4 => {
                 let caps_any = value.get::<bool>().unwrap_or(false);
                 *self.inner.caps_any.lock() = caps_any;
                 gst::debug!(CAT, "Set caps-any: {}", caps_any);
             }
-            4 => {
+            5 => {
                 let auto_balance = value.get::<bool>().unwrap_or(true);
                 *self.inner.auto_balance.lock() = auto_balance;
                 gst::debug!(CAT, "Set auto-balance: {}", auto_balance);
@@ -636,7 +637,7 @@ impl ObjectImpl for DispatcherImpl {
                     self.stop_rebalancer_timer();
                 }
             }
-            5 => {
+            6 => {
                 let rist = value.get::<Option<gst::Element>>().ok().flatten();
                 *self.inner.rist_element.lock() = rist.clone();
                 gst::debug!(CAT, "Set RIST element: {:?}", rist.is_some());
@@ -646,35 +647,35 @@ impl ObjectImpl for DispatcherImpl {
                     self.start_stats_polling();
                 }
             }
-            6 => {
+            7 => {
                 // current-weights (readonly)
             }
-            7 => {
+            8 => {
                 let min_hold = value.get::<u64>().unwrap_or(500).min(10000);
                 *self.inner.min_hold_ms.lock() = min_hold;
                 gst::debug!(CAT, "Set min-hold-ms: {}", min_hold);
             }
-            8 => {
+            9 => {
                 let threshold = value.get::<f64>().unwrap_or(1.2).max(1.0).min(10.0);
                 *self.inner.switch_threshold.lock() = threshold;
                 gst::debug!(CAT, "Set switch-threshold: {:.2}", threshold);
             }
-            9 => {
+            10 => {
                 let warmup = value.get::<u64>().unwrap_or(2000).min(30000);
                 *self.inner.health_warmup_ms.lock() = warmup;
                 gst::debug!(CAT, "Set health-warmup-ms: {}", warmup);
             }
-            10 => {
+            11 => {
                 let dup_kf = value.get::<bool>().unwrap_or(false);
                 *self.inner.duplicate_keyframes.lock() = dup_kf;
                 gst::debug!(CAT, "Set duplicate-keyframes: {}", dup_kf);
             }
-            11 => {
+            12 => {
                 let budget = value.get::<u32>().unwrap_or(5).min(100);
                 *self.inner.dup_budget_pps.lock() = budget;
                 gst::debug!(CAT, "Set dup-budget-pps: {}", budget);
             }
-            12 => {
+            13 => {
                 let interval_ms = value.get::<u64>().unwrap_or(0).min(60000);
                 *self.inner.metrics_export_interval_ms.lock() = interval_ms;
                 gst::debug!(CAT, "Set metrics-export-interval-ms: {}", interval_ms);
@@ -691,36 +692,71 @@ impl ObjectImpl for DispatcherImpl {
     }
 
     fn property(&self, id: usize, _pspec: &glib::ParamSpec) -> glib::Value {
+        gst::debug!(CAT, "Property getter called with id: {}", id);
         match id {
-            0 => {
+            1 => {
+                gst::debug!(CAT, "Returning weights");
                 let weights = &self.inner.state.lock().weights;
                 let json = serde_json::to_string(weights).unwrap_or_default();
                 json.to_value()
             }
-            1 => self.inner.rebalance_interval_ms.lock().to_value(),
             2 => {
+                gst::debug!(CAT, "Returning rebalance_interval_ms");
+                self.inner.rebalance_interval_ms.lock().to_value()
+            }
+            3 => {
+                gst::debug!(CAT, "Returning strategy");
                 let strategy = *self.inner.strategy.lock();
                 match strategy {
                     Strategy::Aimd => "aimd".to_value(),
                     Strategy::Ewma => "ewma".to_value(),
                 }
             }
-            3 => self.inner.caps_any.lock().to_value(),
-            4 => self.inner.auto_balance.lock().to_value(),
-            5 => self.inner.rist_element.lock().to_value(),
+            4 => {
+                gst::debug!(CAT, "Returning caps_any");
+                self.inner.caps_any.lock().to_value()
+            }
+            5 => {
+                gst::debug!(CAT, "Returning auto_balance");
+                self.inner.auto_balance.lock().to_value()
+            }
             6 => {
+                gst::debug!(CAT, "Returning rist_element");
+                self.inner.rist_element.lock().to_value()
+            }
+            7 => {
+                gst::debug!(CAT, "Returning current-weights");
                 // current-weights (readonly)
                 let weights = &self.inner.state.lock().weights;
                 let json = serde_json::to_string(weights).unwrap_or_default();
                 json.to_value()
             }
-            7 => self.inner.min_hold_ms.lock().to_value(),
-            8 => self.inner.switch_threshold.lock().to_value(),
-            9 => self.inner.health_warmup_ms.lock().to_value(),
-            10 => self.inner.duplicate_keyframes.lock().to_value(),
-            11 => self.inner.dup_budget_pps.lock().to_value(),
-            12 => self.inner.metrics_export_interval_ms.lock().to_value(),
+            8 => {
+                gst::debug!(CAT, "Returning min_hold_ms");
+                self.inner.min_hold_ms.lock().to_value()
+            }
+            9 => {
+                gst::debug!(CAT, "Returning switch_threshold");
+                self.inner.switch_threshold.lock().to_value()
+            }
+            10 => {
+                gst::debug!(CAT, "Returning health_warmup_ms");
+                self.inner.health_warmup_ms.lock().to_value()
+            }
+            11 => {
+                gst::debug!(CAT, "Returning duplicate_keyframes");
+                self.inner.duplicate_keyframes.lock().to_value()
+            }
+            12 => {
+                gst::debug!(CAT, "Returning dup_budget_pps");
+                self.inner.dup_budget_pps.lock().to_value()
+            }
+            13 => {
+                gst::debug!(CAT, "Returning metrics_export_interval_ms");
+                self.inner.metrics_export_interval_ms.lock().to_value()
+            }
             _ => {
+                gst::debug!(CAT, "Unknown property id: {}, returning default", id);
                 // Return a safe default value for unknown properties
                 "".to_value()
             }
@@ -1667,6 +1703,16 @@ fn pick_output_index_swrr(weights: &[f64], swrr_counters: &mut Vec<f64>) -> usiz
 pub fn register(plugin: &gst::Plugin) -> Result<(), glib::BoolError> {
     gst::Element::register(
         Some(plugin),
+        "ristdispatcher",
+        gst::Rank::NONE,
+        Dispatcher::static_type(),
+    )
+}
+
+// Static registration for tests (no Plugin handle)
+pub fn register_static() -> Result<(), glib::BoolError> {
+    gst::Element::register(
+        None,
         "ristdispatcher",
         gst::Rank::NONE,
         Dispatcher::static_type(),

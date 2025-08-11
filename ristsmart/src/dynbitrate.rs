@@ -797,3 +797,13 @@ pub fn register(plugin: &gst::Plugin) -> Result<(), glib::BoolError> {
         DynBitrate::static_type(),
     )
 }
+
+// Static registration for tests
+pub fn register_static() -> Result<(), glib::BoolError> {
+    gst::Element::register(
+        None,
+        "dynbitrate",
+        gst::Rank::NONE,
+        DynBitrate::static_type(),
+    )
+}
