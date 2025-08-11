@@ -27,8 +27,8 @@ static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
 
 #[derive(Default)]
 pub struct ControllerInner {
-    encoder: Mutex<Option<gst::Element>>, // e.g. x265enc
-    rist: Mutex<Option<gst::Element>>,    // the ristsink
+    encoder: Mutex<Option<gst::Element>>,    // e.g. x265enc
+    rist: Mutex<Option<gst::Element>>,       // the ristsink
     dispatcher: Mutex<Option<gst::Element>>, // the rist dispatcher for coordination
     min_kbps: Mutex<u32>,
     max_kbps: Mutex<u32>,
@@ -36,6 +36,8 @@ pub struct ControllerInner {
     target_loss_pct: Mutex<f64>,
     rtt_floor_ms: Mutex<u64>,
     last_change: Mutex<Option<Instant>>,
+    // Encoder property detection cache
+    bitrate_property: Mutex<Option<(String, f64)>>, // (property_name, scale_factor)
 }
 
 glib::wrapper! {
@@ -109,7 +111,8 @@ impl ObjectImpl for ControllerImpl {
         // Install a periodic tick to poll ristsink stats and adjust bitrate
         // Use the same interval as dispatcher to avoid conflicts
         let weak = obj.downgrade();
-        gst::glib::timeout_add_local(Duration::from_millis(750), move || { // Offset slightly from dispatcher
+        gst::glib::timeout_add_local(Duration::from_millis(750), move || {
+            // Offset slightly from dispatcher
             if let Some(obj) = weak.upgrade() {
                 obj.imp().tick();
                 glib::ControlFlow::Continue
@@ -177,7 +180,14 @@ impl ObjectImpl for ControllerImpl {
 
     fn set_property(&self, id: usize, value: &glib::Value, _pspec: &glib::ParamSpec) {
         match id {
-            0 => *self.inner.encoder.lock() = value.get::<Option<gst::Element>>().ok().flatten(),
+            0 => {
+                let encoder = value.get::<Option<gst::Element>>().ok().flatten();
+                if let Some(ref enc) = encoder {
+                    // Detect and cache encoder bitrate property
+                    self.detect_encoder_bitrate_property(enc);
+                }
+                *self.inner.encoder.lock() = encoder;
+            }
             1 => *self.inner.rist.lock() = value.get::<Option<gst::Element>>().ok().flatten(),
             2 => *self.inner.min_kbps.lock() = value.get::<u32>().unwrap_or(500),
             3 => *self.inner.max_kbps.lock() = value.get::<u32>().unwrap_or(8000),
@@ -187,7 +197,7 @@ impl ObjectImpl for ControllerImpl {
             7 => {
                 let disp = value.get::<Option<gst::Element>>().ok().flatten();
                 *self.inner.dispatcher.lock() = disp.clone();
-                
+
                 // Disable auto-balance on the dispatcher when dynbitrate is connected
                 if let Some(ref dispatcher) = disp {
                     dispatcher.set_property("auto-balance", false);
@@ -262,6 +272,107 @@ impl ElementImpl for ControllerImpl {
 }
 
 impl ControllerImpl {
+    fn detect_encoder_bitrate_property(&self, encoder: &gst::Element) {
+        // Try common bitrate property names and detect units
+        let property_candidates = [
+            ("bitrate", 1.0),           // x264enc, x265enc (kbps)
+            ("target-bitrate", 1000.0), // some HW encoders (bps)
+            ("target_bitrate", 1000.0), // alternative naming (bps)
+            ("avg-bitrate", 1.0),       // some encoders (kbps)
+            ("avg_bitrate", 1.0),       // alternative naming (kbps)
+        ];
+
+        let mut detected_property: Option<(String, f64)> = None;
+
+        for (prop_name, scale_factor) in &property_candidates {
+            if let Some(prop_spec) = encoder.find_property(prop_name) {
+                // Check if it's a writable integer/uint property
+                let flags = prop_spec.flags();
+                if flags.contains(glib::ParamFlags::WRITABLE)
+                    && !flags.contains(glib::ParamFlags::CONSTRUCT_ONLY)
+                {
+                    // Check the type
+                    if prop_spec.value_type() == u32::static_type()
+                        || prop_spec.value_type() == i32::static_type()
+                    {
+                        detected_property = Some((prop_name.to_string(), *scale_factor));
+                        gst::info!(
+                            CAT,
+                            "Detected encoder bitrate property: '{}' with scale factor {}",
+                            prop_name,
+                            scale_factor
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+
+        if detected_property.is_none() {
+            gst::warning!(
+                CAT,
+                "Could not detect encoder bitrate property, will try default 'bitrate'"
+            );
+            detected_property = Some(("bitrate".to_string(), 1.0));
+        }
+
+        *self.inner.bitrate_property.lock() = detected_property;
+    }
+
+    fn set_encoder_bitrate(
+        &self,
+        encoder: &gst::Element,
+        kbps: u32,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let bitrate_prop = self.inner.bitrate_property.lock().clone();
+
+        let (prop_name, scale_factor) = bitrate_prop.unwrap_or_else(|| {
+            gst::warning!(CAT, "No bitrate property detected, using default");
+            ("bitrate".to_string(), 1.0)
+        });
+
+        // Convert kbps to the encoder's expected units
+        let encoder_value = if scale_factor > 1.0 {
+            // Convert kbps to bps
+            (kbps as f64 * scale_factor) as u32
+        } else {
+            // Already in kbps
+            kbps
+        };
+
+        gst::debug!(
+            CAT,
+            "Setting encoder property '{}' to {} (from {} kbps with scale {})",
+            prop_name,
+            encoder_value,
+            kbps,
+            scale_factor
+        );
+
+        encoder.set_property(&prop_name, encoder_value);
+        Ok(())
+    }
+
+    fn get_encoder_bitrate(&self, encoder: &gst::Element) -> u32 {
+        let bitrate_prop = self.inner.bitrate_property.lock().clone();
+
+        let (prop_name, scale_factor) = bitrate_prop.unwrap_or_else(|| {
+            gst::warning!(CAT, "No bitrate property detected, using default");
+            ("bitrate".to_string(), 1.0)
+        });
+
+        let encoder_value: u32 = encoder.property(&prop_name);
+
+        // Convert to kbps if needed
+        if scale_factor > 1.0 {
+            // Convert from bps to kbps
+            (encoder_value as f64 / scale_factor) as u32
+        } else {
+            // Already in kbps
+            encoder_value
+        }
+    }
+
     fn tick(&self) {
         // Read ristsink "stats" property -> GstStructure "rist/x-sender-stats"
         let rist = { self.inner.rist.lock().clone() };
@@ -285,12 +396,12 @@ impl ControllerImpl {
         let stats_value: glib::Value = rist.property("stats");
         if let Ok(Some(structure)) = stats_value.get::<Option<gst::Structure>>() {
             gst::debug!(CAT, "Got RIST stats structure: {}", structure.to_string());
-            
+
             // If we have a dispatcher, compute and set weights based on stats
             if let Some(ref disp) = dispatcher {
                 self.update_dispatcher_weights(&structure, disp);
             }
-            
+
             // Update bitrate based on aggregate stats
             self.update_bitrate_from_stats(&structure, &encoder);
         } else {
@@ -298,52 +409,109 @@ impl ControllerImpl {
             self.simple_bitrate_adjustment(&encoder);
         }
     }
-    
+
     fn update_dispatcher_weights(&self, stats: &gst::Structure, dispatcher: &gst::Element) {
         // Extract per-session stats and compute EWMA weights
         let mut weights = Vec::new();
-        let mut session_idx = 0;
-        
-        // Try to find session-based stats
-        loop {
-            let session_key = format!("session-{}", session_idx);
-            
-            // Check if this session exists in the stats
-            if let Ok(sent_original) = stats.get::<u64>(&format!("{}.sent-original-packets", session_key))
-                .or_else(|_| stats.get::<u64>("sent-original-packets")) {
-                
-                let sent_retrans = stats.get::<u64>(&format!("{}.sent-retransmitted-packets", session_key))
-                    .or_else(|_| stats.get::<u64>("sent-retransmitted-packets"))
-                    .unwrap_or(0);
-                
-                let rtt_ms = stats.get::<f64>(&format!("{}.round-trip-time", session_key))
-                    .or_else(|_| stats.get::<f64>("round-trip-time"))
-                    .unwrap_or(50.0);
-                
-                // Simple EWMA-based weight calculation
-                let total_sent = sent_original + sent_retrans;
-                let rtx_rate = if total_sent > 0 {
-                    sent_retrans as f64 / total_sent as f64
-                } else {
-                    0.0
-                };
-                
-                // Base weight from goodput (inverse of RTX rate and RTT)
-                let mut weight = 1.0 / (1.0 + 0.1 * rtx_rate); // Penalty for retransmissions
-                weight /= 1.0 + 0.01 * (rtt_ms / 100.0);       // Penalty for high RTT
-                weight = weight.max(0.05);                       // Floor to prevent starvation
-                
-                weights.push(weight);
-                session_idx += 1;
-                
-                gst::debug!(CAT, "Session {}: sent={}, rtx={}, rtt={:.1}ms, weight={:.3}", 
-                          session_idx-1, sent_original, sent_retrans, rtt_ms, weight);
-            } else {
-                // No more sessions
-                break;
+
+        // Try parsing session-stats array first (correct format)
+        if let Ok(sess_stats_value) = stats.get::<glib::Value>("session-stats") {
+            if let Ok(sess_array) = sess_stats_value.get::<glib::ValueArray>() {
+                for (session_idx, session_value) in sess_array.iter().enumerate() {
+                    if let Ok(session_struct) = session_value.get::<gst::Structure>() {
+                        let sent_original = session_struct
+                            .get::<u64>("sent-original-packets")
+                            .unwrap_or(0);
+                        let sent_retrans = session_struct
+                            .get::<u64>("sent-retransmitted-packets")
+                            .unwrap_or(0);
+                        let rtt_ms =
+                            session_struct.get::<u64>("round-trip-time").unwrap_or(50) as f64;
+
+                        // Simple EWMA-based weight calculation
+                        let total_sent = sent_original + sent_retrans;
+                        let rtx_rate = if total_sent > 0 {
+                            sent_retrans as f64 / total_sent as f64
+                        } else {
+                            0.0
+                        };
+
+                        // Base weight from goodput (inverse of RTX rate and RTT)
+                        let mut weight = 1.0 / (1.0 + 0.1 * rtx_rate); // Penalty for retransmissions
+                        weight /= 1.0 + 0.01 * (rtt_ms / 100.0); // Penalty for high RTT
+                        weight = weight.max(0.05); // Floor to prevent starvation
+
+                        weights.push(weight);
+
+                        gst::debug!(
+                            CAT,
+                            "Session {}: sent={}, rtx={}, rtt={:.1}ms, weight={:.3}",
+                            session_idx,
+                            sent_original,
+                            sent_retrans,
+                            rtt_ms,
+                            weight
+                        );
+                    }
+                }
             }
         }
-        
+
+        // Fallback to legacy parsing if session-stats array not found
+        if weights.is_empty() {
+            let mut session_idx = 0;
+
+            // Try to find session-based stats using legacy format
+            loop {
+                let session_key = format!("session-{}", session_idx);
+
+                // Check if this session exists in the stats
+                if let Ok(sent_original) = stats
+                    .get::<u64>(&format!("{}.sent-original-packets", session_key))
+                    .or_else(|_| stats.get::<u64>("sent-original-packets"))
+                {
+                    let sent_retrans = stats
+                        .get::<u64>(&format!("{}.sent-retransmitted-packets", session_key))
+                        .or_else(|_| stats.get::<u64>("sent-retransmitted-packets"))
+                        .unwrap_or(0);
+
+                    let rtt_ms = stats
+                        .get::<f64>(&format!("{}.round-trip-time", session_key))
+                        .or_else(|_| stats.get::<f64>("round-trip-time"))
+                        .unwrap_or(50.0);
+
+                    // Simple EWMA-based weight calculation
+                    let total_sent = sent_original + sent_retrans;
+                    let rtx_rate = if total_sent > 0 {
+                        sent_retrans as f64 / total_sent as f64
+                    } else {
+                        0.0
+                    };
+
+                    // Base weight from goodput (inverse of RTX rate and RTT)
+                    let mut weight = 1.0 / (1.0 + 0.1 * rtx_rate); // Penalty for retransmissions
+                    weight /= 1.0 + 0.01 * (rtt_ms / 100.0); // Penalty for high RTT
+                    weight = weight.max(0.05); // Floor to prevent starvation
+
+                    weights.push(weight);
+                    session_idx += 1;
+
+                    gst::debug!(
+                        CAT,
+                        "Session {}: sent={}, rtx={}, rtt={:.1}ms, weight={:.3}",
+                        session_idx - 1,
+                        sent_original,
+                        sent_retrans,
+                        rtt_ms,
+                        weight
+                    );
+                } else {
+                    // No more sessions
+                    break;
+                }
+            }
+        }
+
         // If we found multi-session stats, normalize and set dispatcher weights
         if weights.len() > 1 {
             let total: f64 = weights.iter().sum();
@@ -352,70 +520,143 @@ impl ControllerImpl {
                     *w /= total;
                 }
             }
-            
+
             let weights_json = serde_json::to_string(&weights).unwrap_or_default();
             dispatcher.set_property("weights", &weights_json);
             gst::info!(CAT, "Updated dispatcher weights: {}", weights_json);
         }
     }
-    
+
     fn update_bitrate_from_stats(&self, stats: &gst::Structure, encoder: &gst::Element) {
-        // Get aggregate loss rate and RTT
-        let total_original = stats.get::<u64>("sent-original-packets").unwrap_or(0);
-        let total_retrans = stats.get::<u64>("sent-retransmitted-packets").unwrap_or(0);
-        let avg_rtt = stats.get::<f64>("round-trip-time").unwrap_or(50.0);
-        
+        // Parse session-stats array to derive aggregate RTT and loss
+        let mut total_original = 0u64;
+        let mut total_retrans = 0u64;
+        let mut rtts = Vec::new();
+
+        // Try parsing session-stats array first (correct format)
+        if let Ok(sess_stats_value) = stats.get::<glib::Value>("session-stats") {
+            if let Ok(sess_array) = sess_stats_value.get::<glib::ValueArray>() {
+                for session_value in sess_array.iter() {
+                    if let Ok(session_struct) = session_value.get::<gst::Structure>() {
+                        let sent_original = session_struct
+                            .get::<u64>("sent-original-packets")
+                            .unwrap_or(0);
+                        let sent_retrans = session_struct
+                            .get::<u64>("sent-retransmitted-packets")
+                            .unwrap_or(0);
+                        let rtt_ms =
+                            session_struct.get::<u64>("round-trip-time").unwrap_or(50) as f64;
+
+                        total_original += sent_original;
+                        total_retrans += sent_retrans;
+                        if rtt_ms > 0.0 {
+                            rtts.push(rtt_ms);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback to legacy aggregated stats if session-stats not available
+        if total_original == 0 && rtts.is_empty() {
+            total_original = stats.get::<u64>("sent-original-packets").unwrap_or(0);
+            total_retrans = stats.get::<u64>("sent-retransmitted-packets").unwrap_or(0);
+            if let Ok(rtt) = stats.get::<f64>("round-trip-time") {
+                if rtt > 0.0 {
+                    rtts.push(rtt);
+                }
+            }
+        }
+
         if total_original == 0 {
             return; // No data yet
         }
-        
+
         let total_sent = total_original + total_retrans;
         let loss_rate = total_retrans as f64 / total_sent as f64;
-        
+
+        // Calculate aggregate RTT (min RTT for conservative estimate)
+        let avg_rtt = if !rtts.is_empty() {
+            rtts.iter().copied().fold(f64::INFINITY, f64::min) // Use minimum RTT
+        } else {
+            50.0 // Default fallback
+        };
+
         let target_loss = *self.inner.target_loss_pct.lock() / 100.0;
         let rtt_threshold = *self.inner.rtt_floor_ms.lock() as f64;
-        
-        // Get current bitrate
-        let current_kbps: u32 = encoder.property("bitrate");
+
+        // Get current bitrate using detected property
+        let current_kbps = self.get_encoder_bitrate(encoder);
         let min = *self.inner.min_kbps.lock();
         let max = *self.inner.max_kbps.lock();
         let step = *self.inner.step_kbps.lock();
-        
+
         // Rate limiting
         let now = Instant::now();
         let last_change = *self.inner.last_change.lock();
         let since = last_change
             .map(|t| now.duration_since(t))
             .unwrap_or(Duration::from_secs(1));
-            
+
         if since < Duration::from_millis(1200) {
             return; // Too soon to change
         }
-        
+
         let mut new_kbps = current_kbps;
-        
+
+        // Add dead-band around target loss (±0.1%)
+        let loss_deadband = 0.001; // 0.1%
+        let loss_too_high = loss_rate > target_loss + loss_deadband;
+        let loss_very_low = loss_rate < target_loss - loss_deadband;
+
         // Adjust based on loss rate and RTT
-        if loss_rate > target_loss || avg_rtt > rtt_threshold {
+        if loss_too_high || avg_rtt > rtt_threshold {
             // Decrease bitrate due to high loss or RTT
             new_kbps = current_kbps.saturating_sub(step).max(min);
-            gst::info!(CAT, "Decreasing bitrate from {} to {} kbps (loss={:.2}%, rtt={:.1}ms)", 
-                      current_kbps, new_kbps, loss_rate * 100.0, avg_rtt);
-        } else if loss_rate < target_loss * 0.5 && avg_rtt < rtt_threshold * 0.8 {
-            // Increase bitrate due to good conditions
+            gst::info!(
+                CAT,
+                "Decreasing bitrate from {} to {} kbps (loss={:.2}%, rtt={:.1}ms)",
+                current_kbps,
+                new_kbps,
+                loss_rate * 100.0,
+                avg_rtt
+            );
+        } else if loss_very_low && avg_rtt < rtt_threshold * 0.8 {
+            // Increase bitrate due to good conditions (only if loss well below target)
             new_kbps = (current_kbps + step).min(max);
-            gst::info!(CAT, "Increasing bitrate from {} to {} kbps (loss={:.2}%, rtt={:.1}ms)", 
-                      current_kbps, new_kbps, loss_rate * 100.0, avg_rtt);
+            gst::info!(
+                CAT,
+                "Increasing bitrate from {} to {} kbps (loss={:.2}%, rtt={:.1}ms)",
+                current_kbps,
+                new_kbps,
+                loss_rate * 100.0,
+                avg_rtt
+            );
+        } else {
+            // Within dead-band, no adjustment
+            gst::trace!(
+                CAT,
+                "Bitrate stable at {} kbps (loss={:.2}%, target={:.2}%±{:.1}%, rtt={:.1}ms)",
+                current_kbps,
+                loss_rate * 100.0,
+                target_loss * 100.0,
+                loss_deadband * 100.0,
+                avg_rtt
+            );
         }
-        
+
         if new_kbps != current_kbps {
-            encoder.set_property("bitrate", &new_kbps);
-            *self.inner.last_change.lock() = Some(now);
+            if let Err(e) = self.set_encoder_bitrate(encoder, new_kbps) {
+                gst::warning!(CAT, "Failed to set encoder bitrate: {}", e);
+            } else {
+                *self.inner.last_change.lock() = Some(now);
+            }
         }
     }
-    
+
     fn simple_bitrate_adjustment(&self, encoder: &gst::Element) {
         // Fallback to simple oscillation if no stats
-        let current_kbps: u32 = encoder.property("bitrate");
+        let current_kbps = self.get_encoder_bitrate(encoder);
         let min = *self.inner.min_kbps.lock();
         let max = *self.inner.max_kbps.lock();
         let step = *self.inner.step_kbps.lock();
@@ -434,15 +675,28 @@ impl ControllerImpl {
 
         if current_kbps >= max {
             new_kbps = current_kbps.saturating_sub(step).max(min);
-            gst::info!(CAT, "Decreasing bitrate from {} to {} kbps (demo mode)", current_kbps, new_kbps);
+            gst::info!(
+                CAT,
+                "Decreasing bitrate from {} to {} kbps (demo mode)",
+                current_kbps,
+                new_kbps
+            );
         } else if current_kbps <= min {
             new_kbps = (current_kbps + step).min(max);
-            gst::info!(CAT, "Increasing bitrate from {} to {} kbps (demo mode)", current_kbps, new_kbps);
+            gst::info!(
+                CAT,
+                "Increasing bitrate from {} to {} kbps (demo mode)",
+                current_kbps,
+                new_kbps
+            );
         }
 
         if new_kbps != current_kbps {
-            encoder.set_property("bitrate", &new_kbps);
-            *self.inner.last_change.lock() = Some(now);
+            if let Err(e) = self.set_encoder_bitrate(encoder, new_kbps) {
+                gst::warning!(CAT, "Failed to set encoder bitrate: {}", e);
+            } else {
+                *self.inner.last_change.lock() = Some(now);
+            }
         }
     }
 }
