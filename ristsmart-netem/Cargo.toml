@@ -1,0 +1,15 @@
+[package]
+name = "ristsmart-netem"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+netlink-packet-sock-diag = "0.4"
+netlink-packet-utils = "0.5"
+netlink-packet-core = "0.5"
+netlink-sys = "0.8"
+libc = "0.2"
+
+[[bin]]
+name = "emulator"
+path = "src/bin/emulator.rs"

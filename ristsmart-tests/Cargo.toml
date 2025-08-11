@@ -1,0 +1,12 @@
+[package]
+name = "ristsmart-tests"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ristsmart = { path = "../ristsmart" }
+ristsmart-harness = { path = "../ristsmart-harness" }
+gstreamer = "0.20"
+gstreamer-base = "0.20"
+gstreamer-video = "0.20"
+gstreamer-app = "0.20"
