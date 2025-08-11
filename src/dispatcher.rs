@@ -274,7 +274,7 @@ impl ObjectImpl for DispatcherImpl {
                                     // try to send to the second-best pad as well
                                     if should_duplicate && can_dup && srcpads.len() > 1 {
                                         Self::duplicate_keyframe_to_backup(
-                                            &srcpads, chosen_idx, &buf,
+                                            &inner, &srcpads, chosen_idx, &buf,
                                         );
                                     }
                                     return Ok(flow);
@@ -1428,29 +1428,74 @@ impl DispatcherImpl {
     }
 
     fn duplicate_keyframe_to_backup(
+        inner: &DispatcherInner,
         srcpads: &[gst::Pad],
         current_idx: usize,
         buffer: &gst::Buffer,
     ) {
-        // Find second-best linked pad for backup keyframe
+        let (swrr_counters, health_timers) = {
+            let state = inner.state.lock();
+            (
+                state.swrr_counters.clone(),
+                state.link_health_timers.clone(),
+            )
+        };
+        let health_warmup_ms = *inner.health_warmup_ms.lock();
+
+        let now = std::time::Instant::now();
+
+        // Find the best backup candidate (highest SWRR counter among healthy links)
+        let mut best_backup_idx = None;
+        let mut best_counter = f64::NEG_INFINITY;
+
         for (i, pad) in srcpads.iter().enumerate() {
-            if i != current_idx && pad.is_linked() {
+            if i == current_idx || !pad.is_linked() {
+                continue; // Skip current pad and unlinked pads
+            }
+
+            // Check if link is healthy (past warmup period)
+            let is_healthy = if let Some(health_start) = health_timers.get(i) {
+                let health_duration = now.duration_since(*health_start).as_millis() as u64;
+                health_duration >= health_warmup_ms
+            } else {
+                true // Assume healthy if no health timer
+            };
+
+            if !is_healthy {
+                gst::trace!(CAT, "Skipping pad {} as backup - still in warmup period", i);
+                continue;
+            }
+
+            // Check SWRR counter for this pad
+            if let Some(&counter) = swrr_counters.get(i) {
+                if counter > best_counter {
+                    best_counter = counter;
+                    best_backup_idx = Some(i);
+                }
+            }
+        }
+
+        // Duplicate to the best backup if found
+        if let Some(backup_idx) = best_backup_idx {
+            if let Some(backup_pad) = srcpads.get(backup_idx) {
                 gst::debug!(
                     CAT,
-                    "Duplicating keyframe to backup pad {} (current: {})",
-                    i,
+                    "Duplicating keyframe to best backup pad {} (counter: {:.3}, current: {})",
+                    backup_idx,
+                    best_counter,
                     current_idx
                 );
-                if let Err(e) = pad.push(buffer.clone()) {
+                if let Err(e) = backup_pad.push(buffer.clone()) {
                     gst::warning!(
                         CAT,
                         "Failed to duplicate keyframe to backup pad {}: {:?}",
-                        i,
+                        backup_idx,
                         e
                     );
                 }
-                break; // Only duplicate to one backup pad
             }
+        } else {
+            gst::trace!(CAT, "No healthy backup pad found for keyframe duplication");
         }
     }
 }
@@ -1583,7 +1628,10 @@ fn pick_output_index_swrr_with_hysteresis(
     (selected_idx, did_switch)
 }
 
-// Legacy SWRR without hysteresis (for compatibility) - pure SWRR algorithm
+// Pure SWRR algorithm for unit testing - uses 1.0 quantum decrement for predictable distribution testing
+// This function is specifically kept for unit tests to verify SWRR weight distribution without
+// the complexity of hysteresis, health warmup, and time-based constraints.
+#[cfg(test)]
 fn pick_output_index_swrr(weights: &[f64], swrr_counters: &mut Vec<f64>) -> usize {
     if weights.is_empty() {
         return 0;

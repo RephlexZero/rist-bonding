@@ -25,7 +25,6 @@ static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
 //   - target-loss-pct (NACK/loss target), min-rtx-rtt-ms
 //   - downscale-keyunit (bool) – force keyframe on downscale
 
-#[derive(Default)]
 pub struct ControllerInner {
     encoder: Mutex<Option<gst::Element>>,    // e.g. x265enc
     rist: Mutex<Option<gst::Element>>,       // the ristsink
@@ -35,9 +34,28 @@ pub struct ControllerInner {
     step_kbps: Mutex<u32>,
     target_loss_pct: Mutex<f64>,
     rtt_floor_ms: Mutex<u64>,
+    downscale_keyunit: Mutex<bool>, // Force keyframe on bitrate downscale
     last_change: Mutex<Option<Instant>>,
     // Encoder property detection cache
     bitrate_property: Mutex<Option<(String, f64)>>, // (property_name, scale_factor)
+}
+
+impl Default for ControllerInner {
+    fn default() -> Self {
+        Self {
+            encoder: Mutex::new(None),
+            rist: Mutex::new(None),
+            dispatcher: Mutex::new(None),
+            min_kbps: Mutex::new(1000),
+            max_kbps: Mutex::new(10000),
+            step_kbps: Mutex::new(100),
+            target_loss_pct: Mutex::new(1.0),
+            rtt_floor_ms: Mutex::new(10),
+            downscale_keyunit: Mutex::new(false),
+            last_change: Mutex::new(None),
+            bitrate_property: Mutex::new(None),
+        }
+    }
 }
 
 glib::wrapper! {
@@ -173,6 +191,11 @@ impl ObjectImpl for ControllerImpl {
                     .nick("Dispatcher element")
                     .blurb("The RIST dispatcher element to coordinate with for unified control")
                     .build(),
+                glib::ParamSpecBoolean::builder("downscale-keyunit")
+                    .nick("Force keyframe on downscale")
+                    .blurb("Force a keyframe when bitrate is reduced significantly")
+                    .default_value(false)
+                    .build(),
             ]
         });
         PROPS.as_ref()
@@ -206,6 +229,11 @@ impl ObjectImpl for ControllerImpl {
                     gst::debug!(CAT, "Disconnected from dispatcher");
                 }
             }
+            8 => {
+                let downscale_keyunit = value.get::<bool>().unwrap_or(false);
+                *self.inner.downscale_keyunit.lock() = downscale_keyunit;
+                gst::debug!(CAT, "Set downscale-keyunit: {}", downscale_keyunit);
+            }
             _ => {}
         }
     }
@@ -220,6 +248,7 @@ impl ObjectImpl for ControllerImpl {
             5 => self.inner.target_loss_pct.lock().to_value(),
             6 => self.inner.rtt_floor_ms.lock().to_value(),
             7 => self.inner.dispatcher.lock().to_value(),
+            8 => self.inner.downscale_keyunit.lock().to_value(),
             _ => {
                 // Return a safe default value for unknown properties
                 "".to_value()
@@ -324,6 +353,7 @@ impl ControllerImpl {
         encoder: &gst::Element,
         kbps: u32,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let current_kbps = self.get_encoder_bitrate(encoder);
         let bitrate_prop = self.inner.bitrate_property.lock().clone();
 
         let (prop_name, scale_factor) = bitrate_prop.unwrap_or_else(|| {
@@ -350,7 +380,65 @@ impl ControllerImpl {
         );
 
         encoder.set_property(&prop_name, encoder_value);
+
+        // Force keyframe on significant downscale if enabled
+        let downscale_keyunit = *self.inner.downscale_keyunit.lock();
+        if downscale_keyunit && kbps < current_kbps {
+            let downscale_ratio = current_kbps as f64 / kbps as f64;
+            if downscale_ratio >= 1.5 {
+                // Force keyframe for significant downscale (≥50% reduction)
+                self.force_keyframe(encoder);
+                gst::info!(
+                    CAT,
+                    "Forced keyframe due to significant bitrate downscale: {} -> {} kbps ({}% reduction)",
+                    current_kbps,
+                    kbps,
+                    ((downscale_ratio - 1.0) * 100.0) as u32
+                );
+            }
+        }
+
         Ok(())
+    }
+
+    fn force_keyframe(&self, encoder: &gst::Element) {
+        // Try to force a keyframe using the force-key-unit event
+        let structure = gst::Structure::builder("GstForceKeyUnit")
+            .field("all-headers", true)
+            .field("count", 1u32)
+            .build();
+
+        let event = gst::event::CustomDownstream::new(structure);
+
+        // Try to send the event to the encoder's sink pad
+        if let Some(sink_pad) = encoder.static_pad("sink") {
+            if sink_pad.send_event(event) {
+                gst::debug!(CAT, "Successfully sent force-key-unit event to encoder");
+            } else {
+                gst::warning!(
+                    CAT,
+                    "Failed to send force-key-unit event to encoder sink pad"
+                );
+                // Fallback: try sending to encoder element directly
+                let fallback_event = gst::event::CustomDownstream::new(
+                    gst::Structure::builder("GstForceKeyUnit")
+                        .field("all-headers", true)
+                        .field("count", 1u32)
+                        .build(),
+                );
+                if !encoder.send_event(fallback_event) {
+                    gst::warning!(
+                        CAT,
+                        "Failed to send force-key-unit event to encoder element"
+                    );
+                }
+            }
+        } else {
+            gst::warning!(
+                CAT,
+                "Could not find sink pad on encoder for force-key-unit event"
+            );
+        }
     }
 
     fn get_encoder_bitrate(&self, encoder: &gst::Element) -> u32 {
