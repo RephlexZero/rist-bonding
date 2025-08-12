@@ -2,7 +2,6 @@
 
 use crate::errors::{NetemError, Result};
 use futures::TryStreamExt;
-use nix::sched::{setns, CloneFlags};
 use rtnetlink::Handle;
 use std::fs::File;
 use std::net::Ipv4Addr;
@@ -24,9 +23,10 @@ impl NetworkNamespace {
     pub fn new(name: String, index: u32) -> Self {
         // Assign IP addresses based on index
         // Namespace gets .2, host gets .1 in a /30 subnet
-        let base_ip = 10_u32 + (index << 8); // 10.X.0.0 where X is the index
-        let ns_ip = Ipv4Addr::from(base_ip + 2);
-        let host_ip = Ipv4Addr::from(base_ip + 1);
+        // 10.X.0.0 where X is the index
+        let base_ip = (10_u32 << 24) + (index << 16); // 10.index.0.0
+        let ns_ip = Ipv4Addr::from(base_ip + 2); // 10.index.0.2
+        let host_ip = Ipv4Addr::from(base_ip + 1); // 10.index.0.1
 
         Self {
             name,
@@ -47,7 +47,7 @@ impl NetworkNamespace {
     }
 
     /// Create the network namespace
-    pub async fn create(&self, _handle: &Handle) -> Result<()> {
+    pub async fn create(&self) -> Result<()> {
         info!("Creating network namespace: {}", self.name);
 
         // Create namespace using 'ip netns add'
@@ -143,9 +143,9 @@ impl NetworkNamespace {
 
     /// Configure IP addresses on the veth pair
     pub async fn configure_addresses(&self, handle: &Handle) -> Result<()> {
-        let host_if_index = self.host_if_index.ok_or_else(|| {
-            NetemError::VethConfig("Host interface index not set".into())
-        })?;
+        let host_if_index = self
+            .host_if_index
+            .ok_or_else(|| NetemError::VethConfig("Host interface index not set".into()))?;
 
         info!(
             "Configuring addresses: host={} ns={}",
@@ -215,7 +215,7 @@ impl NamespaceManager {
         let mut ns = NetworkNamespace::new(name.clone(), index);
         let handle = self.handle()?;
 
-        ns.create(handle).await?;
+        ns.create().await?;
         ns.create_veth_pair(handle).await?;
         ns.configure_addresses(handle).await?;
 
@@ -224,9 +224,9 @@ impl NamespaceManager {
     }
 
     pub fn get_namespace(&self, name: &str) -> Result<&NetworkNamespace> {
-        self.namespaces.get(name).ok_or_else(|| {
-            NetemError::NamespaceNotFound(format!("Namespace {} not found", name))
-        })
+        self.namespaces
+            .get(name)
+            .ok_or_else(|| NetemError::NamespaceNotFound(format!("Namespace {} not found", name)))
     }
 
     pub async fn cleanup_all(&mut self) -> Result<()> {

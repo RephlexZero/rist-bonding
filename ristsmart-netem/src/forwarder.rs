@@ -6,8 +6,8 @@ use crate::{errors::NetemError, ns::NetworkNamespace};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tracing::info;
 use tokio::task::JoinHandle;
+use tracing::info;
 
 type Result<T> = std::result::Result<T, NetemError>;
 
@@ -105,7 +105,8 @@ async fn run_forwarder_in_netns(
 ) -> Result<()> {
     // Create socket in the namespace
     let bind_addr = SocketAddr::from((ns.ns_ip, config.src_port));
-    let socket = tokio::net::UdpSocket::bind(bind_addr).await
+    let socket = tokio::net::UdpSocket::bind(bind_addr)
+        .await
         .map_err(|e| NetemError::ForwarderBind(format!("Failed to bind socket: {}", e)))?;
 
     info!("UDP forwarder bound to {}:{}", ns.ns_ip, config.src_port);
@@ -153,6 +154,22 @@ pub struct ForwarderManager {
 impl ForwarderManager {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Start a forwarder (alias for backwards compatibility)
+    pub async fn bind_forwarder(
+        &mut self,
+        link_name: &str,
+        ns: Arc<NetworkNamespace>,
+        config: ForwarderConfig,
+    ) -> Result<()> {
+        self.start_forwarder(link_name.to_string(), config, ns)
+            .await
+    }
+
+    /// Stop a forwarder (alias for backwards compatibility)  
+    pub async fn unbind_forwarder(&mut self, link_name: &str) -> Result<()> {
+        self.stop_forwarder(link_name).await
     }
 
     pub async fn start_forwarder(

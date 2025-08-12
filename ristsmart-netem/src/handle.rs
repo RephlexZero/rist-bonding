@@ -2,23 +2,22 @@
 
 use crate::errors::{NetemError, Result};
 use crate::forwarder::{ForwarderConfig, ForwarderManager};
-use crate::ge::{GEController, GEManager};
+use crate::ge::{spawn_ge_controller, GEController};
 use crate::metrics::{LinkMetrics, MetricsCollector, MetricsSnapshot};
 use crate::ns::NetworkNamespace;
-use crate::ou::{OUController, OUManager};
+use crate::ou::{spawn_ou_controller, OUController};
 use crate::qdisc::QdiscManager;
 use crate::types::*;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 
 /// Handle for controlling the entire emulator
 pub struct EmulatorHandle {
     links: Arc<RwLock<HashMap<String, Arc<LinkState>>>>,
-    forwarder_manager: Arc<ForwarderManager>,
+    forwarder_manager: Arc<Mutex<ForwarderManager>>,
     metrics_collector: Arc<MetricsCollector>,
-    rtnetlink_handle: rtnetlink::Handle,
     seed: Option<u64>,
 }
 
@@ -31,6 +30,8 @@ pub struct LinkState {
     pub ge_controller: Arc<RwLock<Option<GEController>>>,
     pub ou_task: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     pub ge_task: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
+    pub ou_shutdown: Arc<RwLock<Option<tokio::sync::oneshot::Sender<()>>>>,
+    pub ge_shutdown: Arc<RwLock<Option<tokio::sync::oneshot::Sender<()>>>>,
     pub current_rate: Arc<RwLock<u64>>,
     pub current_ge_state: Arc<RwLock<(GeState, f64)>>,
 }
@@ -38,11 +39,8 @@ pub struct LinkState {
 impl EmulatorHandle {
     /// Create a new emulator with the given links
     pub async fn new(link_specs: Vec<LinkSpec>, seed: Option<u64>) -> Result<Self> {
-        let (connection, handle, _) = rtnetlink::new_connection()?;
-        tokio::spawn(connection);
-
         let metrics_collector = Arc::new(MetricsCollector::new()?);
-        let forwarder_manager = Arc::new(ForwarderManager::new());
+        let forwarder_manager = Arc::new(Mutex::new(ForwarderManager::new()));
         let links = Arc::new(RwLock::new(HashMap::new()));
 
         info!("Creating emulator with {} links", link_specs.len());
@@ -56,7 +54,7 @@ impl EmulatorHandle {
 
                 // Create network namespace
                 let namespace = Arc::new(NetworkNamespace::new(namespace_name, index as u32));
-                namespace.create(&handle).await?;
+                namespace.create().await?;
 
                 // Create qdisc manager (will be configured when started)
                 let qdisc_manager = QdiscManager::new(namespace.ns_if_index.unwrap_or(0));
@@ -73,6 +71,8 @@ impl EmulatorHandle {
                     ge_controller,
                     ou_task: Arc::new(RwLock::new(None)),
                     ge_task: Arc::new(RwLock::new(None)),
+                    ou_shutdown: Arc::new(RwLock::new(None)),
+                    ge_shutdown: Arc::new(RwLock::new(None)),
                     current_rate: Arc::new(RwLock::new(spec.ou.mean_bps)),
                     current_ge_state: Arc::new(RwLock::new((GeState::Good, spec.ge.p_good))),
                 });
@@ -86,7 +86,6 @@ impl EmulatorHandle {
             links,
             forwarder_manager,
             metrics_collector,
-            rtnetlink_handle: handle,
             seed,
         })
     }
@@ -133,31 +132,21 @@ impl EmulatorHandle {
                 let rate_limiter = spec.rate_limiter.clone();
                 let current_rate = link_state.current_rate.clone();
 
-                // Use the spawn functions from the modules
                 let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-                let qdisc_manager_clone = qdisc_manager.clone();
-                let rate_limiter_clone = rate_limiter.clone();
-                let current_rate_clone = current_rate.clone();
-                
-                let ou_task = tokio::spawn(async move {
-                    crate::ou::spawn_ou_controller(
-                        ou_params, 
-                        0, 
-                        shutdown_rx,
-                        move |new_rate| {
-                            let qdisc_manager = qdisc_manager_clone.clone();
-                            let rate_limiter = rate_limiter_clone.clone();
-                            let current_rate = current_rate_clone.clone();
+                *link_state.ou_shutdown.write().await = Some(shutdown_tx);
 
-                            tokio::spawn(async move {
-                                if let Err(e) = qdisc_manager.update_rate(&rate_limiter, new_rate).await {
-                                    error!("Failed to update rate: {}", e);
-                                } else {
-                                    *current_rate.write().await = new_rate;
-                                }
-                            });
+                let ou_task = spawn_ou_controller(ou_params, 0, shutdown_rx, move |new_rate| {
+                    let qdisc_manager = qdisc_manager.clone();
+                    let rate_limiter = rate_limiter.clone();
+                    let current_rate = current_rate.clone();
+
+                    tokio::spawn(async move {
+                        if let Err(e) = qdisc_manager.update_rate(&rate_limiter, new_rate).await {
+                            error!("Failed to update rate: {}", e);
+                        } else {
+                            *current_rate.write().await = new_rate;
                         }
-                    ).await
+                    });
                 });
 
                 *link_state.ou_task.write().await = Some(ou_task);
@@ -170,10 +159,14 @@ impl EmulatorHandle {
                 let delay_profile = spec.delay.clone();
                 let current_ge_state = link_state.current_ge_state.clone();
 
+                let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+                *link_state.ge_shutdown.write().await = Some(shutdown_tx);
+
                 let ge_task = spawn_ge_controller(
                     ge_params.clone(),
                     self.seed,
                     100, // Tick every 100ms
+                    shutdown_rx,
                     move |state, loss_prob| {
                         let qdisc_manager = qdisc_manager.clone();
                         let ge_params = ge_params.clone();
@@ -193,8 +186,7 @@ impl EmulatorHandle {
 
                         Ok(())
                     },
-                )
-                .await?;
+                );
 
                 *link_state.ge_task.write().await = Some(ge_task);
             }
@@ -214,12 +206,18 @@ impl EmulatorHandle {
             info!("Stopping link: {}", name);
 
             // Stop OU controller
+            if let Some(shutdown_tx) = link_state.ou_shutdown.write().await.take() {
+                let _ = shutdown_tx.send(());
+            }
             if let Some(task) = link_state.ou_task.write().await.take() {
                 task.abort();
                 let _ = task.await; // Ignore cancellation errors
             }
 
             // Stop GE controller
+            if let Some(shutdown_tx) = link_state.ge_shutdown.write().await.take() {
+                let _ = shutdown_tx.send(());
+            }
             if let Some(task) = link_state.ge_task.write().await.take() {
                 task.abort();
                 let _ = task.await; // Ignore cancellation errors
@@ -227,7 +225,7 @@ impl EmulatorHandle {
         }
 
         // Stop all forwarders
-        self.forwarder_manager.stop_all().await?;
+        self.forwarder_manager.lock().await.stop_all().await?;
 
         info!("Emulator stopped");
         Ok(())
@@ -311,7 +309,7 @@ impl EmulatorHandle {
 pub struct LinkHandle {
     name: String,
     emulator: Arc<RwLock<HashMap<String, Arc<LinkState>>>>,
-    forwarder_manager: Arc<ForwarderManager>,
+    forwarder_manager: Arc<Mutex<ForwarderManager>>,
 }
 
 impl LinkHandle {
@@ -376,6 +374,8 @@ impl LinkHandle {
         };
 
         self.forwarder_manager
+            .lock()
+            .await
             .bind_forwarder(&self.name, link_state.namespace.clone(), config)
             .await?;
 
@@ -384,7 +384,11 @@ impl LinkHandle {
 
     /// Unbind UDP forwarder from this link
     pub async fn unbind_forwarder(&self) -> Result<()> {
-        self.forwarder_manager.unbind_forwarder(&self.name).await
+        self.forwarder_manager
+            .lock()
+            .await
+            .unbind_forwarder(&self.name)
+            .await
     }
 }
 

@@ -60,7 +60,7 @@ impl OUController {
         // where theta = 1/tau, mu = mean, sigma = volatility
         let theta = 1.0 / tau_sec;
         let drift = theta * (mean - self.current_value) * dt;
-        
+
         // Create local RNG for this tick to avoid Send issues
         let mut rng = rand::thread_rng();
         let normal = Normal::new(0.0, 1.0).unwrap_or_else(|_| Normal::new(0.0, 1.0).unwrap());
@@ -115,21 +115,22 @@ impl OUManager {
 
         let handle = tokio::spawn(async move {
             let (callback_tx, mut callback_rx) = tokio::sync::mpsc::unbounded_channel();
-            
+
             // Spawn a separate task for the controller to avoid Send issues
             let controller_task = tokio::spawn(async move {
                 spawn_ou_controller(params, 0, shutdown_rx, move |new_rate| {
                     let _ = callback_tx.send(new_rate);
-                }).await
+                })
+                .await
             });
-            
+
             // Forward updates
             while let Some(rate) = callback_rx.recv().await {
                 if update_tx.send(rate).is_err() {
                     break;
                 }
             }
-            
+
             let _ = controller_task.await;
             Ok(())
         });
@@ -181,33 +182,34 @@ impl Drop for OUManager {
 }
 
 /// Spawn an OU controller task
-pub async fn spawn_ou_controller<F>(
+pub fn spawn_ou_controller<F>(
     params: OUParams,
     _seed: u64,
-    mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
-    mut callback: F,
-) -> Result<()>
+    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+    callback: F,
+) -> tokio::task::JoinHandle<()>
 where
-    F: FnMut(u64) + Send + 'static,
+    F: Fn(u64) + Send + 'static,
 {
-    let mut controller = OUController::new(params)?;
-    let tick_interval = Duration::from_millis(controller.params().tick_ms);
-    let mut interval = time::interval(tick_interval);
+    tokio::spawn(async move {
+        let mut controller = OUController::new(params).unwrap();
+        let tick_interval = Duration::from_millis(controller.params().tick_ms);
+        let mut interval = time::interval(tick_interval);
+        let mut shutdown_rx = shutdown_rx;
 
-    loop {
-        tokio::select! {
-            _ = interval.tick() => {
-                let new_rate = controller.tick();
-                callback(new_rate);
-            }
-            _ = &mut shutdown_rx => {
-                debug!("OU controller shutting down");
-                break;
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    let new_rate = controller.tick();
+                    callback(new_rate);
+                }
+                _ = &mut shutdown_rx => {
+                    debug!("OU controller shutting down");
+                    break;
+                }
             }
         }
-    }
-
-    Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -230,13 +232,13 @@ mod tests {
             sigma: 0.1,
             tick_ms: 100,
         };
-        
+
         let mut controller = OUController::new(params).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(1));
-        
+
         let rate1 = controller.tick();
         let rate2 = controller.tick();
-        
+
         // Both rates should be positive
         assert!(rate1 > 0);
         assert!(rate2 > 0);

@@ -1,6 +1,6 @@
 //! Gilbert-Elliott model for burst loss patterns
 
-use crate::errors::{NetemError, Result};
+use crate::errors::Result;
 use crate::types::{GEParams, GeState};
 use rand::Rng;
 use std::time::Duration;
@@ -87,7 +87,7 @@ impl GEController {
 /// Manager for GE controllers across multiple links
 #[derive(Debug)]
 pub struct GEManager {
-    controllers: std::collections::HashMap<String, tokio::task::JoinHandle<Result<()>>>,
+    controllers: std::collections::HashMap<String, tokio::task::JoinHandle<()>>,
     shutdown_txs: std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>,
 }
 
@@ -110,9 +110,8 @@ impl GEManager {
         self.stop_controller(&link_name).await?;
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-        let handle = tokio::spawn(async move {
-            spawn_ge_controller(params, shutdown_rx).await
-        });
+        let handle =
+            spawn_ge_controller(params, None, 100, shutdown_rx, |_state, _loss_prob| Ok(()));
 
         self.controllers.insert(link_name.clone(), handle);
         self.shutdown_txs.insert(link_name, shutdown_tx);
@@ -126,9 +125,8 @@ impl GEManager {
         }
 
         if let Some(handle) = self.controllers.remove(link_name) {
-            if let Err(e) = handle.await {
-                warn!("Error stopping GE controller for {}: {:?}", link_name, e);
-            }
+            handle.abort();
+            let _ = handle.await; // Ignore cancellation errors
         }
 
         Ok(())
@@ -158,27 +156,39 @@ impl Drop for GEManager {
     }
 }
 
-/// Spawn a GE controller task
-pub async fn spawn_ge_controller(
+/// Spawn a GE controller task with callback support
+pub fn spawn_ge_controller<F>(
     params: GEParams,
-    mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
-) -> Result<()> {
-    let mut controller = GEController::new(params);
-    let mut interval = time::interval(Duration::from_millis(100)); // 10Hz updates
+    _seed: Option<u64>,
+    tick_ms: u64,
+    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+    callback: F,
+) -> tokio::task::JoinHandle<()>
+where
+    F: Fn(GeState, f64) -> Result<()> + Send + 'static,
+{
+    tokio::spawn(async move {
+        let mut controller = GEController::new(params);
+        let mut interval = time::interval(Duration::from_millis(tick_ms));
+        let mut shutdown_rx = shutdown_rx;
 
-    loop {
-        tokio::select! {
-            _ = interval.tick() => {
-                controller.tick();
-            }
-            _ = &mut shutdown_rx => {
-                debug!("GE controller shutting down");
-                break;
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    let state = controller.tick();
+                    let loss_prob = controller.loss_probability();
+
+                    if let Err(e) = callback(state, loss_prob) {
+                        warn!("GE callback error: {}", e);
+                    }
+                }
+                _ = &mut shutdown_rx => {
+                    debug!("GE controller shutting down");
+                    break;
+                }
             }
         }
-    }
-
-    Ok(())
+    })
 }
 
 #[cfg(test)]

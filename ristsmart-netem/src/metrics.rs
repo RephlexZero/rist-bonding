@@ -94,6 +94,22 @@ impl MetricsCollector {
     }
 
     /// Collect interface statistics for a given interface index
+    pub async fn collect_interface_stats(
+        &self,
+        if_index: Option<u32>,
+    ) -> crate::errors::Result<(u64, u64, u64, u64, u64)> {
+        if let Some(index) = if_index {
+            self.get_interface_stats(index).await.map(
+                |(tx_bytes, rx_bytes, tx_packets, rx_packets)| {
+                    (tx_bytes, rx_bytes, tx_packets, rx_packets, 0) // No dropped packets for now
+                },
+            )
+        } else {
+            Ok((0, 0, 0, 0, 0))
+        }
+    }
+
+    /// Collect interface statistics for a given interface index
     async fn get_interface_stats(
         &self,
         if_index: u32,

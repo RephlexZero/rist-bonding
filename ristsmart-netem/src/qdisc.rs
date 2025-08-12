@@ -298,11 +298,7 @@ impl QdiscManager {
         let dev_name = format!("veth{}n", self.if_index);
 
         // Ignore errors when removing (might not exist)
-        let _ = run_tc_in_netns(
-            &netns_name,
-            &["qdisc", "del", "dev", &dev_name, "root"],
-        )
-        .await;
+        let _ = run_tc_in_netns(&netns_name, &["qdisc", "del", "dev", &dev_name, "root"]).await;
 
         Ok(())
     }
