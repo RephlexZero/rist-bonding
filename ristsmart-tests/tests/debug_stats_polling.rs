@@ -191,9 +191,13 @@ fn test_stats_evolution_over_time() {
         .build()
         .expect("Failed to create riststats mock");
 
+    // Initialize the mock with 2 sessions
+    let mock: ristsmart_tests::RistStatsMock = stats_mock.clone().downcast().unwrap();
+    mock.set_sessions(2);
+
     let dispatcher = gst::ElementFactory::make("ristdispatcher")
         .property("auto-balance", true)
-        .property("rebalance-interval-ms", 50u64) // Fast polling for testing
+        .property("rebalance-interval-ms", 100u64) // Fast polling for testing (minimum allowed value)
         .property("strategy", "ewma")
         .build()
         .expect("Failed to create ristdispatcher");
@@ -208,18 +212,31 @@ fn test_stats_evolution_over_time() {
         .request_pad_simple("src_%u")
         .expect("Failed to request pad 2");
 
-    // Phase 1: Session 0 performs better
-    let phase1_stats = gst::Structure::builder("rist/x-sender-stats")
-        .field("session-0.sent-original-packets", 1000u64)
-        .field("session-0.sent-retransmitted-packets", 20u64) // 2% loss
-        .field("session-0.round-trip-time", 25.0f64)
-        .field("session-1.sent-original-packets", 1000u64)
-        .field("session-1.sent-retransmitted-packets", 100u64) // 10% loss
-        .field("session-1.round-trip-time", 75.0f64)
-        .build();
+    // Initial baseline: set initial stats to establish a baseline (with small amounts)
+    mock.tick(&[100, 100], &[1, 1], &[50, 50]);
 
-    stats_mock.set_property("stats", &phase1_stats);
-    std::thread::sleep(Duration::from_millis(150));
+    // Wait using main loop to allow timer callbacks to establish baseline
+    let main_loop_init = glib::MainLoop::new(None, false);
+    let main_loop_init_clone = main_loop_init.clone();
+
+    glib::timeout_add_once(Duration::from_millis(300), move || {
+        main_loop_init_clone.quit();
+    });
+
+    main_loop_init.run();
+
+    // Phase 1: Session 0 performs much better (dramatic difference)
+    mock.tick(&[10000, 10000], &[10, 2000], &[10, 200]); // Session 0: 0.1% loss, low RTT. Session 1: 20% loss, high RTT
+
+    // Wait using main loop to allow timer callbacks to execute
+    let main_loop = glib::MainLoop::new(None, false);
+    let main_loop_clone = main_loop.clone();
+
+    glib::timeout_add_once(Duration::from_millis(500), move || {
+        main_loop_clone.quit();
+    });
+
+    main_loop.run();
 
     let phase1_weights_str: String = dispatcher.property("current-weights");
     let phase1_weights_json: serde_json::Value =
@@ -233,18 +250,18 @@ fn test_stats_evolution_over_time() {
         phase1_weight0, phase1_weight1
     );
 
-    // Phase 2: Conditions flip - session 1 becomes better
-    let phase2_stats = gst::Structure::builder("rist/x-sender-stats")
-        .field("session-0.sent-original-packets", 2000u64)
-        .field("session-0.sent-retransmitted-packets", 200u64) // 10% loss (degraded)
-        .field("session-0.round-trip-time", 85.0f64)
-        .field("session-1.sent-original-packets", 2000u64)
-        .field("session-1.sent-retransmitted-packets", 140u64) // 7% total, ~2% recent (improved)
-        .field("session-1.round-trip-time", 30.0f64)
-        .build();
+    // Phase 2: Conditions flip dramatically - session 1 becomes much better
+    mock.tick(&[10000, 10000], &[2000, 10], &[200, 10]); // Session 0: 20% loss, high RTT. Session 1: 0.1% loss, low RTT
 
-    stats_mock.set_property("stats", &phase2_stats);
-    std::thread::sleep(Duration::from_millis(200));
+    // Wait using main loop to allow timer callbacks to execute
+    let main_loop2 = glib::MainLoop::new(None, false);
+    let main_loop2_clone = main_loop2.clone();
+
+    glib::timeout_add_once(Duration::from_millis(500), move || {
+        main_loop2_clone.quit();
+    });
+
+    main_loop2.run();
 
     let phase2_weights_str: String = dispatcher.property("current-weights");
     let phase2_weights_json: serde_json::Value =

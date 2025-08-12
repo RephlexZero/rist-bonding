@@ -1,7 +1,6 @@
 // Pure SWRR + hysteresis unit/property tests
 
 use gstreamer::{self as gst, prelude::*};
-use gstreamer_app as gst_app;
 
 /// Test basic property access after the indexing fix
 #[test]
@@ -66,11 +65,11 @@ fn test_basic_pipeline_creation() {
         .build()
         .expect("Failed to create ristdispatcher");
 
-    let counter1 = gst::ElementFactory::make("counter_sink")
+    let _counter1 = gst::ElementFactory::make("counter_sink")
         .build()
         .expect("Failed to create counter_sink");
 
-    let counter2 = gst::ElementFactory::make("counter_sink")
+    let _counter2 = gst::ElementFactory::make("counter_sink")
         .build()
         .expect("Failed to create counter_sink");
 
