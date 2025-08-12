@@ -31,17 +31,23 @@ fn test_metrics_contract_validation() {
         .build()
         .expect("Failed to create fakesink");
 
-    pipeline.add_many(&[&appsrc, &dispatcher, &fakesink]).unwrap();
+    pipeline
+        .add_many(&[&appsrc, &dispatcher, &fakesink])
+        .unwrap();
 
     // Link elements
-    appsrc.link(&dispatcher).expect("Failed to link appsrc to dispatcher");
+    appsrc
+        .link(&dispatcher)
+        .expect("Failed to link appsrc to dispatcher");
 
     // Request a src pad from dispatcher and link to fakesink
     let src_pad = dispatcher
         .request_pad_simple("src_%u")
         .expect("Failed to request src pad");
     let sink_pad = fakesink.static_pad("sink").expect("Failed to get sink pad");
-    src_pad.link(&sink_pad).expect("Failed to link dispatcher to fakesink");
+    src_pad
+        .link(&sink_pad)
+        .expect("Failed to link dispatcher to fakesink");
 
     // Set up message collection
     let bus = pipeline.bus().expect("Failed to get bus");
@@ -49,23 +55,27 @@ fn test_metrics_contract_validation() {
     let messages_clone = collected_messages.clone();
 
     // Watch for element messages from dispatcher
-    let _bus_watch = bus.add_watch(move |_bus, msg| {
-        if let Some(src) = msg.src() {
-            if src.name() == "ristdispatcher0" {
-                if let gst::MessageView::Element(element_msg) = msg.view() {
-                    if let Some(structure) = element_msg.structure() {
-                        if structure.name() == "rist-dispatcher-metrics" {
-                            messages_clone.lock().unwrap().push(structure.to_owned());
+    let _bus_watch = bus
+        .add_watch(move |_bus, msg| {
+            if let Some(src) = msg.src() {
+                if src.name() == "ristdispatcher0" {
+                    if let gst::MessageView::Element(element_msg) = msg.view() {
+                        if let Some(structure) = element_msg.structure() {
+                            if structure.name() == "rist-dispatcher-metrics" {
+                                messages_clone.lock().unwrap().push(structure.to_owned());
+                            }
                         }
                     }
                 }
             }
-        }
-        glib::ControlFlow::Continue
-    }).expect("Failed to add bus watch");
+            glib::ControlFlow::Continue
+        })
+        .expect("Failed to add bus watch");
 
     // Start pipeline
-    pipeline.set_state(gst::State::Playing).expect("Failed to set pipeline to Playing");
+    pipeline
+        .set_state(gst::State::Playing)
+        .expect("Failed to set pipeline to Playing");
 
     // Push some test buffers through appsrc
     let appsrc = appsrc.dynamic_cast::<gst_app::AppSrc>().unwrap();
@@ -99,39 +109,61 @@ fn test_metrics_contract_validation() {
         None => panic!("Timeout waiting for EOS"),
     }
 
-    pipeline.set_state(gst::State::Null).expect("Failed to set pipeline to Null");
+    pipeline
+        .set_state(gst::State::Null)
+        .expect("Failed to set pipeline to Null");
 
     // Validate collected metrics
     let messages = collected_messages.lock().unwrap();
-    
+
     // Test 1: Verify we received metrics messages
-    assert!(!messages.is_empty(), "Should have received at least one metrics message");
+    assert!(
+        !messages.is_empty(),
+        "Should have received at least one metrics message"
+    );
 
     // Test 2: Validate metrics message structure and schema
     for (i, structure) in messages.iter().enumerate() {
-        println!("Validating metrics message {}: {}", i, structure.to_string());
-        
+        println!(
+            "Validating metrics message {}: {}",
+            i,
+            structure.to_string()
+        );
+
         // Check required fields
-        assert_eq!(structure.name(), "rist-dispatcher-metrics", 
-                   "Metrics message should have correct name");
-        
+        assert_eq!(
+            structure.name(),
+            "rist-dispatcher-metrics",
+            "Metrics message should have correct name"
+        );
+
         // Should contain timestamp
-        assert!(structure.has_field("timestamp"), 
-                "Metrics should contain timestamp field");
-        
+        assert!(
+            structure.has_field("timestamp"),
+            "Metrics should contain timestamp field"
+        );
+
         // Should contain weights data
-        assert!(structure.has_field("current-weights"), 
-                "Metrics should contain current-weights field");
-        
+        assert!(
+            structure.has_field("current-weights"),
+            "Metrics should contain current-weights field"
+        );
+
         // Validate current-weights is valid JSON array
         if let Ok(weights_str) = structure.get::<&str>("current-weights") {
-            let weights_json: serde_json::Value = serde_json::from_str(weights_str)
-                .expect("current-weights should be valid JSON");
-            
-            assert!(weights_json.is_array(), "current-weights should be JSON array");
+            let weights_json: serde_json::Value =
+                serde_json::from_str(weights_str).expect("current-weights should be valid JSON");
+
+            assert!(
+                weights_json.is_array(),
+                "current-weights should be JSON array"
+            );
             let weights_array = weights_json.as_array().unwrap();
-            assert!(!weights_array.is_empty(), "weights array should not be empty");
-            
+            assert!(
+                !weights_array.is_empty(),
+                "weights array should not be empty"
+            );
+
             // All weights should be numbers >= 0
             for weight in weights_array {
                 assert!(weight.is_number(), "Each weight should be a number");
@@ -139,14 +171,18 @@ fn test_metrics_contract_validation() {
                 assert!(weight_val >= 0.0, "Each weight should be non-negative");
             }
         }
-        
+
         // Should contain buffer count
         if structure.has_field("buffers-processed") {
             let buffer_count = structure.get::<u64>("buffers-processed").unwrap_or(0);
             // u64 is always non-negative, just check it exists and is reasonable
-            assert!(buffer_count <= 1000, "Buffer count should be reasonable, got {}", buffer_count);
+            assert!(
+                buffer_count <= 1000,
+                "Buffer count should be reasonable, got {}",
+                buffer_count
+            );
         }
-        
+
         // Should contain element state info
         if structure.has_field("src-pad-count") {
             let pad_count = structure.get::<u32>("src-pad-count").unwrap_or(0);
@@ -163,22 +199,28 @@ fn test_metrics_contract_validation() {
                 timestamps.push(ts);
             }
         }
-        
+
         if timestamps.len() >= 2 {
             for window in timestamps.windows(2) {
                 let interval = window[1].saturating_sub(window[0]);
                 // Should be approximately 100ms (allowing some tolerance)
-                assert!(interval >= 80 && interval <= 200, 
-                        "Metrics interval should be approximately 100ms, got {}ms", interval);
+                assert!(
+                    interval >= 80 && interval <= 200,
+                    "Metrics interval should be approximately 100ms, got {}ms",
+                    interval
+                );
             }
         }
     }
 
-    println!("Metrics contract validation passed! Collected {} metrics messages", messages.len());
+    println!(
+        "Metrics contract validation passed! Collected {} metrics messages",
+        messages.len()
+    );
 }
 
 /// Test metrics schema validation with mock RIST stats
-#[test] 
+#[test]
 fn test_metrics_with_mock_rist_stats() {
     ristsmart_tests::register_everything_for_tests();
 
@@ -196,7 +238,7 @@ fn test_metrics_with_mock_rist_stats() {
         .field("session-0.sent-original-packets", 1000u64)
         .field("session-0.sent-retransmitted-packets", 50u64)
         .field("session-0.round-trip-time", 25.0f64)
-        .field("session-1.sent-original-packets", 800u64)  
+        .field("session-1.sent-original-packets", 800u64)
         .field("session-1.sent-retransmitted-packets", 100u64)
         .field("session-1.round-trip-time", 45.0f64)
         .build();
@@ -205,8 +247,12 @@ fn test_metrics_with_mock_rist_stats() {
     dispatcher.set_property("rist", &rist_mock);
 
     // Request two src pads to match the sessions
-    let _pad1 = dispatcher.request_pad_simple("src_0").expect("Failed to request src_0");
-    let _pad2 = dispatcher.request_pad_simple("src_1").expect("Failed to request src_1");
+    let _pad1 = dispatcher
+        .request_pad_simple("src_0")
+        .expect("Failed to request src_0");
+    let _pad2 = dispatcher
+        .request_pad_simple("src_1")
+        .expect("Failed to request src_1");
 
     // Get initial metrics structure by triggering stats update
     // In this simplified test, we'll manually trigger and validate the stats structure
@@ -214,24 +260,34 @@ fn test_metrics_with_mock_rist_stats() {
     std::thread::sleep(Duration::from_millis(150));
 
     let weights_str: String = dispatcher.property("current-weights");
-    
+
     // Validate that weights JSON is properly formatted
-    let weights_json: serde_json::Value = serde_json::from_str(&weights_str)
-        .expect("current-weights should be valid JSON");
-    
+    let weights_json: serde_json::Value =
+        serde_json::from_str(&weights_str).expect("current-weights should be valid JSON");
+
     assert!(weights_json.is_array(), "Weights should be JSON array");
     let weights_array = weights_json.as_array().unwrap();
     assert_eq!(weights_array.len(), 2, "Should have weights for 2 sessions");
-    
+
     // Verify weights reflect the different loss rates in mock data
     // Session 0: 50/1000 = 5% loss, Session 1: 100/800 = 12.5% loss
     // Session 0 should have higher weight (better performance)
-    let weight0 = weights_array[0].as_f64().expect("Weight 0 should be a number");
-    let weight1 = weights_array[1].as_f64().expect("Weight 1 should be a number");
-    
-    assert!(weight0 > 0.0 && weight1 > 0.0, "All weights should be positive");
-    println!("Final weights: session-0={}, session-1={}", weight0, weight1);
-    
+    let weight0 = weights_array[0]
+        .as_f64()
+        .expect("Weight 0 should be a number");
+    let weight1 = weights_array[1]
+        .as_f64()
+        .expect("Weight 1 should be a number");
+
+    assert!(
+        weight0 > 0.0 && weight1 > 0.0,
+        "All weights should be positive"
+    );
+    println!(
+        "Final weights: session-0={}, session-1={}",
+        weight0, weight1
+    );
+
     // In EWMA strategy, lower loss should result in higher weight over time
     // Note: The exact relationship depends on the EWMA algorithm details,
     // but we can verify basic sanity

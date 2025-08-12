@@ -79,7 +79,7 @@ impl EmulatorBuilder {
         for link in &self.links {
             validate_ou_params(&link.ou)?;
             validate_ge_params(&link.ge)?;
-            
+
             // Validate DelayProfile parameters
             link.delay.validate().map_err(|e| {
                 NetemError::InvalidParameter(format!(

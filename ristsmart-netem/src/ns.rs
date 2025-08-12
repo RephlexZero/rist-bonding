@@ -205,13 +205,21 @@ impl NetworkNamespace {
         // Bring up the namespace interface and assign IP address
         let status = tokio::process::Command::new("ip")
             .args(&[
-                "netns", "exec", ns_name,
-                "ip", "addr", "add", &format!("{}/30", self.ns_ip),
-                "dev", &veth_ns
+                "netns",
+                "exec",
+                ns_name,
+                "ip",
+                "addr",
+                "add",
+                &format!("{}/30", self.ns_ip),
+                "dev",
+                &veth_ns,
             ])
             .status()
             .await
-            .map_err(|e| NetemError::VethConfig(format!("Failed to configure namespace IP: {}", e)))?;
+            .map_err(|e| {
+                NetemError::VethConfig(format!("Failed to configure namespace IP: {}", e))
+            })?;
 
         if !status.success() {
             return Err(NetemError::VethConfig(format!(
@@ -222,12 +230,13 @@ impl NetworkNamespace {
 
         let status = tokio::process::Command::new("ip")
             .args(&[
-                "netns", "exec", ns_name,
-                "ip", "link", "set", &veth_ns, "up"
+                "netns", "exec", ns_name, "ip", "link", "set", &veth_ns, "up",
             ])
             .status()
             .await
-            .map_err(|e| NetemError::VethConfig(format!("Failed to bring up namespace interface: {}", e)))?;
+            .map_err(|e| {
+                NetemError::VethConfig(format!("Failed to bring up namespace interface: {}", e))
+            })?;
 
         if !status.success() {
             return Err(NetemError::VethConfig(format!(
@@ -236,7 +245,10 @@ impl NetworkNamespace {
             )));
         }
 
-        debug!("Namespace side configured with IP: {}/30 and brought up", self.ns_ip);
+        debug!(
+            "Namespace side configured with IP: {}/30 and brought up",
+            self.ns_ip
+        );
 
         Ok(())
     }

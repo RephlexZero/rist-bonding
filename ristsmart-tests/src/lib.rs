@@ -486,17 +486,17 @@ mod riststats_mock {
             let mut model = imp.model.lock().unwrap();
             if let Some(sess) = model.sessions.get_mut(idx) {
                 // Recovery logic: improve session performance metrics
-                
+
                 // 1. Reduce retransmission rate by improving the "link quality"
                 // Simulate recovery by reducing accumulated retransmissions
                 let recovery_factor = 0.3; // Reduce retrans by 30%
                 sess.sent_retrans = (sess.sent_retrans as f64 * recovery_factor) as u64;
-                
+
                 // 2. Improve RTT by simulating better network conditions
                 // Target RTT should be reasonable for recovered connection
                 let target_rtt = 25u64; // Good baseline RTT in ms
                 let current_rtt = sess.rtt_ms;
-                
+
                 // Gradual recovery towards target RTT
                 if current_rtt > target_rtt {
                     let rtt_improvement = ((current_rtt - target_rtt) as f64 * 0.6) as u64;
@@ -505,14 +505,20 @@ mod riststats_mock {
                     // If RTT is already very good, slight degradation for realism
                     sess.rtt_ms = target_rtt;
                 }
-                
+
                 // 3. Stabilize original packet transmission
                 // During recovery, original transmission should be consistent
                 let base_increment = 100u64; // Steady transmission rate
                 sess.sent_original = sess.sent_original.saturating_add(base_increment);
-                
-                gst::debug!(CAT, "Session {} recovered: retrans={}, rtt={}ms, original={}", 
-                           idx, sess.sent_retrans, sess.rtt_ms, sess.sent_original);
+
+                gst::debug!(
+                    CAT,
+                    "Session {} recovered: retrans={}, rtt={}ms, original={}",
+                    idx,
+                    sess.sent_retrans,
+                    sess.rtt_ms,
+                    sess.sent_original
+                );
             }
             drop(model);
             self.notify("stats");

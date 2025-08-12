@@ -33,17 +33,29 @@ fn test_caps_proxying() {
         .build()
         .expect("Failed to create fakesink2");
 
-    pipeline.add_many(&[&appsrc, &dispatcher, &fakesink1, &fakesink2]).unwrap();
+    pipeline
+        .add_many(&[&appsrc, &dispatcher, &fakesink1, &fakesink2])
+        .unwrap();
 
     // Link appsrc to dispatcher
-    appsrc.link(&dispatcher).expect("Failed to link appsrc to dispatcher");
+    appsrc
+        .link(&dispatcher)
+        .expect("Failed to link appsrc to dispatcher");
 
     // Request src pads and link to sinks
-    let src_pad1 = dispatcher.request_pad_simple("src_%u").expect("Failed to request src pad 1");
-    let src_pad2 = dispatcher.request_pad_simple("src_%u").expect("Failed to request src pad 2");
+    let src_pad1 = dispatcher
+        .request_pad_simple("src_%u")
+        .expect("Failed to request src pad 1");
+    let src_pad2 = dispatcher
+        .request_pad_simple("src_%u")
+        .expect("Failed to request src pad 2");
 
-    src_pad1.link(&fakesink1.static_pad("sink").unwrap()).expect("Failed to link to sink1");
-    src_pad2.link(&fakesink2.static_pad("sink").unwrap()).expect("Failed to link to sink2");
+    src_pad1
+        .link(&fakesink1.static_pad("sink").unwrap())
+        .expect("Failed to link to sink1");
+    src_pad2
+        .link(&fakesink2.static_pad("sink").unwrap())
+        .expect("Failed to link to sink2");
 
     // Set specific caps on appsrc
     let test_caps = gst::Caps::builder("video/x-h264")
@@ -55,20 +67,24 @@ fn test_caps_proxying() {
 
     appsrc.set_property("caps", &test_caps);
 
-    pipeline.set_state(gst::State::Playing).expect("Failed to set pipeline to Playing");
+    pipeline
+        .set_state(gst::State::Playing)
+        .expect("Failed to set pipeline to Playing");
 
     // Allow caps negotiation to complete
     std::thread::sleep(Duration::from_millis(100));
 
     // Check that src pads have the same caps as the sink pad
-    let sink_pad = dispatcher.static_pad("sink").expect("Failed to get sink pad");
+    let sink_pad = dispatcher
+        .static_pad("sink")
+        .expect("Failed to get sink pad");
     let sink_caps = sink_pad.current_caps();
-    
+
     let src1_caps = src_pad1.current_caps();
     let src2_caps = src_pad2.current_caps();
 
     println!("Sink caps: {:?}", sink_caps);
-    println!("Src1 caps: {:?}", src1_caps);  
+    println!("Src1 caps: {:?}", src1_caps);
     println!("Src2 caps: {:?}", src2_caps);
 
     // Verify caps were propagated
@@ -77,23 +93,39 @@ fn test_caps_proxying() {
     assert!(src2_caps.is_some(), "Src pad 2 should have negotiated caps");
 
     if let (Some(sink_caps), Some(src1_caps), Some(src2_caps)) = (sink_caps, src1_caps, src2_caps) {
-        // Check that caps are equivalent  
-        assert!(sink_caps == src1_caps, 
-                "Src pad 1 caps should match sink caps");
-        assert!(sink_caps == src2_caps, 
-                "Src pad 2 caps should match sink caps");
+        // Check that caps are equivalent
+        assert!(
+            sink_caps == src1_caps,
+            "Src pad 1 caps should match sink caps"
+        );
+        assert!(
+            sink_caps == src2_caps,
+            "Src pad 2 caps should match sink caps"
+        );
 
         // Check specific fields are preserved
-        let sink_struct = sink_caps.structure(0).expect("Sink caps should have structure");
-        let src1_struct = src1_caps.structure(0).expect("Src1 caps should have structure");
+        let sink_struct = sink_caps
+            .structure(0)
+            .expect("Sink caps should have structure");
+        let src1_struct = src1_caps
+            .structure(0)
+            .expect("Src1 caps should have structure");
 
-        assert_eq!(sink_struct.get::<i32>("width"), src1_struct.get::<i32>("width"),
-                   "Width should be preserved");
-        assert_eq!(sink_struct.get::<i32>("height"), src1_struct.get::<i32>("height"), 
-                   "Height should be preserved");
+        assert_eq!(
+            sink_struct.get::<i32>("width"),
+            src1_struct.get::<i32>("width"),
+            "Width should be preserved"
+        );
+        assert_eq!(
+            sink_struct.get::<i32>("height"),
+            src1_struct.get::<i32>("height"),
+            "Height should be preserved"
+        );
     }
 
-    pipeline.set_state(gst::State::Null).expect("Failed to set pipeline to Null");
+    pipeline
+        .set_state(gst::State::Null)
+        .expect("Failed to set pipeline to Null");
     println!("Caps proxying test passed!");
 }
 
@@ -115,10 +147,14 @@ fn test_sticky_events_replay() {
         .expect("Failed to create ristdispatcher");
 
     pipeline.add_many(&[&appsrc, &dispatcher]).unwrap();
-    appsrc.link(&dispatcher).expect("Failed to link appsrc to dispatcher");
+    appsrc
+        .link(&dispatcher)
+        .expect("Failed to link appsrc to dispatcher");
 
     // Start pipeline to establish sticky events
-    pipeline.set_state(gst::State::Playing).expect("Failed to set pipeline to Playing");
+    pipeline
+        .set_state(gst::State::Playing)
+        .expect("Failed to set pipeline to Playing");
 
     let appsrc = appsrc.dynamic_cast::<gst_app::AppSrc>().unwrap();
 
@@ -153,10 +189,14 @@ fn test_sticky_events_replay() {
     });
 
     // Now request a new src pad and link it (this should trigger sticky event replay)
-    let src_pad = dispatcher.request_pad_simple("src_%u").expect("Failed to request src pad");
-    
+    let src_pad = dispatcher
+        .request_pad_simple("src_%u")
+        .expect("Failed to request src pad");
+
     pipeline.add(&event_monitoring_sink).unwrap();
-    src_pad.link(&sink_pad).expect("Failed to link to monitoring sink");
+    src_pad
+        .link(&sink_pad)
+        .expect("Failed to link to monitoring sink");
 
     // Allow sticky events to be replayed
     std::thread::sleep(Duration::from_millis(100));
@@ -165,24 +205,39 @@ fn test_sticky_events_replay() {
     println!("Received events: {:?}", *received_events);
 
     // Verify that essential sticky events were replayed
-    assert!(received_events.contains(&gst::EventType::StreamStart),
-            "STREAM_START event should be replayed");
-    assert!(received_events.contains(&gst::EventType::Caps),
-            "CAPS event should be replayed");
-    assert!(received_events.contains(&gst::EventType::Segment),
-            "SEGMENT event should be replayed");
+    assert!(
+        received_events.contains(&gst::EventType::StreamStart),
+        "STREAM_START event should be replayed"
+    );
+    assert!(
+        received_events.contains(&gst::EventType::Caps),
+        "CAPS event should be replayed"
+    );
+    assert!(
+        received_events.contains(&gst::EventType::Segment),
+        "SEGMENT event should be replayed"
+    );
 
     // Events should be in the correct order
-    let stream_start_pos = received_events.iter().position(|&x| x == gst::EventType::StreamStart);
-    let caps_pos = received_events.iter().position(|&x| x == gst::EventType::Caps);
-    let segment_pos = received_events.iter().position(|&x| x == gst::EventType::Segment);
+    let stream_start_pos = received_events
+        .iter()
+        .position(|&x| x == gst::EventType::StreamStart);
+    let caps_pos = received_events
+        .iter()
+        .position(|&x| x == gst::EventType::Caps);
+    let segment_pos = received_events
+        .iter()
+        .position(|&x| x == gst::EventType::Segment);
 
-    if let (Some(ss_pos), Some(caps_pos), Some(seg_pos)) = (stream_start_pos, caps_pos, segment_pos) {
+    if let (Some(ss_pos), Some(caps_pos), Some(seg_pos)) = (stream_start_pos, caps_pos, segment_pos)
+    {
         assert!(ss_pos < caps_pos, "STREAM_START should come before CAPS");
         assert!(caps_pos < seg_pos, "CAPS should come before SEGMENT");
     }
 
-    pipeline.set_state(gst::State::Null).expect("Failed to set pipeline to Null");
+    pipeline
+        .set_state(gst::State::Null)
+        .expect("Failed to set pipeline to Null");
     println!("Sticky events replay test passed!");
 }
 
@@ -218,20 +273,44 @@ fn test_eos_fanout() {
         .build()
         .expect("Failed to create counter_sink 3");
 
-    pipeline.add_many(&[&appsrc, &dispatcher, &counter_sink1, &counter_sink2, &counter_sink3]).unwrap();
+    pipeline
+        .add_many(&[
+            &appsrc,
+            &dispatcher,
+            &counter_sink1,
+            &counter_sink2,
+            &counter_sink3,
+        ])
+        .unwrap();
 
     // Link elements
-    appsrc.link(&dispatcher).expect("Failed to link appsrc to dispatcher");
+    appsrc
+        .link(&dispatcher)
+        .expect("Failed to link appsrc to dispatcher");
 
-    let src_pad1 = dispatcher.request_pad_simple("src_%u").expect("Failed to request src pad 1");
-    let src_pad2 = dispatcher.request_pad_simple("src_%u").expect("Failed to request src pad 2");
-    let src_pad3 = dispatcher.request_pad_simple("src_%u").expect("Failed to request src pad 3");
+    let src_pad1 = dispatcher
+        .request_pad_simple("src_%u")
+        .expect("Failed to request src pad 1");
+    let src_pad2 = dispatcher
+        .request_pad_simple("src_%u")
+        .expect("Failed to request src pad 2");
+    let src_pad3 = dispatcher
+        .request_pad_simple("src_%u")
+        .expect("Failed to request src pad 3");
 
-    src_pad1.link(&counter_sink1.static_pad("sink").unwrap()).expect("Failed to link to counter1");
-    src_pad2.link(&counter_sink2.static_pad("sink").unwrap()).expect("Failed to link to counter2");
-    src_pad3.link(&counter_sink3.static_pad("sink").unwrap()).expect("Failed to link to counter3");
+    src_pad1
+        .link(&counter_sink1.static_pad("sink").unwrap())
+        .expect("Failed to link to counter1");
+    src_pad2
+        .link(&counter_sink2.static_pad("sink").unwrap())
+        .expect("Failed to link to counter2");
+    src_pad3
+        .link(&counter_sink3.static_pad("sink").unwrap())
+        .expect("Failed to link to counter3");
 
-    pipeline.set_state(gst::State::Playing).expect("Failed to set pipeline to Playing");
+    pipeline
+        .set_state(gst::State::Playing)
+        .expect("Failed to set pipeline to Playing");
 
     let appsrc = appsrc.dynamic_cast::<gst_app::AppSrc>().unwrap();
 
@@ -265,25 +344,37 @@ fn test_eos_fanout() {
 
     // Check that all counter sinks received EOS
     let got_eos1: bool = counter_sink1.property("got-eos");
-    let got_eos2: bool = counter_sink2.property("got-eos");  
+    let got_eos2: bool = counter_sink2.property("got-eos");
     let got_eos3: bool = counter_sink3.property("got-eos");
 
     let count1: u64 = counter_sink1.property("count");
     let count2: u64 = counter_sink2.property("count");
     let count3: u64 = counter_sink3.property("count");
 
-    println!("EOS received - counter1: {}, counter2: {}, counter3: {}", got_eos1, got_eos2, got_eos3);
-    println!("Buffer counts - counter1: {}, counter2: {}, counter3: {}", count1, count2, count3);
+    println!(
+        "EOS received - counter1: {}, counter2: {}, counter3: {}",
+        got_eos1, got_eos2, got_eos3
+    );
+    println!(
+        "Buffer counts - counter1: {}, counter2: {}, counter3: {}",
+        count1, count2, count3
+    );
 
     // Verify EOS fanout
     assert!(got_eos1, "Counter sink 1 should have received EOS");
     assert!(got_eos2, "Counter sink 2 should have received EOS");
     assert!(got_eos3, "Counter sink 3 should have received EOS");
 
-    // Verify all buffers were distributed 
-    assert_eq!(count1 + count2 + count3, 10, "All buffers should be accounted for");
+    // Verify all buffers were distributed
+    assert_eq!(
+        count1 + count2 + count3,
+        10,
+        "All buffers should be accounted for"
+    );
 
-    pipeline.set_state(gst::State::Null).expect("Failed to set pipeline to Null");
+    pipeline
+        .set_state(gst::State::Null)
+        .expect("Failed to set pipeline to Null");
     println!("EOS fanout test passed!");
 }
 
@@ -314,18 +405,32 @@ fn test_flush_fanout() {
         .build()
         .expect("Failed to create counter_sink 2");
 
-    pipeline.add_many(&[&appsrc, &dispatcher, &counter_sink1, &counter_sink2]).unwrap();
+    pipeline
+        .add_many(&[&appsrc, &dispatcher, &counter_sink1, &counter_sink2])
+        .unwrap();
 
     // Link elements
-    appsrc.link(&dispatcher).expect("Failed to link appsrc to dispatcher");
+    appsrc
+        .link(&dispatcher)
+        .expect("Failed to link appsrc to dispatcher");
 
-    let src_pad1 = dispatcher.request_pad_simple("src_%u").expect("Failed to request src pad 1");
-    let src_pad2 = dispatcher.request_pad_simple("src_%u").expect("Failed to request src pad 2");
+    let src_pad1 = dispatcher
+        .request_pad_simple("src_%u")
+        .expect("Failed to request src pad 1");
+    let src_pad2 = dispatcher
+        .request_pad_simple("src_%u")
+        .expect("Failed to request src pad 2");
 
-    src_pad1.link(&counter_sink1.static_pad("sink").unwrap()).expect("Failed to link to counter1");
-    src_pad2.link(&counter_sink2.static_pad("sink").unwrap()).expect("Failed to link to counter2");
+    src_pad1
+        .link(&counter_sink1.static_pad("sink").unwrap())
+        .expect("Failed to link to counter1");
+    src_pad2
+        .link(&counter_sink2.static_pad("sink").unwrap())
+        .expect("Failed to link to counter2");
 
-    pipeline.set_state(gst::State::Playing).expect("Failed to set pipeline to Playing");
+    pipeline
+        .set_state(gst::State::Playing)
+        .expect("Failed to set pipeline to Playing");
 
     let appsrc = appsrc.dynamic_cast::<gst_app::AppSrc>().unwrap();
 
@@ -343,10 +448,9 @@ fn test_flush_fanout() {
     std::thread::sleep(Duration::from_millis(100));
 
     // Perform seek to trigger flush events
-    pipeline.seek_simple(
-        gst::SeekFlags::FLUSH, 
-        gst::ClockTime::from_seconds(0)
-    ).expect("Seek should succeed");
+    pipeline
+        .seek_simple(gst::SeekFlags::FLUSH, gst::ClockTime::from_seconds(0))
+        .expect("Seek should succeed");
 
     std::thread::sleep(Duration::from_millis(100));
 
@@ -356,14 +460,32 @@ fn test_flush_fanout() {
     let got_flush_stop1: bool = counter_sink1.property("got-flush-stop");
     let got_flush_stop2: bool = counter_sink2.property("got-flush-stop");
 
-    println!("Flush start - counter1: {}, counter2: {}", got_flush_start1, got_flush_start2);
-    println!("Flush stop - counter1: {}, counter2: {}", got_flush_stop1, got_flush_stop2);
+    println!(
+        "Flush start - counter1: {}, counter2: {}",
+        got_flush_start1, got_flush_start2
+    );
+    println!(
+        "Flush stop - counter1: {}, counter2: {}",
+        got_flush_stop1, got_flush_stop2
+    );
 
-    // Verify flush fanout 
-    assert!(got_flush_start1, "Counter sink 1 should have received FLUSH_START");
-    assert!(got_flush_start2, "Counter sink 2 should have received FLUSH_START");
-    assert!(got_flush_stop1, "Counter sink 1 should have received FLUSH_STOP");
-    assert!(got_flush_stop2, "Counter sink 2 should have received FLUSH_STOP");
+    // Verify flush fanout
+    assert!(
+        got_flush_start1,
+        "Counter sink 1 should have received FLUSH_START"
+    );
+    assert!(
+        got_flush_start2,
+        "Counter sink 2 should have received FLUSH_START"
+    );
+    assert!(
+        got_flush_stop1,
+        "Counter sink 1 should have received FLUSH_STOP"
+    );
+    assert!(
+        got_flush_stop2,
+        "Counter sink 2 should have received FLUSH_STOP"
+    );
 
     // Clean shutdown
     appsrc.end_of_stream().expect("Failed to send EOS");
@@ -372,6 +494,8 @@ fn test_flush_fanout() {
     let timeout = Some(gst::ClockTime::from_seconds(5));
     bus.timed_pop_filtered(timeout, &[gst::MessageType::Eos, gst::MessageType::Error]);
 
-    pipeline.set_state(gst::State::Null).expect("Failed to set pipeline to Null");
+    pipeline
+        .set_state(gst::State::Null)
+        .expect("Failed to set pipeline to Null");
     println!("FLUSH fanout test passed!");
 }

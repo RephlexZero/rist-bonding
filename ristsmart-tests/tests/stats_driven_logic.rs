@@ -36,19 +36,21 @@ fn test_stats_driven_dispatcher_rebalancing() {
         .expect("Failed to create counter_sink 1");
 
     let counter_sink2 = gst::ElementFactory::make("counter_sink")
-        .name("counter2") 
+        .name("counter2")
         .build()
         .expect("Failed to create counter_sink 2");
 
-    pipeline.add_many(&[&appsrc, &dispatcher, &counter_sink1, &counter_sink2]).unwrap();
+    pipeline
+        .add_many(&[&appsrc, &dispatcher, &counter_sink1, &counter_sink2])
+        .unwrap();
 
     // Set up initial mock stats (session 0 performs better than session 1)
     let initial_stats = gst::Structure::builder("rist/x-sender-stats")
         .field("session-0.sent-original-packets", 1000u64)
-        .field("session-0.sent-retransmitted-packets", 20u64)  // 2% loss
+        .field("session-0.sent-retransmitted-packets", 20u64) // 2% loss
         .field("session-0.round-trip-time", 30.0f64)
         .field("session-1.sent-original-packets", 1000u64)
-        .field("session-1.sent-retransmitted-packets", 100u64) // 10% loss  
+        .field("session-1.sent-retransmitted-packets", 100u64) // 10% loss
         .field("session-1.round-trip-time", 80.0f64)
         .build();
 
@@ -56,16 +58,28 @@ fn test_stats_driven_dispatcher_rebalancing() {
     dispatcher.set_property("rist", &rist_mock);
 
     // Link elements
-    appsrc.link(&dispatcher).expect("Failed to link appsrc to dispatcher");
+    appsrc
+        .link(&dispatcher)
+        .expect("Failed to link appsrc to dispatcher");
 
-    let src_pad1 = dispatcher.request_pad_simple("src_%u").expect("Failed to request src pad 1");
-    let src_pad2 = dispatcher.request_pad_simple("src_%u").expect("Failed to request src pad 2");
+    let src_pad1 = dispatcher
+        .request_pad_simple("src_%u")
+        .expect("Failed to request src pad 1");
+    let src_pad2 = dispatcher
+        .request_pad_simple("src_%u")
+        .expect("Failed to request src pad 2");
 
-    src_pad1.link(&counter_sink1.static_pad("sink").unwrap()).expect("Failed to link to counter1");
-    src_pad2.link(&counter_sink2.static_pad("sink").unwrap()).expect("Failed to link to counter2");
+    src_pad1
+        .link(&counter_sink1.static_pad("sink").unwrap())
+        .expect("Failed to link to counter1");
+    src_pad2
+        .link(&counter_sink2.static_pad("sink").unwrap())
+        .expect("Failed to link to counter2");
 
     // Start pipeline
-    pipeline.set_state(gst::State::Playing).expect("Failed to set pipeline to Playing");
+    pipeline
+        .set_state(gst::State::Playing)
+        .expect("Failed to set pipeline to Playing");
 
     let appsrc = appsrc.dynamic_cast::<gst_app::AppSrc>().unwrap();
 
@@ -85,19 +99,22 @@ fn test_stats_driven_dispatcher_rebalancing() {
 
     let weights_str: String = dispatcher.property("current-weights");
     println!("Phase 1 weights: {}", weights_str);
-    
+
     let count1_phase1: u64 = counter_sink1.property("count");
     let count2_phase1: u64 = counter_sink2.property("count");
-    println!("Phase 1 counts: counter1={}, counter2={}", count1_phase1, count2_phase1);
+    println!(
+        "Phase 1 counts: counter1={}, counter2={}",
+        count1_phase1, count2_phase1
+    );
 
     // Phase 2: Simulate deteriorating conditions for session 0
     let degraded_stats = gst::Structure::builder("rist/x-sender-stats")
         .field("session-0.sent-original-packets", 1500u64)
-        .field("session-0.sent-retransmitted-packets", 150u64)  // 10% loss (degraded)
-        .field("session-0.round-trip-time", 120.0f64)  // Higher RTT
+        .field("session-0.sent-retransmitted-packets", 150u64) // 10% loss (degraded)
+        .field("session-0.round-trip-time", 120.0f64) // Higher RTT
         .field("session-1.sent-original-packets", 1500u64)
-        .field("session-1.sent-retransmitted-packets", 120u64)  // 8% loss (improved)
-        .field("session-1.round-trip-time", 60.0f64)   // Lower RTT
+        .field("session-1.sent-retransmitted-packets", 120u64) // 8% loss (improved)
+        .field("session-1.round-trip-time", 60.0f64) // Lower RTT
         .build();
 
     rist_mock.set_property("stats", &degraded_stats);
@@ -121,31 +138,50 @@ fn test_stats_driven_dispatcher_rebalancing() {
 
     let count1_final: u64 = counter_sink1.property("count");
     let count2_final: u64 = counter_sink2.property("count");
-    println!("Final counts: counter1={}, counter2={}", count1_final, count2_final);
+    println!(
+        "Final counts: counter1={}, counter2={}",
+        count1_final, count2_final
+    );
 
     // Verify weight adaptation occurred
-    let weights_json: serde_json::Value = serde_json::from_str(&weights_str)
-        .expect("current-weights should be valid JSON");
+    let weights_json: serde_json::Value =
+        serde_json::from_str(&weights_str).expect("current-weights should be valid JSON");
     let weights_array = weights_json.as_array().unwrap();
-    
-    let weight0 = weights_array[0].as_f64().expect("Weight 0 should be a number");
-    let weight1 = weights_array[1].as_f64().expect("Weight 1 should be a number");
 
-    println!("Adapted weights: session-0={:.3}, session-1={:.3}", weight0, weight1);
+    let weight0 = weights_array[0]
+        .as_f64()
+        .expect("Weight 0 should be a number");
+    let weight1 = weights_array[1]
+        .as_f64()
+        .expect("Weight 1 should be a number");
+
+    println!(
+        "Adapted weights: session-0={:.3}, session-1={:.3}",
+        weight0, weight1
+    );
 
     // With EWMA, the dispatcher should adapt to changing conditions
     // Since session 1 improved and session 0 degraded, we expect weight1 to increase relative to weight0
     // However, exact ratios depend on EWMA parameters and timing, so we'll check basic sanity
 
-    assert!(weight0 > 0.0 && weight1 > 0.0, "All weights should remain positive");
-    assert!(count1_final + count2_final == 100, "All buffers should be accounted for");
+    assert!(
+        weight0 > 0.0 && weight1 > 0.0,
+        "All weights should remain positive"
+    );
+    assert!(
+        count1_final + count2_final == 100,
+        "All buffers should be accounted for"
+    );
 
     // The key test: verify that the system responded to changing stats
     // We can't predict exact final ratios due to EWMA smoothing, but we can verify adaptation occurred
     let count1_phase2 = count1_final - count1_phase1;
     let count2_phase2 = count2_final - count2_phase1;
-    
-    println!("Phase 2 increments: counter1=+{}, counter2=+{}", count1_phase2, count2_phase2);
+
+    println!(
+        "Phase 2 increments: counter1=+{}, counter2=+{}",
+        count1_phase2, count2_phase2
+    );
 
     appsrc.end_of_stream().expect("Failed to send EOS");
 
@@ -154,7 +190,9 @@ fn test_stats_driven_dispatcher_rebalancing() {
     let timeout = Some(gst::ClockTime::from_seconds(5));
     bus.timed_pop_filtered(timeout, &[gst::MessageType::Eos, gst::MessageType::Error]);
 
-    pipeline.set_state(gst::State::Null).expect("Failed to set pipeline to Null");
+    pipeline
+        .set_state(gst::State::Null)
+        .expect("Failed to set pipeline to Null");
 
     println!("Stats-driven dispatcher rebalancing test passed!");
 }
@@ -166,7 +204,7 @@ fn test_dynbitrate_integration() {
 
     // Create pipeline: appsrc -> encoder_stub -> dynbitrate -> dispatcher -> counter_sink
     let pipeline = gst::Pipeline::new();
-    
+
     let appsrc = gst::ElementFactory::make("appsrc")
         .property("caps", &gst::Caps::builder("video/x-raw").build())
         .property("format", &gst::Format::Time)
@@ -201,12 +239,20 @@ fn test_dynbitrate_integration() {
         .build()
         .expect("Failed to create counter_sink");
 
-    pipeline.add_many(&[&appsrc, &encoder_stub, &dynbitrate, &dispatcher, &counter_sink]).unwrap();
+    pipeline
+        .add_many(&[
+            &appsrc,
+            &encoder_stub,
+            &dynbitrate,
+            &dispatcher,
+            &counter_sink,
+        ])
+        .unwrap();
 
     // Set up RIST mock with high loss initially
     let high_loss_stats = gst::Structure::builder("rist/x-sender-stats")
         .field("session-0.sent-original-packets", 1000u64)
-        .field("session-0.sent-retransmitted-packets", 100u64)  // 10% loss (high)
+        .field("session-0.sent-retransmitted-packets", 100u64) // 10% loss (high)
         .field("session-0.round-trip-time", 50.0f64)
         .build();
 
@@ -219,15 +265,27 @@ fn test_dynbitrate_integration() {
     dispatcher.set_property("rist", &rist_mock);
 
     // Link pipeline
-    appsrc.link(&encoder_stub).expect("Failed to link appsrc to encoder");
-    encoder_stub.link(&dynbitrate).expect("Failed to link encoder to dynbitrate");
-    dynbitrate.link(&dispatcher).expect("Failed to link dynbitrate to dispatcher");
+    appsrc
+        .link(&encoder_stub)
+        .expect("Failed to link appsrc to encoder");
+    encoder_stub
+        .link(&dynbitrate)
+        .expect("Failed to link encoder to dynbitrate");
+    dynbitrate
+        .link(&dispatcher)
+        .expect("Failed to link dynbitrate to dispatcher");
 
-    let src_pad = dispatcher.request_pad_simple("src_%u").expect("Failed to request src pad");
-    src_pad.link(&counter_sink.static_pad("sink").unwrap()).expect("Failed to link to counter");
+    let src_pad = dispatcher
+        .request_pad_simple("src_%u")
+        .expect("Failed to request src pad");
+    src_pad
+        .link(&counter_sink.static_pad("sink").unwrap())
+        .expect("Failed to link to counter");
 
     // Start pipeline
-    pipeline.set_state(gst::State::Playing).expect("Failed to set pipeline to Playing");
+    pipeline
+        .set_state(gst::State::Playing)
+        .expect("Failed to set pipeline to Playing");
 
     let appsrc = appsrc.dynamic_cast::<gst_app::AppSrc>().unwrap();
 
@@ -255,7 +313,7 @@ fn test_dynbitrate_integration() {
     // Phase 2: Improve network conditions
     let low_loss_stats = gst::Structure::builder("rist/x-sender-stats")
         .field("session-0.sent-original-packets", 2000u64)
-        .field("session-0.sent-retransmitted-packets", 120u64)  // 6% total, 2% recent loss (improved)
+        .field("session-0.sent-retransmitted-packets", 120u64) // 6% total, 2% recent loss (improved)
         .field("session-0.round-trip-time", 40.0f64)
         .build();
 
@@ -283,13 +341,15 @@ fn test_dynbitrate_integration() {
 
     // Verify basic functionality
     assert_eq!(buffer_count, 60, "All buffers should have been processed");
-    
+
     // The dynbitrate controller should respond to changing loss conditions
     // With high initial loss, bitrate should adjust (typically down)
     // With improved conditions, bitrate might recover (typically up)
     // Exact behavior depends on controller algorithm implementation
-    println!("Bitrate progression: {} -> {} -> {} kbps", 
-             initial_bitrate, adjusted_bitrate, final_bitrate);
+    println!(
+        "Bitrate progression: {} -> {} -> {} kbps",
+        initial_bitrate, adjusted_bitrate, final_bitrate
+    );
 
     appsrc.end_of_stream().expect("Failed to send EOS");
 
@@ -298,7 +358,9 @@ fn test_dynbitrate_integration() {
     let timeout = Some(gst::ClockTime::from_seconds(5));
     bus.timed_pop_filtered(timeout, &[gst::MessageType::Eos, gst::MessageType::Error]);
 
-    pipeline.set_state(gst::State::Null).expect("Failed to set pipeline to Null");
+    pipeline
+        .set_state(gst::State::Null)
+        .expect("Failed to set pipeline to Null");
 
     println!("Dynbitrate integration test passed!");
 }
@@ -332,37 +394,55 @@ fn test_coordinated_stats_polling() {
     dispatcher.set_property("rist", &rist_mock);
 
     // Request pads to match sessions
-    let _pad1 = dispatcher.request_pad_simple("src_%u").expect("Failed to request pad 1");
-    let _pad2 = dispatcher.request_pad_simple("src_%u").expect("Failed to request pad 2");
+    let _pad1 = dispatcher
+        .request_pad_simple("src_%u")
+        .expect("Failed to request pad 1");
+    let _pad2 = dispatcher
+        .request_pad_simple("src_%u")
+        .expect("Failed to request pad 2");
 
     // Allow polling to occur
     std::thread::sleep(Duration::from_millis(300));
 
     // Check that weights reflect the stats differences
     let weights_str: String = dispatcher.property("current-weights");
-    let weights_json: serde_json::Value = serde_json::from_str(&weights_str)
-        .expect("Should have valid weights JSON");
-    
+    let weights_json: serde_json::Value =
+        serde_json::from_str(&weights_str).expect("Should have valid weights JSON");
+
     assert!(weights_json.is_array(), "Weights should be an array");
     let weights_array = weights_json.as_array().unwrap();
-    assert_eq!(weights_array.len(), 2, "Should have 2 weights for 2 sessions");
+    assert_eq!(
+        weights_array.len(),
+        2,
+        "Should have 2 weights for 2 sessions"
+    );
 
-    let weight0 = weights_array[0].as_f64().expect("Weight 0 should be a number");
-    let weight1 = weights_array[1].as_f64().expect("Weight 1 should be a number");
+    let weight0 = weights_array[0]
+        .as_f64()
+        .expect("Weight 0 should be a number");
+    let weight1 = weights_array[1]
+        .as_f64()
+        .expect("Weight 1 should be a number");
 
-    println!("Polled weights: session-0={:.3}, session-1={:.3}", weight0, weight1);
+    println!(
+        "Polled weights: session-0={:.3}, session-1={:.3}",
+        weight0, weight1
+    );
 
     // Session 0 has better performance (3% loss vs 8% loss), so should have higher weight
     // Allow some tolerance for EWMA smoothing effects
-    assert!(weight0 > 0.0 && weight1 > 0.0, "All weights should be positive");
+    assert!(
+        weight0 > 0.0 && weight1 > 0.0,
+        "All weights should be positive"
+    );
 
     // Test stats update propagation
     let updated_stats = gst::Structure::builder("rist/x-sender-stats")
-        .field("session-0.sent-original-packets", 1500u64) 
-        .field("session-0.sent-retransmitted-packets", 60u64)  // 4% loss (worsened)
+        .field("session-0.sent-original-packets", 1500u64)
+        .field("session-0.sent-retransmitted-packets", 60u64) // 4% loss (worsened)
         .field("session-0.round-trip-time", 40.0f64)
         .field("session-1.sent-original-packets", 1500u64)
-        .field("session-1.sent-retransmitted-packets", 90u64)  // 6% loss (improved)
+        .field("session-1.sent-retransmitted-packets", 90u64) // 6% loss (improved)
         .field("session-1.round-trip-time", 35.0f64)
         .build();
 
@@ -372,18 +452,28 @@ fn test_coordinated_stats_polling() {
     std::thread::sleep(Duration::from_millis(300));
 
     let updated_weights_str: String = dispatcher.property("current-weights");
-    let updated_weights_json: serde_json::Value = serde_json::from_str(&updated_weights_str)
-        .expect("Should have valid updated weights JSON");
-    
-    let updated_weights_array = updated_weights_json.as_array().unwrap();
-    let updated_weight0 = updated_weights_array[0].as_f64().expect("Updated weight 0 should be a number");
-    let updated_weight1 = updated_weights_array[1].as_f64().expect("Updated weight 1 should be a number");
+    let updated_weights_json: serde_json::Value =
+        serde_json::from_str(&updated_weights_str).expect("Should have valid updated weights JSON");
 
-    println!("Updated weights: session-0={:.3}, session-1={:.3}", updated_weight0, updated_weight1);
+    let updated_weights_array = updated_weights_json.as_array().unwrap();
+    let updated_weight0 = updated_weights_array[0]
+        .as_f64()
+        .expect("Updated weight 0 should be a number");
+    let updated_weight1 = updated_weights_array[1]
+        .as_f64()
+        .expect("Updated weight 1 should be a number");
+
+    println!(
+        "Updated weights: session-0={:.3}, session-1={:.3}",
+        updated_weight0, updated_weight1
+    );
 
     // Verify that the system is responsive to stats changes
     // The exact weight values depend on EWMA algorithm, but we can verify basic functionality
-    assert!(updated_weight0 > 0.0 && updated_weight1 > 0.0, "Updated weights should remain positive");
+    assert!(
+        updated_weight0 > 0.0 && updated_weight1 > 0.0,
+        "Updated weights should remain positive"
+    );
 
     println!("Coordinated stats polling test passed!");
 }

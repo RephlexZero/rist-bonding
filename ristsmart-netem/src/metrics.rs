@@ -181,11 +181,11 @@ impl MetricsCollector {
         netns_path: &str,
     ) -> crate::errors::Result<(u64, u64, u64, u64, u64)> {
         if let Some(index) = if_index {
-            self.get_interface_stats_in_netns(index, netns_path).await.map(
-                |(tx_bytes, rx_bytes, tx_packets, rx_packets)| {
+            self.get_interface_stats_in_netns(index, netns_path)
+                .await
+                .map(|(tx_bytes, rx_bytes, tx_packets, rx_packets)| {
                     (tx_bytes, rx_bytes, tx_packets, rx_packets, 0) // No dropped packets for now
-                },
-            )
+                })
         } else {
             Ok((0, 0, 0, 0, 0))
         }
