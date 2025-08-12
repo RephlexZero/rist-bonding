@@ -199,7 +199,7 @@ impl Drop for OUManager {
 /// Spawn an OU controller task
 pub fn spawn_ou_controller<F>(
     params: OUParams,
-    _seed: u64,
+    _seed: u64, // NOTE: seed is now embedded in params.seed, this parameter is kept for backwards compatibility but not used
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
     callback: F,
 ) -> tokio::task::JoinHandle<()>

@@ -85,8 +85,13 @@ impl GEController {
 
     /// Check if a packet should be dropped based on current state
     pub fn should_drop_packet(&mut self) -> bool {
-        let mut rng = rand::thread_rng();
-        let rand_val: f64 = rng.gen();
+        // Use seeded RNG if available, otherwise use thread_rng
+        let rand_val: f64 = if let Some(ref mut rng) = self.rng {
+            rng.gen()
+        } else {
+            let mut thread_rng = rand::thread_rng();
+            thread_rng.gen()
+        };
         rand_val < self.loss_probability()
     }
 
@@ -174,7 +179,7 @@ impl Drop for GEManager {
 /// Spawn a GE controller task with callback support
 pub fn spawn_ge_controller<F>(
     params: GEParams,
-    _seed: Option<u64>,
+    _seed: Option<u64>, // NOTE: seed is now embedded in params.seed, this parameter is kept for backwards compatibility but not used
     tick_ms: u64,
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
     callback: F,

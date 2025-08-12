@@ -173,6 +173,113 @@ impl MetricsCollector {
             interface_name
         )))
     }
+
+    /// Collect interface statistics from within a network namespace
+    pub async fn collect_interface_stats_in_netns(
+        &self,
+        if_index: Option<u32>,
+        netns_path: &str,
+    ) -> crate::errors::Result<(u64, u64, u64, u64, u64)> {
+        if let Some(index) = if_index {
+            self.get_interface_stats_in_netns(index, netns_path).await.map(
+                |(tx_bytes, rx_bytes, tx_packets, rx_packets)| {
+                    (tx_bytes, rx_bytes, tx_packets, rx_packets, 0) // No dropped packets for now
+                },
+            )
+        } else {
+            Ok((0, 0, 0, 0, 0))
+        }
+    }
+
+    /// Get interface statistics from within a specific network namespace
+    async fn get_interface_stats_in_netns(
+        &self,
+        if_index: u32,
+        netns_path: &str,
+    ) -> crate::errors::Result<(u64, u64, u64, u64)> {
+        use futures::TryStreamExt;
+
+        // First, get the interface name from the index (this works from host namespace)
+        let mut links = self
+            .rtnetlink_handle
+            .link()
+            .get()
+            .match_index(if_index)
+            .execute();
+
+        let interface_name = if let Some(link) = links.try_next().await? {
+            // Extract interface name from NLA attributes
+            use netlink_packet_route::link::nlas::Nla;
+
+            let mut name = None;
+            for nla in &link.nlas {
+                if let Nla::IfName(ifname) = nla {
+                    name = Some(ifname.clone());
+                    break;
+                }
+            }
+
+            // Use the found name or fallback to interface index
+            name.unwrap_or_else(|| format!("if{}", if_index))
+        } else {
+            return Err(crate::errors::NetemError::LinkNotFound(format!(
+                "Interface index {}",
+                if_index
+            )));
+        };
+
+        // Read /proc/net/dev from within the target namespace
+        let netns_proc_path = format!("{}/proc/net/dev", netns_path);
+        let proc_data = match tokio::fs::read_to_string(&netns_proc_path).await {
+            Ok(data) => data,
+            Err(_) => {
+                // Fallback: try to execute in the namespace using ip netns exec
+                let ns_name = std::path::Path::new(netns_path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("unknown");
+
+                let output = tokio::process::Command::new("ip")
+                    .args(&["netns", "exec", ns_name, "cat", "/proc/net/dev"])
+                    .output()
+                    .await
+                    .map_err(|e| crate::errors::NetemError::Io(e))?;
+
+                if !output.status.success() {
+                    return Err(crate::errors::NetemError::LinkNotFound(format!(
+                        "Failed to read /proc/net/dev from namespace {}",
+                        ns_name
+                    )));
+                }
+
+                String::from_utf8_lossy(&output.stdout).to_string()
+            }
+        };
+
+        for line in proc_data.lines().skip(2) {
+            // Skip header lines
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 10 {
+                let if_name = parts[0].trim_end_matches(':');
+                if if_name == interface_name {
+                    // Parse interface statistics
+                    // Format: bytes packets errs drop fifo frame compressed multicast
+                    let rx_bytes = parts[1].parse::<u64>().unwrap_or(0);
+                    let rx_packets = parts[2].parse::<u64>().unwrap_or(0);
+                    let tx_bytes = parts[9].parse::<u64>().unwrap_or(0);
+                    let tx_packets = parts[10].parse::<u64>().unwrap_or(0);
+
+                    return Ok((tx_bytes, rx_bytes, tx_packets, rx_packets));
+                }
+            }
+        }
+
+        // Interface not found in /proc/net/dev
+        Err(crate::errors::NetemError::LinkNotFound(format!(
+            "Interface {} not found in namespace /proc/net/dev",
+            interface_name
+        )))
+    }
 }
 
 /// JSONL metrics writer for continuous logging

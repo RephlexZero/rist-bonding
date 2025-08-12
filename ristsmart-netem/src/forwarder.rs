@@ -103,11 +103,26 @@ async fn run_forwarder_in_netns(
     config: ForwarderConfig,
     mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> Result<()> {
-    // Create socket in the namespace
-    let bind_addr = SocketAddr::from((ns.ns_ip, config.src_port));
-    let socket = tokio::net::UdpSocket::bind(bind_addr)
-        .await
-        .map_err(|e| NetemError::ForwarderBind(format!("Failed to bind socket: {}", e)))?;
+    // Clone necessary data before moving into closure
+    let ns_ip = ns.ns_ip;
+    let ns_clone = ns.clone();
+    
+    // Execute socket creation within the network namespace
+    let socket = ns_clone.with_netns(move || {
+        // Create socket in the namespace
+        let bind_addr = SocketAddr::from((ns_ip, config.src_port));
+        
+        // We need to use std socket creation since we're in a blocking context
+        let socket = std::net::UdpSocket::bind(bind_addr)
+            .map_err(|e| NetemError::ForwarderBind(format!("Failed to bind socket: {}", e)))?;
+        
+        // Convert to tokio socket
+        socket.set_nonblocking(true)
+            .map_err(|e| NetemError::ForwarderBind(format!("Failed to set nonblocking: {}", e)))?;
+        
+        tokio::net::UdpSocket::from_std(socket)
+            .map_err(|e| NetemError::ForwarderBind(format!("Failed to convert socket: {}", e)))
+    }).await?;
 
     info!("UDP forwarder bound to {}:{}", ns.ns_ip, config.src_port);
 

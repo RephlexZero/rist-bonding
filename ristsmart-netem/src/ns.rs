@@ -178,6 +178,10 @@ impl NetworkNamespace {
             .host_if_index
             .ok_or_else(|| NetemError::VethConfig("Host interface index not set".into()))?;
 
+        // Ensure namespace interface index is set (validation only)
+        self.ns_if_index
+            .ok_or_else(|| NetemError::VethConfig("Namespace interface index not set".into()))?;
+
         info!(
             "Configuring addresses: host={} ns={}",
             self.host_ip, self.ns_ip
@@ -193,6 +197,46 @@ impl NetworkNamespace {
         handle.link().set(host_if_index).up().execute().await?;
 
         debug!("Host side configured with IP: {}/30", self.host_ip);
+
+        // Configure namespace side by executing commands in the namespace
+        let ns_name = &self.name;
+        let veth_ns = format!("veth{}n", self.index);
+
+        // Bring up the namespace interface and assign IP address
+        let status = tokio::process::Command::new("ip")
+            .args(&[
+                "netns", "exec", ns_name,
+                "ip", "addr", "add", &format!("{}/30", self.ns_ip),
+                "dev", &veth_ns
+            ])
+            .status()
+            .await
+            .map_err(|e| NetemError::VethConfig(format!("Failed to configure namespace IP: {}", e)))?;
+
+        if !status.success() {
+            return Err(NetemError::VethConfig(format!(
+                "Failed to assign IP {} to interface {} in namespace {}",
+                self.ns_ip, veth_ns, ns_name
+            )));
+        }
+
+        let status = tokio::process::Command::new("ip")
+            .args(&[
+                "netns", "exec", ns_name,
+                "ip", "link", "set", &veth_ns, "up"
+            ])
+            .status()
+            .await
+            .map_err(|e| NetemError::VethConfig(format!("Failed to bring up namespace interface: {}", e)))?;
+
+        if !status.success() {
+            return Err(NetemError::VethConfig(format!(
+                "Failed to bring up interface {} in namespace {}",
+                veth_ns, ns_name
+            )));
+        }
+
+        debug!("Namespace side configured with IP: {}/30 and brought up", self.ns_ip);
 
         Ok(())
     }
