@@ -241,22 +241,146 @@ mod tests {
 
     #[test]
     fn test_ou_tick() {
+        // Test with deterministic seed for reproducible results
         let params = OUParams {
             mean_bps: 1_000_000, // 1 Mbps
             tau_ms: 1000,
             sigma: 0.1,
             tick_ms: 100,
-            seed: None,
+            seed: Some(12345), // Fixed seed for deterministic results
         };
 
-        let mut controller = OUController::new(params).unwrap();
+        let mut controller = OUController::new(params).expect("Failed to create OU controller");
+
+        // Wait a small amount to ensure time advancement
         std::thread::sleep(std::time::Duration::from_millis(1));
 
         let rate1 = controller.tick();
         let rate2 = controller.tick();
 
         // Both rates should be positive
-        assert!(rate1 > 0);
-        assert!(rate2 > 0);
+        assert!(rate1 > 0, "First rate should be positive: {}", rate1);
+        assert!(rate2 > 0, "Second rate should be positive: {}", rate2);
+
+        // With a fixed seed, we should get reproducible results
+        // Test with same parameters and seed again
+        let mut controller2 = OUController::new(OUParams {
+            mean_bps: 1_000_000,
+            tau_ms: 1000,
+            sigma: 0.1,
+            tick_ms: 100,
+            seed: Some(12345), // Same seed
+        })
+        .expect("Failed to create second OU controller");
+
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        let rate1_repeat = controller2.tick();
+        let rate2_repeat = controller2.tick();
+
+        // Should get same results with same seed (approximately)
+        let tolerance = 1000; // Allow 1000 bps tolerance due to timing
+        assert!(
+            (rate1 as i64 - rate1_repeat as i64).abs() < tolerance,
+            "Seeded results should be reproducible: {} vs {}",
+            rate1,
+            rate1_repeat
+        );
+        assert!(
+            (rate2 as i64 - rate2_repeat as i64).abs() < tolerance,
+            "Seeded results should be reproducible: {} vs {}",
+            rate2,
+            rate2_repeat
+        );
+    }
+
+    #[test]
+    fn test_ou_rate_variation() {
+        let params = OUParams {
+            mean_bps: 2_000_000, // 2 Mbps
+            tau_ms: 500,
+            sigma: 0.3, // Higher volatility
+            tick_ms: 50,
+            seed: Some(54321),
+        };
+
+        let mut controller = OUController::new(params).expect("Failed to create OU controller");
+
+        // Collect multiple samples
+        let mut rates = Vec::new();
+        for _ in 0..10 {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            rates.push(controller.tick());
+        }
+
+        // All rates should be positive
+        for (i, rate) in rates.iter().enumerate() {
+            assert!(
+                *rate > 0,
+                "Rate at index {} should be positive: {}",
+                i,
+                rate
+            );
+        }
+
+        // Should have some variation (not all identical)
+        let min_rate = *rates.iter().min().unwrap();
+        let max_rate = *rates.iter().max().unwrap();
+        assert!(
+            max_rate > min_rate,
+            "Should have rate variation: min={}, max={}",
+            min_rate,
+            max_rate
+        );
+
+        // Variation should be reasonable (within ~5x of mean)
+        let mean = 2_000_000;
+        assert!(
+            min_rate > mean / 5,
+            "Min rate should be reasonable: {} vs mean {}",
+            min_rate,
+            mean
+        );
+        assert!(
+            max_rate < mean * 5,
+            "Max rate should be reasonable: {} vs mean {}",
+            max_rate,
+            mean
+        );
+    }
+
+    #[test]
+    fn test_ou_mean_reversion() {
+        // Test that OU process reverts towards the mean over time
+        let params = OUParams {
+            mean_bps: 1_500_000, // 1.5 Mbps
+            tau_ms: 200,         // Fast reversion
+            sigma: 0.2,
+            tick_ms: 10,
+            seed: Some(99999),
+        };
+
+        let mut controller = OUController::new(params).expect("Failed to create OU controller");
+
+        // Start with value far from mean
+        controller.current_value = 5_000_000.0; // Much higher than mean
+
+        // Let it revert over many ticks
+        let mut rates = Vec::new();
+        for _ in 0..20 {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            rates.push(controller.tick());
+        }
+
+        // Later rates should be closer to mean than initial value
+        let initial_distance = (5_000_000.0_f64 - 1_500_000.0_f64).abs();
+        let final_rate = *rates.last().unwrap() as f64;
+        let final_distance = (final_rate - 1_500_000.0_f64).abs();
+
+        assert!(
+            final_distance < initial_distance,
+            "Should revert towards mean: initial_dist={}, final_dist={}",
+            initial_distance,
+            final_distance
+        );
     }
 }

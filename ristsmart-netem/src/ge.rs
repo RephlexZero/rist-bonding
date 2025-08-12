@@ -235,4 +235,214 @@ mod tests {
         let controller = GEController::new(params);
         assert_eq!(controller.loss_probability(), 0.01);
     }
+
+    #[test]
+    fn test_ge_state_transitions_deterministic() {
+        // Test state transitions with deterministic seed
+        let params = GEParams {
+            p_good: 0.05,   // 5% Good->Bad transition probability
+            p_bad: 0.2,     // 20% Bad->Good transition probability
+            p: 0.3,         // 30% chance Good->Bad
+            r: 0.4,         // 40% chance Bad->Good
+            seed: Some(42), // Fixed seed for reproducibility
+        };
+
+        let mut controller = GEController::new(params);
+        assert_eq!(controller.current_state(), GeState::Good);
+
+        // Track state transitions over many ticks
+        let mut states = vec![controller.current_state()];
+        for _ in 0..50 {
+            let new_state = controller.tick();
+            states.push(new_state);
+        }
+
+        // Should have both Good and Bad states
+        let good_count = states.iter().filter(|&&s| s == GeState::Good).count();
+        let bad_count = states.iter().filter(|&&s| s == GeState::Bad).count();
+
+        assert!(
+            good_count > 0,
+            "Should have Good states: good={}, bad={}",
+            good_count,
+            bad_count
+        );
+        assert!(
+            bad_count > 0,
+            "Should have Bad states: good={}, bad={}",
+            good_count,
+            bad_count
+        );
+
+        // Test reproducibility with same seed
+        let mut controller2 = GEController::new(GEParams {
+            p_good: 0.05,
+            p_bad: 0.2,
+            p: 0.3,
+            r: 0.4,
+            seed: Some(42), // Same seed
+        });
+
+        let mut states2 = vec![controller2.current_state()];
+        for _ in 0..50 {
+            let new_state = controller2.tick();
+            states2.push(new_state);
+        }
+
+        // Should get identical sequence with same seed
+        assert_eq!(
+            states, states2,
+            "Deterministic seed should produce identical state sequences"
+        );
+    }
+
+    #[test]
+    fn test_ge_transition_probabilities() {
+        // Test with high transition probabilities to ensure transitions occur
+        let params = GEParams {
+            p_good: 0.01, // Loss probability in Good state
+            p_bad: 0.5,   // Loss probability in Bad state
+            p: 0.8,       // High chance Good->Bad (80%)
+            r: 0.9,       // High chance Bad->Good (90%)
+            seed: Some(12345),
+        };
+
+        let mut controller = GEController::new(params);
+
+        // Start in Good state
+        assert_eq!(controller.current_state(), GeState::Good);
+        assert_eq!(controller.loss_probability(), 0.01);
+
+        // Force transitions by calling tick many times
+        let mut transition_count = 0;
+        let mut prev_state = controller.current_state();
+
+        for _ in 0..100 {
+            let new_state = controller.tick();
+            if new_state != prev_state {
+                transition_count += 1;
+            }
+            prev_state = new_state;
+        }
+
+        // With high transition probabilities, should have many transitions
+        assert!(
+            transition_count > 10,
+            "Should have multiple transitions with high probabilities: {}",
+            transition_count
+        );
+    }
+
+    #[test]
+    fn test_ge_loss_probability_in_states() {
+        let params = GEParams {
+            p_good: 0.001, // 0.1% loss in Good
+            p_bad: 0.15,   // 15% loss in Bad
+            p: 0.5,        // Equal transition probabilities
+            r: 0.5,
+            seed: Some(999),
+        };
+
+        let mut controller = GEController::new(params);
+
+        // Initially in Good state
+        assert_eq!(controller.current_state(), GeState::Good);
+        assert_eq!(controller.loss_probability(), 0.001);
+
+        // Force state changes and verify loss probabilities
+        let mut seen_good = false;
+        let mut seen_bad = false;
+
+        for _ in 0..200 {
+            controller.tick();
+            match controller.current_state() {
+                GeState::Good => {
+                    seen_good = true;
+                    assert_eq!(
+                        controller.loss_probability(),
+                        0.001,
+                        "Loss probability in Good state"
+                    );
+                }
+                GeState::Bad => {
+                    seen_bad = true;
+                    assert_eq!(
+                        controller.loss_probability(),
+                        0.15,
+                        "Loss probability in Bad state"
+                    );
+                }
+            }
+
+            if seen_good && seen_bad {
+                break;
+            }
+        }
+
+        assert!(seen_good, "Should have seen Good state");
+        assert!(seen_bad, "Should have seen Bad state");
+    }
+
+    #[test]
+    fn test_ge_no_transitions_with_zero_probabilities() {
+        // Test that transitions don't occur with zero probabilities
+        let params = GEParams {
+            p_good: 0.05,
+            p_bad: 0.2,
+            p: 0.0, // No Good->Bad transitions
+            r: 0.0, // No Bad->Good transitions
+            seed: Some(777),
+        };
+
+        let mut controller = GEController::new(params);
+        let initial_state = controller.current_state();
+
+        // Call tick many times - state should never change
+        for _ in 0..50 {
+            let new_state = controller.tick();
+            assert_eq!(
+                new_state, initial_state,
+                "State should not change with zero transition probabilities"
+            );
+        }
+    }
+
+    #[test]
+    fn test_ge_parameter_updates() {
+        let initial_params = GEParams {
+            p_good: 0.01,
+            p_bad: 0.1,
+            p: 0.05,
+            r: 0.1,
+            seed: Some(555),
+        };
+
+        let mut controller = GEController::new(initial_params);
+        assert_eq!(controller.loss_probability(), 0.01);
+
+        // Update parameters
+        let new_params = GEParams {
+            p_good: 0.02, // Change Good loss probability
+            p_bad: 0.3,   // Change Bad loss probability
+            p: 0.8,       // High transition probability
+            r: 0.9,
+            seed: Some(555),
+        };
+
+        controller.update_params(new_params);
+
+        // Loss probability should reflect new parameters
+        if controller.current_state() == GeState::Good {
+            assert_eq!(controller.loss_probability(), 0.02);
+        }
+
+        // Force transition to Bad state to test new bad loss probability
+        for _ in 0..20 {
+            controller.tick();
+            if controller.current_state() == GeState::Bad {
+                assert_eq!(controller.loss_probability(), 0.3);
+                break;
+            }
+        }
+    }
 }

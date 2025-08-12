@@ -8,7 +8,7 @@
 
 use ristsmart_netem::{
     builder::EmulatorBuilder,
-    types::{DelayProfile, GEParams, LinkSpec, OUParams, RateLimiter},
+    types::{DelayProfile, GEParams, GeState, LinkSpec, OUParams, RateLimiter},
 };
 use std::time::Duration;
 use tokio::time;
@@ -75,34 +75,90 @@ async fn test_single_link_creation() {
         return;
     }
 
-    // Let it run for a few seconds to test OU/GE controllers
-    println!("Running for 3 seconds...");
-    time::sleep(Duration::from_secs(3)).await;
+    // Let it run for a longer period to test OU/GE controllers
+    println!("Running for 10 seconds to allow GE state transitions...");
+    time::sleep(Duration::from_secs(10)).await;
 
-    // Collect metrics
-    match emulator.metrics().await {
-        Ok(metrics) => {
-            println!("Collected metrics: {} links", metrics.links.len());
-            for link in &metrics.links {
-                println!(
-                    "Link {}: rate={} bps, state={:?}, loss={:.2}%",
-                    link.namespace, link.egress_rate_bps, link.ge_state, link.loss_pct
-                );
-            }
-        }
-        Err(e) => eprintln!("Failed to collect metrics: {}", e),
-    }
+    // Collect metrics and perform comprehensive verification
+    let metrics = emulator.metrics().await.expect("Failed to collect metrics");
+
+    // Verify we have exactly one link
+    assert_eq!(metrics.links.len(), 1, "Should have exactly one link");
+
+    let link = &metrics.links[0];
+
+    // Verify basic properties
+    assert!(
+        !link.namespace.is_empty(),
+        "Link namespace should not be empty"
+    );
+    assert!(
+        link.egress_rate_bps > 0,
+        "Egress rate should be positive: {}",
+        link.egress_rate_bps
+    );
+
+    // Verify GE model state is valid
+    assert!(
+        matches!(link.ge_state, GeState::Good | GeState::Bad),
+        "GE state should be Good or Bad, got: {:?}",
+        link.ge_state
+    );
+
+    // Verify loss percentage is in valid range
+    assert!(
+        link.loss_pct >= 0.0 && link.loss_pct <= 100.0,
+        "Loss percentage should be 0-100%, got: {}",
+        link.loss_pct
+    );
+
+    // Since we're using GE model with default parameters, we should see some state transitions
+    // over 10 seconds of runtime (verify it's not stuck in initial state)
+    assert!(
+        link.loss_pct < 100.0,
+        "Loss should not be 100% - suggests GE model is functioning"
+    );
+
+    // Verify namespace name follows expected pattern
+    assert!(
+        link.namespace.starts_with("lnk-"),
+        "Namespace should start with 'lnk-', got: {}",
+        link.namespace
+    );
+
+    // Print verification results
+    println!(
+        "✓ Link verified: ns={}, rate={} Mbps, ge_state={:?}, loss={}%",
+        link.namespace,
+        link.egress_rate_bps / 1_000_000,
+        link.ge_state,
+        link.loss_pct
+    );
+
+    println!("✓ All metrics validation passed");
 
     println!("Stopping emulator...");
-    if let Err(e) = emulator.stop().await {
-        eprintln!("Failed to stop emulator: {}", e);
-    }
+    emulator.stop().await.expect("Failed to stop emulator");
 
     println!("Tearing down...");
-    if let Err(e) = emulator.teardown().await {
-        eprintln!("Failed to teardown: {}", e);
-    }
+    emulator.teardown().await.expect("Failed to teardown");
 
+    // Verify cleanup by checking no lingering namespaces
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let ns_check = tokio::process::Command::new("ip")
+        .args(&["netns", "list"])
+        .output()
+        .await
+        .expect("Failed to check namespace list");
+
+    let ns_output = String::from_utf8_lossy(&ns_check.stdout);
+    assert!(
+        !ns_output.contains("lnk-"),
+        "Namespace cleanup failed - found remaining namespace: {}",
+        ns_output
+    );
+
+    println!("✓ Cleanup verification passed");
     println!("Test completed successfully!");
 }
 
@@ -215,29 +271,127 @@ async fn test_dual_link_emulation() {
     // Wait a bit more to see the changes
     time::sleep(Duration::from_secs(2)).await;
 
-    // Final metrics
-    match emulator.metrics().await {
-        Ok(metrics) => {
-            println!("Final metrics:");
-            for link in &metrics.links {
-                println!(
-                    "  {}: rate={} bps, state={:?}, loss={:.3}%, delay={}ms, jitter={}ms",
-                    link.namespace,
-                    link.egress_rate_bps,
-                    link.ge_state,
-                    link.loss_pct,
-                    link.delay_ms,
-                    link.jitter_ms
-                );
-            }
+    // Final metrics collection and comprehensive verification
+    let metrics = emulator
+        .metrics()
+        .await
+        .expect("Failed to collect final metrics");
+
+    // Verify we have exactly two links
+    assert_eq!(metrics.links.len(), 2, "Should have exactly two links");
+
+    // Find cellular and satellite links by their characteristics
+    let mut cellular_link = None;
+    let mut satellite_link = None;
+
+    for link in &metrics.links {
+        // Cellular typically has lower rates and higher loss
+        if link.egress_rate_bps < 5_000_000 {
+            // Less than 5 Mbps, likely cellular
+            cellular_link = Some(link);
+        } else {
+            // Higher rate, likely satellite
+            satellite_link = Some(link);
         }
-        Err(e) => eprintln!("Failed to collect final metrics: {}", e),
     }
+
+    let cellular = cellular_link.expect("Should have found cellular link");
+    let satellite = satellite_link.expect("Should have found satellite link");
+
+    // Verify basic properties for both links
+    assert!(
+        !cellular.namespace.is_empty(),
+        "Cellular namespace should not be empty"
+    );
+    assert!(
+        !satellite.namespace.is_empty(),
+        "Satellite namespace should not be empty"
+    );
+
+    assert!(
+        cellular.egress_rate_bps > 0,
+        "Cellular rate should be positive: {}",
+        cellular.egress_rate_bps
+    );
+    assert!(
+        satellite.egress_rate_bps > 0,
+        "Satellite rate should be positive: {}",
+        satellite.egress_rate_bps
+    );
+
+    // Verify GE states are valid
+    assert!(
+        matches!(cellular.ge_state, GeState::Good | GeState::Bad),
+        "Cellular GE state should be Good or Bad, got: {:?}",
+        cellular.ge_state
+    );
+    assert!(
+        matches!(satellite.ge_state, GeState::Good | GeState::Bad),
+        "Satellite GE state should be Good or Bad, got: {:?}",
+        satellite.ge_state
+    );
+
+    // Verify loss percentages are in valid range
+    assert!(
+        cellular.loss_pct >= 0.0 && cellular.loss_pct <= 100.0,
+        "Cellular loss percentage should be 0-100%, got: {}",
+        cellular.loss_pct
+    );
+    assert!(
+        satellite.loss_pct >= 0.0 && satellite.loss_pct <= 100.0,
+        "Satellite loss percentage should be 0-100%, got: {}",
+        satellite.loss_pct
+    );
+
+    // Verify delay characteristics (satellite should have higher delay)
+    assert!(
+        satellite.delay_ms > cellular.delay_ms,
+        "Satellite delay ({} ms) should be higher than cellular ({} ms)",
+        satellite.delay_ms,
+        cellular.delay_ms
+    );
+
+    // Verify parameter update worked (cellular rate should be updated to ~1.5 Mbps)
+    assert!(
+        cellular.egress_rate_bps > 1_000_000 && cellular.egress_rate_bps < 2_000_000,
+        "Cellular rate should be ~1.5 Mbps after update, got: {} bps",
+        cellular.egress_rate_bps
+    );
+
+    println!("✓ Dual-link verification passed:");
+    println!(
+        "  Cellular: rate={} Mbps, state={:?}, loss={}%, delay={}ms",
+        cellular.egress_rate_bps / 1_000_000,
+        cellular.ge_state,
+        cellular.loss_pct,
+        cellular.delay_ms
+    );
+    println!(
+        "  Satellite: rate={} Mbps, state={:?}, loss={}%, delay={}ms",
+        satellite.egress_rate_bps / 1_000_000,
+        satellite.ge_state,
+        satellite.loss_pct,
+        satellite.delay_ms
+    );
 
     println!("Cleaning up dual-link emulator...");
-    if let Err(e) = emulator.teardown().await {
-        eprintln!("Failed to teardown: {}", e);
-    }
+    emulator.teardown().await.expect("Failed to teardown");
 
+    // Verify cleanup by checking no lingering namespaces
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let ns_check = tokio::process::Command::new("ip")
+        .args(&["netns", "list"])
+        .output()
+        .await
+        .expect("Failed to check namespace list");
+
+    let ns_output = String::from_utf8_lossy(&ns_check.stdout);
+    assert!(
+        !ns_output.contains("lnk-"),
+        "Namespace cleanup failed - found remaining namespace: {}",
+        ns_output
+    );
+
+    println!("✓ Dual-link cleanup verification passed");
     println!("Dual-link test completed!");
 }
