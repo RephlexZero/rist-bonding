@@ -129,6 +129,9 @@ impl LinkBuilder {
 
     /// Set delay profile
     pub fn delay_profile(mut self, delay: crate::types::DelayProfile) -> Self {
+        if let Err(error) = delay.validate() {
+            panic!("Invalid DelayProfile: {}", error);
+        }
         self.spec.delay = delay;
         self
     }
@@ -141,6 +144,13 @@ impl LinkBuilder {
 
     /// Build the link specification
     pub fn build(self) -> LinkSpec {
+        // Validate DelayProfile before building
+        if let Err(error) = self.spec.delay.validate() {
+            panic!(
+                "Invalid DelayProfile in LinkSpec '{}': {}",
+                self.spec.name, error
+            );
+        }
         self.spec
     }
 }
@@ -168,12 +178,14 @@ mod tests {
                 tau_ms: 1000,
                 sigma: 0.2,
                 tick_ms: 100,
+                seed: None,
             })
             .ge_params(GEParams {
                 p_good: 0.001,
                 p_bad: 0.1,
                 p: 0.01,
                 r: 0.1,
+                seed: None,
             })
             .delay_profile(DelayProfile {
                 delay_ms: 20,
@@ -243,5 +255,42 @@ mod tests {
         assert_eq!(builder.links.len(), 1);
         assert_eq!(builder.seed, Some(42));
         assert_eq!(builder.links[0].name, "cell0");
+    }
+
+    #[test]
+    fn test_delay_profile_validation() {
+        // Test valid DelayProfile
+        let valid_link = LinkBuilder::new("test")
+            .delay_profile(DelayProfile {
+                delay_ms: 20,
+                jitter_ms: 5,
+                reorder_pct: 1.0,
+            })
+            .build();
+        assert_eq!(valid_link.name, "test");
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid DelayProfile")]
+    fn test_validation_reorder_pct_too_high() {
+        LinkBuilder::new("test")
+            .delay_profile(DelayProfile {
+                delay_ms: 20,
+                jitter_ms: 5,
+                reorder_pct: 150.0, // Invalid: > 100.0
+            })
+            .build();
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid DelayProfile")]
+    fn test_validation_jitter_exceeds_delay() {
+        LinkBuilder::new("test")
+            .delay_profile(DelayProfile {
+                delay_ms: 10,
+                jitter_ms: 20, // Invalid: jitter > delay
+                reorder_pct: 0.0,
+            })
+            .build();
     }
 }

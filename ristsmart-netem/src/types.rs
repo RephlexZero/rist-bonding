@@ -13,6 +13,9 @@ pub struct OUParams {
     pub sigma: f64,
     /// Controller tick interval in milliseconds
     pub tick_ms: u64,
+    /// Optional random seed for deterministic behavior
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
 }
 
 impl Default for OUParams {
@@ -21,7 +24,8 @@ impl Default for OUParams {
             mean_bps: 1_000_000, // 1 Mbps
             tau_ms: 1000,        // 1 second
             sigma: 0.2,          // 20% volatility
-            tick_ms: 100,        // 100ms ticks
+            tick_ms: 100,        // 100ms updates
+            seed: None,          // Random by default
         }
     }
 }
@@ -37,6 +41,9 @@ pub struct GEParams {
     pub p: f64,
     /// Transition probability BAD -> GOOD
     pub r: f64,
+    /// Optional random seed for deterministic behavior
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
 }
 
 impl Default for GEParams {
@@ -46,6 +53,7 @@ impl Default for GEParams {
             p_bad: 0.1,    // 10% loss in bad state
             p: 0.01,       // 1% chance to go bad
             r: 0.1,        // 10% chance to recover
+            seed: None,    // Random by default
         }
     }
 }
@@ -75,6 +83,27 @@ impl Default for DelayProfile {
             jitter_ms: 5,
             reorder_pct: 0.0,
         }
+    }
+}
+
+impl DelayProfile {
+    /// Validate DelayProfile parameters
+    pub fn validate(&self) -> Result<(), String> {
+        if self.reorder_pct < 0.0 || self.reorder_pct > 100.0 {
+            return Err(format!(
+                "reorder_pct must be between 0.0 and 100.0, got {}",
+                self.reorder_pct
+            ));
+        }
+
+        if self.jitter_ms > self.delay_ms {
+            return Err(format!(
+                "jitter_ms ({}) cannot exceed delay_ms ({})",
+                self.jitter_ms, self.delay_ms
+            ));
+        }
+
+        Ok(())
     }
 }
 

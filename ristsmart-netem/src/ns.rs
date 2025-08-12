@@ -55,10 +55,10 @@ impl NetworkNamespace {
             .args(&["netns", "add", &self.name])
             .status()
             .await
-            .map_err(|e| NetemError::NetNsCreate(format!("Failed to create netns: {}", e)))?;
+            .map_err(|e| NetemError::CreateNamespace(format!("Failed to create netns: {}", e)))?;
 
         if !status.success() {
-            return Err(NetemError::NetNsCreate(format!(
+            return Err(NetemError::CreateNamespace(format!(
                 "ip netns add command failed for {}",
                 self.name
             )));
@@ -74,15 +74,46 @@ impl NetworkNamespace {
         F: FnOnce() -> Result<R> + Send + 'static,
         R: Send + 'static,
     {
-        // For now, just execute the function directly
-        // In a full implementation, we'd use setns but it's complex with async
-        f()
+        let ns_path = format!("/var/run/netns/{}", self.name);
+
+        // Use spawn_blocking since setns affects the entire thread
+        // We need to switch to the target namespace, execute the function, then switch back
+        tokio::task::spawn_blocking(move || {
+            use nix::sched::{setns, CloneFlags};
+            use std::fs::File;
+
+            // Open original namespace (usually /proc/self/ns/net)
+            let orig_ns = File::open("/proc/self/ns/net").map_err(|e| {
+                NetemError::SetNetNs(format!("Failed to open original namespace: {}", e))
+            })?;
+
+            // Open target namespace
+            let target_ns = File::open(&ns_path).map_err(|e| {
+                NetemError::SetNetNs(format!("Failed to open namespace {}: {}", ns_path, e))
+            })?;
+
+            // Switch to target namespace
+            setns(&target_ns, CloneFlags::CLONE_NEWNET).map_err(|e| {
+                NetemError::SetNetNs(format!("Failed to switch to namespace {}: {}", ns_path, e))
+            })?;
+
+            // Execute the function
+            let result = f();
+
+            // Switch back to original namespace
+            let _ = setns(&orig_ns, CloneFlags::CLONE_NEWNET)
+                .map_err(|e| warn!("Failed to restore original namespace: {}", e));
+
+            result
+        })
+        .await
+        .map_err(|e| NetemError::SetNetNs(format!("Task join error: {}", e)))?
     }
 
     /// Create veth pair and move one end to this namespace
     pub async fn create_veth_pair(&mut self, handle: &Handle) -> Result<()> {
-        let veth_host = format!("veth-{}-host", self.name);
-        let veth_ns = format!("veth-{}-ns", self.name);
+        let veth_host = format!("veth{}h", self.index); // Host side: veth0h, veth1h, etc.
+        let veth_ns = format!("veth{}n", self.index); // Namespace side: veth0n, veth1n, etc.
 
         info!(
             "Creating veth pair: {} <-> {} for namespace {}",
@@ -114,11 +145,11 @@ impl NetworkNamespace {
         }
 
         let host_if_index = host_if_index.ok_or_else(|| {
-            NetemError::VethCreate(format!("Host interface {} not found", veth_host))
+            NetemError::CreateVeth(format!("Host interface {} not found", veth_host))
         })?;
 
         let ns_if_index = ns_if_index.ok_or_else(|| {
-            NetemError::VethCreate(format!("Namespace interface {} not found", veth_ns))
+            NetemError::CreateVeth(format!("Namespace interface {} not found", veth_ns))
         })?;
 
         // Move namespace end to the namespace

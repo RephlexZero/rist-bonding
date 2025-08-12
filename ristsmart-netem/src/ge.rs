@@ -13,14 +13,24 @@ pub struct GEController {
     params: GEParams,
     state: GeState,
     last_tick: std::time::Instant,
+    rng: Option<rand::rngs::StdRng>,
 }
 
 impl GEController {
     pub fn new(params: GEParams) -> Self {
+        use rand::SeedableRng;
+
+        let rng = if let Some(seed) = params.seed {
+            Some(rand::rngs::StdRng::seed_from_u64(seed))
+        } else {
+            None
+        };
+
         Self {
             params,
             state: GeState::Good,
             last_tick: std::time::Instant::now(),
+            rng,
         }
     }
 
@@ -47,8 +57,13 @@ impl GEController {
         let _elapsed = now.duration_since(self.last_tick);
         self.last_tick = now;
 
-        let mut rng = rand::thread_rng();
-        let rand_val: f64 = rng.gen();
+        // Use seeded RNG if available, otherwise use thread_rng
+        let rand_val: f64 = if let Some(ref mut rng) = self.rng {
+            rng.gen()
+        } else {
+            let mut thread_rng = rand::thread_rng();
+            thread_rng.gen()
+        };
 
         match self.state {
             GeState::Good => {
@@ -210,6 +225,7 @@ mod tests {
             p_bad: 0.1,
             p: 0.05,
             r: 0.1,
+            seed: None,
         };
         let controller = GEController::new(params);
         assert_eq!(controller.loss_probability(), 0.01);

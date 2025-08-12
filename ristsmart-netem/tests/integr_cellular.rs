@@ -36,12 +36,14 @@ async fn test_single_link_creation() {
             tau_ms: 1000,
             sigma: 0.2,
             tick_ms: 200,
+            seed: None,
         },
         ge: GEParams {
             p_good: 0.001, // 0.1% loss in good state
             p_bad: 0.05,   // 5% loss in bad state
             p: 0.01,       // 1% chance good->bad
             r: 0.1,        // 10% chance bad->good
+            seed: None,
         },
         delay: DelayProfile {
             delay_ms: 50,
@@ -122,12 +124,14 @@ async fn test_dual_link_emulation() {
             tau_ms: 2000,
             sigma: 0.3,
             tick_ms: 200,
+            seed: None,
         },
         ge: GEParams {
             p_good: 0.0005,
             p_bad: 0.08,
             p: 0.015,
             r: 0.15,
+            seed: None,
         },
         delay: DelayProfile {
             delay_ms: 60,
@@ -145,12 +149,14 @@ async fn test_dual_link_emulation() {
             tau_ms: 5000,
             sigma: 0.15,
             tick_ms: 500,
+            seed: None,
         },
         ge: GEParams {
             p_good: 0.0001,
             p_bad: 0.2,
             p: 0.005,
             r: 0.05,
+            seed: None,
         },
         delay: DelayProfile {
             delay_ms: 300,
@@ -196,6 +202,7 @@ async fn test_dual_link_emulation() {
             tau_ms: 1500,
             sigma: 0.25,
             tick_ms: 150,
+            seed: None,
         };
 
         if let Err(e) = cellular_handle.set_ou(new_ou).await {

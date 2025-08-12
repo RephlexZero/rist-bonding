@@ -7,9 +7,6 @@ pub enum NetemError {
     #[error("Failed to create network namespace: {0}")]
     CreateNamespace(String),
 
-    #[error("Failed to create network namespace: {0}")]
-    NetNsCreate(String),
-
     #[error("Failed to open network namespace: {0}")]
     NetNsOpen(String),
 
@@ -18,9 +15,6 @@ pub enum NetemError {
 
     #[error("Failed to create veth pair: {0}")]
     CreateVeth(String),
-
-    #[error("Failed to create veth pair: {0}")]
-    VethCreate(String),
 
     #[error("Failed to configure veth: {0}")]
     VethConfig(String),
@@ -43,8 +37,8 @@ pub enum NetemError {
     #[error("Namespace not found: {0}")]
     NamespaceNotFound(String),
 
-    #[error("Invalid parameters: {0}")]
-    InvalidParams(String),
+    #[error("Invalid parameter: {0}")]
+    InvalidParameter(String),
 
     #[error("Netlink error: {0}")]
     Netlink(#[from] rtnetlink::Error),
@@ -60,9 +54,6 @@ pub enum NetemError {
 
     #[error("Link not found: {0}")]
     LinkNotFound(String),
-
-    #[error("Invalid parameter: {0}")]
-    InvalidParameter(String),
 }
 
 pub type Result<T> = std::result::Result<T, NetemError>;

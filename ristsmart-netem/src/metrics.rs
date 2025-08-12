@@ -116,6 +116,7 @@ impl MetricsCollector {
     ) -> crate::errors::Result<(u64, u64, u64, u64)> {
         use futures::TryStreamExt;
 
+        // First, get the interface name from the index
         let mut links = self
             .rtnetlink_handle
             .link()
@@ -123,16 +124,54 @@ impl MetricsCollector {
             .match_index(if_index)
             .execute();
 
-        if let Some(_link) = links.try_next().await? {
-            // In a full implementation, we'd parse the Stats64 NLA properly
-            // For now, return placeholder values since stats parsing is complex
-            Ok((0, 0, 0, 0))
+        let interface_name = if let Some(link) = links.try_next().await? {
+            // Extract interface name from NLA attributes
+            use netlink_packet_route::link::nlas::Nla;
+
+            let mut name = None;
+            for nla in &link.nlas {
+                if let Nla::IfName(ifname) = nla {
+                    name = Some(ifname.clone());
+                    break;
+                }
+            }
+
+            // Use the found name or fallback to interface index
+            name.unwrap_or_else(|| format!("if{}", if_index))
         } else {
-            Err(crate::errors::NetemError::LinkNotFound(format!(
+            return Err(crate::errors::NetemError::LinkNotFound(format!(
                 "Interface index {}",
                 if_index
-            )))
+            )));
+        };
+
+        // Parse /proc/net/dev for interface statistics
+        // This is more reliable than parsing raw netlink stats
+        let proc_data = tokio::fs::read_to_string("/proc/net/dev").await?;
+
+        for line in proc_data.lines().skip(2) {
+            // Skip header lines
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 10 {
+                let if_name = parts[0].trim_end_matches(':');
+                if if_name == interface_name {
+                    // Parse interface statistics
+                    // Format: bytes packets errs drop fifo frame compressed multicast
+                    let rx_bytes = parts[1].parse::<u64>().unwrap_or(0);
+                    let rx_packets = parts[2].parse::<u64>().unwrap_or(0);
+                    let tx_bytes = parts[9].parse::<u64>().unwrap_or(0);
+                    let tx_packets = parts[10].parse::<u64>().unwrap_or(0);
+
+                    return Ok((tx_bytes, rx_bytes, tx_packets, rx_packets));
+                }
+            }
         }
+
+        // Interface not found in /proc/net/dev
+        Err(crate::errors::NetemError::LinkNotFound(format!(
+            "Interface {} not found in /proc/net/dev",
+            interface_name
+        )))
     }
 }
 

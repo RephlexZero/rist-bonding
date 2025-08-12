@@ -83,12 +83,9 @@ impl QdiscManager {
     ) -> Result<()> {
         debug!("Updating netem on interface {}", self.if_index);
 
-        // Remove and re-add netem qdisc
-        self.remove_netem_qdisc().await?;
-        self.add_netem_qdisc(delay_profile, ge_params, ge_state)
-            .await?;
-
-        Ok(())
+        // Use 'tc qdisc change' to update netem parameters without dropping packets
+        self.change_netem_qdisc(delay_profile, ge_params, ge_state)
+            .await
     }
 
     /// Remove all qdiscs
@@ -225,6 +222,29 @@ impl QdiscManager {
         ge_params: &GEParams,
         ge_state: GeState,
     ) -> Result<()> {
+        self.netem_qdisc_operation("add", delay_profile, ge_params, ge_state)
+            .await
+    }
+
+    /// Change netem qdisc parameters without dropping traffic
+    async fn change_netem_qdisc(
+        &self,
+        delay_profile: &DelayProfile,
+        ge_params: &GEParams,
+        ge_state: GeState,
+    ) -> Result<()> {
+        self.netem_qdisc_operation("change", delay_profile, ge_params, ge_state)
+            .await
+    }
+
+    /// Common implementation for add/change netem qdisc
+    async fn netem_qdisc_operation(
+        &self,
+        operation: &str, // "add" or "change"
+        delay_profile: &DelayProfile,
+        ge_params: &GEParams,
+        ge_state: GeState,
+    ) -> Result<()> {
         let loss_prob = match ge_state {
             GeState::Good => ge_params.p_good,
             GeState::Bad => ge_params.p_bad,
@@ -237,7 +257,7 @@ impl QdiscManager {
         let dev_name = format!("veth{}n", self.if_index);
 
         let mut args = vec![
-            "qdisc", "add", "dev", &dev_name, "parent", "1:1", "handle", "10:", "netem",
+            "qdisc", operation, "dev", &dev_name, "parent", "1:1", "handle", "10:", "netem",
         ];
 
         // Prepare string arguments (need to be alive for the entire call)
@@ -269,26 +289,12 @@ impl QdiscManager {
         run_tc_in_netns(&netns_name, &args).await?;
 
         debug!(
-            "Added netem qdisc: delay={}ms, jitter={}ms, loss={:.4}%",
-            delay_profile.delay_ms, delay_profile.jitter_ms, loss_pct
+            "{} netem qdisc: delay={}ms, jitter={}ms, loss={:.4}%",
+            operation.to_uppercase(),
+            delay_profile.delay_ms,
+            delay_profile.jitter_ms,
+            loss_pct
         );
-        Ok(())
-    }
-
-    /// Remove netem qdisc
-    async fn remove_netem_qdisc(&self) -> Result<()> {
-        let netns_name = format!("lnk-{}", self.if_index);
-        let dev_name = format!("veth{}n", self.if_index);
-
-        // Ignore errors when removing (might not exist)
-        let _ = run_tc_in_netns(
-            &netns_name,
-            &[
-                "qdisc", "del", "dev", &dev_name, "parent", "1:1", "handle", "10:",
-            ],
-        )
-        .await;
-
         Ok(())
     }
 

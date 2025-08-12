@@ -13,14 +13,24 @@ pub struct OUController {
     params: OUParams,
     current_value: f64,
     last_tick: std::time::Instant,
+    rng: Option<rand::rngs::StdRng>,
 }
 
 impl OUController {
     pub fn new(params: OUParams) -> Result<Self> {
+        use rand::SeedableRng;
+
+        let rng = if let Some(seed) = params.seed {
+            Some(rand::rngs::StdRng::seed_from_u64(seed))
+        } else {
+            None
+        };
+
         Ok(Self {
             current_value: params.mean_bps as f64,
             params,
             last_tick: std::time::Instant::now(),
+            rng,
         })
     }
 
@@ -61,10 +71,15 @@ impl OUController {
         let theta = 1.0 / tau_sec;
         let drift = theta * (mean - self.current_value) * dt;
 
-        // Create local RNG for this tick to avoid Send issues
-        let mut rng = rand::thread_rng();
-        let normal = Normal::new(0.0, 1.0).unwrap_or_else(|_| Normal::new(0.0, 1.0).unwrap());
-        let noise = self.params.sigma * mean * (2.0 * theta * dt).sqrt() * normal.sample(&mut rng);
+        // Use seeded RNG if available, otherwise use thread_rng
+        let noise = if let Some(ref mut rng) = self.rng {
+            let normal = Normal::new(0.0, 1.0).unwrap_or_else(|_| Normal::new(0.0, 1.0).unwrap());
+            self.params.sigma * mean * (2.0 * theta * dt).sqrt() * normal.sample(rng)
+        } else {
+            let mut thread_rng = rand::thread_rng();
+            let normal = Normal::new(0.0, 1.0).unwrap_or_else(|_| Normal::new(0.0, 1.0).unwrap());
+            self.params.sigma * mean * (2.0 * theta * dt).sqrt() * normal.sample(&mut thread_rng)
+        };
 
         self.current_value += drift + noise;
 
@@ -231,6 +246,7 @@ mod tests {
             tau_ms: 1000,
             sigma: 0.1,
             tick_ms: 100,
+            seed: None,
         };
 
         let mut controller = OUController::new(params).unwrap();
