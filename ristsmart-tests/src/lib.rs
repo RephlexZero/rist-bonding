@@ -170,9 +170,16 @@ mod counter_sink {
 mod encoder_stub {
     use super::*;
 
-    #[derive(Default)]
     pub struct Inner {
         bitrate_kbps: Mutex<u32>,
+    }
+
+    impl Default for Inner {
+        fn default() -> Self {
+            Self {
+                bitrate_kbps: Mutex::new(3000), // Use the default value from property spec
+            }
+        }
     }
 
     ::glib::wrapper! {
@@ -253,18 +260,28 @@ mod encoder_stub {
             PROPS.as_ref()
         }
 
-        fn set_property(&self, id: usize, value: &glib::Value, _pspec: &glib::ParamSpec) {
-            if id == 0 {
-                let v = value.get::<u32>().unwrap_or(3000);
-                *self.inner.bitrate_kbps.lock().unwrap() = v;
+        fn set_property(&self, _id: usize, value: &glib::Value, pspec: &glib::ParamSpec) {
+            match pspec.name() {
+                "bitrate" => {
+                    let v = value.get::<u32>().unwrap_or(3000);
+                    *self.inner.bitrate_kbps.lock().unwrap() = v;
+                }
+                _ => {
+                    // Ignore unknown properties
+                }
             }
         }
 
-        fn property(&self, id: usize, _pspec: &glib::ParamSpec) -> glib::Value {
-            if id == 0 {
-                return (*self.inner.bitrate_kbps.lock().unwrap()).to_value();
+        fn property(&self, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
+            match pspec.name() {
+                "bitrate" => {
+                    let val = *self.inner.bitrate_kbps.lock().unwrap();
+                    return val.to_value();
+                }
+                _ => {
+                    0u32.to_value()
+                }
             }
-            0u32.to_value()
         }
 
         fn signals() -> &'static [glib::subclass::Signal] {
