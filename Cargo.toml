@@ -2,6 +2,7 @@
 members = [
     "ristsmart",
     "ristsmart-tests",
+    "ristsmart-tests/core",
     "ristsmart-netem",
 ]
 

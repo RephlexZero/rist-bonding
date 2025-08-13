@@ -11,7 +11,7 @@ use crate::types::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Handle for controlling the entire emulator
 pub struct EmulatorHandle {
@@ -45,19 +45,36 @@ impl EmulatorHandle {
 
         info!("Creating emulator with {} links", link_specs.len());
 
+        // Clean up any leftover namespaces from previous runs
+        Self::cleanup_leftover_namespaces(&link_specs).await?;
+
         // Create namespaces and initial setup
         {
             let mut links_write = links.write().await;
+
+            // Create rtnetlink handle for veth management
+            let (connection, handle, _) = rtnetlink::new_connection()?;
+            tokio::spawn(connection);
 
             for (index, spec) in link_specs.into_iter().enumerate() {
                 let namespace_name = format!("lnk-{}", index);
 
                 // Create network namespace
-                let namespace = Arc::new(NetworkNamespace::new(namespace_name, index as u32));
+                let mut namespace = NetworkNamespace::new(namespace_name, index as u32);
                 namespace.create().await?;
+                
+                // Create veth pair and configure addresses
+                namespace.create_veth_pair(&handle).await?;
+                namespace.configure_addresses(&handle).await?;
+                
+                let namespace = Arc::new(namespace);
 
-                // Create qdisc manager (will be configured when started)
-                let qdisc_manager = QdiscManager::new(namespace.ns_if_index.unwrap_or(0));
+                // Create qdisc manager with proper interface index
+                let qdisc_manager = QdiscManager::new(
+                    namespace.ns_if_index.unwrap_or(0), 
+                    format!("lnk-{}", index),
+                    format!("veth{}n", index)
+                );
 
                 // Create controllers (not started yet)
                 let ou_controller = Arc::new(RwLock::new(None));
@@ -302,6 +319,119 @@ impl EmulatorHandle {
         }
 
         Ok(snapshot)
+    }
+
+    /// Clean up any leftover namespaces from previous runs
+    async fn cleanup_leftover_namespaces(link_specs: &[LinkSpec]) -> Result<()> {
+        info!("Cleaning up leftover namespaces from previous runs");
+
+        for (index, _spec) in link_specs.iter().enumerate() {
+            let namespace_name = format!("lnk-{}", index);
+            
+            // Try to delete the namespace, ignore errors if it doesn't exist
+            let status = tokio::process::Command::new("ip")
+                .args(&["netns", "delete", &namespace_name])
+                .status()
+                .await;
+
+            match status {
+                Ok(status) if status.success() => {
+                    info!("Cleaned up leftover namespace: {}", namespace_name);
+                }
+                Ok(_) => {
+                    // Namespace didn't exist or couldn't be deleted, that's fine
+                    debug!("Namespace {} doesn't exist or already cleaned up", namespace_name);
+                }
+                Err(e) => {
+                    warn!("Failed to check/cleanup namespace {}: {}", namespace_name, e);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Clean up all resources used by this emulator
+    pub async fn cleanup(&self) -> Result<()> {
+        info!("Cleaning up emulator resources");
+
+        // Stop all forwarders
+        {
+            let mut forwarder_manager = self.forwarder_manager.lock().await;
+            forwarder_manager.stop_all().await?;
+        }
+
+        // Clean up all links
+        let mut links_write = self.links.write().await;
+        for (name, link_state) in links_write.drain() {
+            info!("Cleaning up link: {}", name);
+
+            // Stop controllers
+            if let Some(sender) = link_state.ou_shutdown.write().await.take() {
+                let _ = sender.send(());
+            }
+            if let Some(sender) = link_state.ge_shutdown.write().await.take() {
+                let _ = sender.send(());
+            }
+
+            // Wait for tasks to finish
+            if let Some(task) = link_state.ou_task.write().await.take() {
+                let _ = task.await;
+            }
+            if let Some(task) = link_state.ge_task.write().await.take() {
+                let _ = task.await;
+            }
+
+            // Clean up namespace
+            if let Err(e) = link_state.namespace.cleanup().await {
+                warn!("Failed to clean up namespace {}: {}", link_state.namespace.name, e);
+            }
+        }
+
+        info!("Emulator cleanup complete");
+        Ok(())
+    }
+}
+
+impl Drop for EmulatorHandle {
+    fn drop(&mut self) {
+        // Best effort cleanup - spawn a blocking task since we can't await in Drop
+        if !self.links.try_read().map_or(false, |links| links.is_empty()) {
+            warn!("EmulatorHandle dropped without cleanup - attempting best effort cleanup");
+            
+            // Clone Arc handles for the cleanup task
+            let links = self.links.clone();
+            let forwarder_manager = self.forwarder_manager.clone();
+            
+            // Spawn cleanup on a separate thread since we can't await in Drop
+            std::thread::spawn(move || {
+                let rt = match tokio::runtime::Runtime::new() {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        eprintln!("Warning: Failed to create runtime for cleanup: {}", e);
+                        return;
+                    }
+                };
+                
+                rt.block_on(async move {
+                    // Stop forwarders
+                    if let Ok(mut fm) = forwarder_manager.try_lock() {
+                        if let Err(e) = fm.stop_all().await {
+                            eprintln!("Warning: Failed to stop forwarders during drop: {}", e);
+                        }
+                    }
+                    
+                    // Clean up namespaces
+                    if let Ok(mut links_write) = links.try_write() {
+                        for (name, link_state) in links_write.drain() {
+                            if let Err(e) = link_state.namespace.cleanup().await {
+                                eprintln!("Warning: Failed to cleanup namespace {} during drop: {}", name, e);
+                            }
+                        }
+                    }
+                });
+            });
+        }
     }
 }
 

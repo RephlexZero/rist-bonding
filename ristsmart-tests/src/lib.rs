@@ -7,11 +7,28 @@ use gstreamer as gst;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+extern crate gstristsmart;
+
 // Re-export plugin test registration
 pub fn register_everything_for_tests() {
     let _ = gst::init();
+    
     // Static register the plugin under test
-    ristsmart::register_for_tests();
+    println!("Registering gstristsmart elements...");
+    gstristsmart::register_for_tests();
+    
+    // Test if elements are available after registration
+    if gst::ElementFactory::find("ristdispatcher").is_some() {
+        println!("✓ ristdispatcher registered successfully");
+    } else {
+        println!("✗ ristdispatcher not found after registration");
+    }
+    
+    if gst::ElementFactory::find("dynbitrate").is_some() {
+        println!("✓ dynbitrate registered successfully");
+    } else {
+        println!("✗ dynbitrate not found after registration");
+    }
 
     // Register harness elements
     counter_sink::register().expect("register counter_sink");

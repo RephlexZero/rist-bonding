@@ -13,11 +13,13 @@ use tracing::{debug, info};
 #[derive(Debug, Clone)]
 pub struct QdiscManager {
     if_index: u32,
+    namespace_name: String,
+    device_name: String,
 }
 
 impl QdiscManager {
-    pub fn new(if_index: u32) -> Self {
-        Self { if_index }
+    pub fn new(if_index: u32, namespace_name: String, device_name: String) -> Self {
+        Self { if_index, namespace_name, device_name }
     }
 
     /// Set up the complete qdisc hierarchy
@@ -101,16 +103,13 @@ impl QdiscManager {
         let burst = (rate_bytes_per_sec / 10).max(1500); // 100ms worth of data, min 1 MTU
         let limit = burst * 3; // Buffer size
 
-        let netns_name = format!("lnk-{}", self.if_index);
-        let dev_name = format!("veth{}n", self.if_index);
-
         run_tc_in_netns(
-            &netns_name,
+            &self.namespace_name,
             &[
                 "qdisc",
                 "add",
                 "dev",
-                &dev_name,
+                &self.device_name,
                 "root",
                 "handle",
                 "1:",
@@ -135,16 +134,13 @@ impl QdiscManager {
         let burst = (rate_bytes_per_sec / 10).max(1500);
         let limit = burst * 3;
 
-        let netns_name = format!("lnk-{}", self.if_index);
-        let dev_name = format!("veth{}n", self.if_index);
-
         run_tc_in_netns(
-            &netns_name,
+            &self.namespace_name,
             &[
                 "qdisc",
                 "change",
                 "dev",
-                &dev_name,
+                &self.device_name,
                 "root",
                 "handle",
                 "1:",
@@ -165,16 +161,13 @@ impl QdiscManager {
 
     /// Add CAKE qdisc
     async fn add_cake_qdisc(&self, rate_bps: u64) -> Result<()> {
-        let netns_name = format!("lnk-{}", self.if_index);
-        let dev_name = format!("veth{}n", self.if_index);
-
         run_tc_in_netns(
-            &netns_name,
+            &self.namespace_name,
             &[
                 "qdisc",
                 "add",
                 "dev",
-                &dev_name,
+                &self.device_name,
                 "root",
                 "handle",
                 "1:",
@@ -191,16 +184,13 @@ impl QdiscManager {
 
     /// Change CAKE rate
     async fn change_cake_rate(&self, rate_bps: u64) -> Result<()> {
-        let netns_name = format!("lnk-{}", self.if_index);
-        let dev_name = format!("veth{}n", self.if_index);
-
         run_tc_in_netns(
-            &netns_name,
+            &self.namespace_name,
             &[
                 "qdisc",
                 "change",
                 "dev",
-                &dev_name,
+                &self.device_name,
                 "root",
                 "handle",
                 "1:",
@@ -252,12 +242,8 @@ impl QdiscManager {
 
         // Convert loss probability to percentage for tc
         let loss_pct = loss_prob * 100.0;
-
-        let netns_name = format!("lnk-{}", self.if_index);
-        let dev_name = format!("veth{}n", self.if_index);
-
         let mut args = vec![
-            "qdisc", operation, "dev", &dev_name, "parent", "1:1", "handle", "10:", "netem",
+            "qdisc", operation, "dev", &self.device_name, "parent", "1:1", "handle", "10:", "netem",
         ];
 
         // Prepare string arguments (need to be alive for the entire call)
@@ -286,7 +272,7 @@ impl QdiscManager {
             args.extend_from_slice(&["reorder", &reorder_str]);
         }
 
-        run_tc_in_netns(&netns_name, &args).await?;
+        run_tc_in_netns(&self.namespace_name, &args).await?;
 
         debug!(
             "{} netem qdisc: delay={}ms, jitter={}ms, loss={:.4}%",
@@ -300,11 +286,8 @@ impl QdiscManager {
 
     /// Remove root qdisc (removes entire hierarchy)
     async fn remove_root_qdisc(&self) -> Result<()> {
-        let netns_name = format!("lnk-{}", self.if_index);
-        let dev_name = format!("veth{}n", self.if_index);
-
         // Ignore errors when removing (might not exist)
-        let _ = run_tc_in_netns(&netns_name, &["qdisc", "del", "dev", &dev_name, "root"]).await;
+        let _ = run_tc_in_netns(&self.namespace_name, &["qdisc", "del", "dev", &self.device_name, "root"]).await;
 
         Ok(())
     }
