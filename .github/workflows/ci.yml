@@ -8,22 +8,44 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Ensure pkg-config can find system .pc files on Ubuntu runners
+  PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+
+# Cancel in-progress runs of the same branch/PR to save CI minutes
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-    - uses: actions/checkout@v3
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-    - name: Install GStreamer
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
-    - name: Run netem tests
-      run: cargo test -p ristsmart-netem --verbose
-      if: runner.os == 'Linux'
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # Add common components; harmless if unused
+          components: clippy, rustfmt
+
+      - name: Cache cargo build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Cache keyed by Cargo.lock for reproducibility across workspace members
+          workspaces: |
+            . -> target
+
+      - name: Install system dependencies (GStreamer)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev
+
+      # Directly run tests – this compiles first; no need for a separate build step
+      - name: Run tests (workspace)
+        run: cargo test --workspace --locked --verbose
