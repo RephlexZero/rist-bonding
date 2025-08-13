@@ -245,6 +245,44 @@ impl NetworkNamespace {
             )));
         }
 
+        // Add default route via host IP
+        let status = tokio::process::Command::new("ip")
+            .args(&[
+                "netns",
+                "exec",
+                ns_name,
+                "ip",
+                "route",
+                "add",
+                "default",
+                "via",
+                &self.host_ip.to_string(),
+            ])
+            .status()
+            .await
+            .map_err(|e| NetemError::VethConfig(format!("Failed to add default route: {}", e)))?;
+        if !status.success() {
+            return Err(NetemError::VethConfig("Failed to add default route".into()));
+        }
+
+        // Enable forwarding on host interface and globally
+        let veth_host = format!("veth{}h", self.index);
+        let status = tokio::process::Command::new("sysctl")
+            .args(&["-w", &format!("net.ipv4.conf.{}.forwarding=1", veth_host)])
+            .status()
+            .await
+            .map_err(|e| NetemError::VethConfig(format!("Failed to enable forwarding: {}", e)))?;
+        if !status.success() {
+            return Err(NetemError::VethConfig(
+                "Failed to enable interface forwarding".into(),
+            ));
+        }
+
+        let _ = tokio::process::Command::new("sysctl")
+            .args(&["-w", "net.ipv4.ip_forward=1"])
+            .status()
+            .await;
+
         debug!(
             "Namespace side configured with IP: {}/30 and brought up",
             self.ns_ip
@@ -256,6 +294,17 @@ impl NetworkNamespace {
     /// Clean up the network namespace
     pub async fn cleanup(&self) -> Result<()> {
         info!("Cleaning up network namespace: {}", self.name);
+
+        // Reset forwarding settings
+        let veth_host = format!("veth{}h", self.index);
+        let _ = tokio::process::Command::new("sysctl")
+            .args(&["-w", &format!("net.ipv4.conf.{}.forwarding=0", veth_host)])
+            .status()
+            .await;
+        let _ = tokio::process::Command::new("sysctl")
+            .args(&["-w", "net.ipv4.ip_forward=0"])
+            .status()
+            .await;
 
         let status = tokio::process::Command::new("ip")
             .args(&["netns", "delete", &self.name])
