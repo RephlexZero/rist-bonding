@@ -135,6 +135,8 @@ async fn run_forwarder_in_netns(
         .map_err(|e| NetemError::ForwarderBind(format!("Invalid destination address: {}", e)))?;
 
     let mut buf = [0u8; 65536];
+    // Track last namespace source to enable replies
+    let mut last_ns_addr: Option<SocketAddr> = None;
 
     loop {
         tokio::select! {
@@ -144,12 +146,23 @@ async fn run_forwarder_in_netns(
                 break;
             }
 
-            // Forward packets
+            // Forward packets in both directions
             result = socket.recv_from(&mut buf) => {
                 match result {
-                    Ok((len, _src)) => {
-                        if let Err(e) = socket.send_to(&buf[..len], dst_addr).await {
-                            tracing::warn!("Failed to forward packet: {}", e);
+                    Ok((len, src)) => {
+                        if src == dst_addr {
+                            // Packet from destination -> namespace
+                            if let Some(ns_addr) = last_ns_addr {
+                                if let Err(e) = socket.send_to(&buf[..len], ns_addr).await {
+                                    tracing::warn!("Failed to forward packet to namespace: {}", e);
+                                }
+                            }
+                        } else {
+                            // Packet from namespace -> destination
+                            last_ns_addr = Some(src);
+                            if let Err(e) = socket.send_to(&buf[..len], dst_addr).await {
+                                tracing::warn!("Failed to forward packet to destination: {}", e);
+                            }
                         }
                     }
                     Err(e) => {
@@ -239,5 +252,90 @@ impl Drop for ForwarderManager {
                 let _ = shutdown_tx.send(());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ns::NetworkNamespace;
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+
+    fn should_run_privileged_tests() -> bool {
+        std::env::var("RISTS_PRIV")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+    }
+
+    #[tokio::test]
+    async fn test_bidirectional_forwarder() {
+        if !should_run_privileged_tests() {
+            eprintln!("Skipping privileged test (set RISTS_PRIV=1 to enable)");
+            return;
+        }
+
+        let mut ns_obj = NetworkNamespace::new("test-fwd".to_string(), 40);
+        if let Err(e) = ns_obj.create().await {
+            eprintln!("Skipping test: failed to create namespace: {}", e);
+            return;
+        }
+        let (connection, handle, _) = match rtnetlink::new_connection() {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Skipping test: failed to create netlink connection: {}", e);
+                return;
+            }
+        };
+        tokio::spawn(connection);
+        if let Err(e) = ns_obj.create_veth_pair(&handle).await {
+            eprintln!("Skipping test: failed to create veth pair: {}", e);
+            return;
+        }
+        if let Err(e) = ns_obj.configure_addresses(&handle).await {
+            eprintln!("Skipping test: failed to configure addresses: {}", e);
+            return;
+        }
+        let ns = Arc::new(ns_obj);
+
+        // Echo server on host side
+        let host_ip = ns.host_ip;
+        let echo = tokio::spawn(async move {
+            let sock = tokio::net::UdpSocket::bind((host_ip, 6001)).await.unwrap();
+            let mut buf = [0u8; 64];
+            if let Ok((len, addr)) = sock.recv_from(&mut buf).await {
+                let _ = sock.send_to(&buf[..len], addr).await;
+            }
+        });
+
+        // Start forwarder in namespace
+        let mut fwd = UdpForwarder::new(ForwarderConfig {
+            src_port: 5001,
+            dst_host: host_ip.to_string(),
+            dst_port: 6001,
+        });
+        fwd.start(ns.clone()).await.unwrap();
+
+        // Client inside namespace sending to forwarder
+        let ns_clone = ns.clone();
+        let socket = ns
+            .with_netns(move || {
+                let sock = std::net::UdpSocket::bind((ns_clone.ns_ip, 0)).unwrap();
+                sock.set_nonblocking(true).unwrap();
+                Ok(tokio::net::UdpSocket::from_std(sock).unwrap())
+            })
+            .await
+            .unwrap();
+
+        let forwarder_addr = SocketAddr::from((ns.ns_ip, 5001));
+        socket.send_to(b"ping", forwarder_addr).await.unwrap();
+
+        let mut buf = [0u8; 64];
+        let (len, _) = socket.recv_from(&mut buf).await.unwrap();
+        assert_eq!(&buf[..len], b"ping");
+
+        fwd.stop().await.unwrap();
+        let _ = echo.await;
+        ns.cleanup().await.unwrap();
     }
 }
