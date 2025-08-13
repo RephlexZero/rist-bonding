@@ -1,0 +1,13 @@
+# Cargo configuration for rist-bonding project
+# This file sets default arguments for cargo commands
+
+[test]
+# Always run tests with single thread to avoid race conditions
+# This is especially important for GStreamer tests that may have
+# shared state or timing-sensitive operations
+args = ["--test-threads=1"]
+
+[env]
+# Force each test binary to run its tests sequentially
+# This prevents GLib main context conflicts between tests within the same binary
+RUST_TEST_THREADS = "1"

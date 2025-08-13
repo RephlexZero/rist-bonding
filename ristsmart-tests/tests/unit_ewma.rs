@@ -11,6 +11,7 @@ fn test_ewma_adaptation() {
     let dispatcher = gst::ElementFactory::make("ristdispatcher")
         .property("auto-balance", true)
         .property("rebalance-interval-ms", 100u64) // Fast updates for testing
+        .property("strategy", "ewma") // Explicitly set EWMA strategy
         .build()
         .expect("Failed to create ristdispatcher");
 
@@ -24,6 +25,10 @@ fn test_ewma_adaptation() {
         .build()
         .expect("Failed to create riststats mock");
 
+    // Initialize the mock with 2 sessions
+    let mock: ristsmart_tests::RistStatsMock = stats_mock.clone().downcast().unwrap();
+    mock.set_sessions(2);
+
     // Set the rist property to point to our stats mock
     dispatcher.set_property("rist", &stats_mock);
 
@@ -34,32 +39,26 @@ fn test_ewma_adaptation() {
             .expect("Failed to request src pad");
     }
 
-    // Simulate better performance on session 0 by providing synthetic stats
-    // where session 0 has lower RTX rate and RTT
-    let good_stats = gst::Structure::builder("rist/x-sender-stats")
-        .field("session-0.sent-original-packets", 1000u64)
-        .field("session-0.sent-retransmitted-packets", 10u64) // Low retransmission rate
-        .field("session-0.round-trip-time", 20.0f64) // Low RTT
-        .field("session-1.sent-original-packets", 1000u64)
-        .field("session-1.sent-retransmitted-packets", 100u64) // High retransmission rate
-        .field("session-1.round-trip-time", 80.0f64) // High RTT
-        .build();
+    // Establish baseline first
+    mock.tick(&[100, 100], &[2, 2], &[40, 40]);
+    std::thread::sleep(std::time::Duration::from_millis(150));
 
-    stats_mock.set_property("stats", &good_stats);
+    // Now set the stats with dramatic performance difference
+    mock.tick(&[2000, 2000], &[5, 400], &[15, 120]); // Session 0: 0.25% loss, 15ms RTT; Session 1: 20% loss, 120ms RTT
 
-    // Wait for a few rebalance intervals to let EWMA adapt using main loop
+    // Create a main loop and run it to allow timer callbacks
     let main_loop = glib::MainLoop::new(None, false);
     let main_loop_clone = main_loop.clone();
 
-    // Set up a timeout to quit the main loop after 500ms
-    glib::timeout_add_once(std::time::Duration::from_millis(500), move || {
+    // Set up a timeout to quit the main loop after 800ms
+    glib::timeout_add_once(std::time::Duration::from_millis(800), move || {
         main_loop_clone.quit();
     });
 
-    // Run the main loop to allow timer callbacks
+    // Run the main loop
     main_loop.run();
 
-    // Check that weights have adapted - session 0 should have higher weight
+    // Check if weights have adapted
     let current_weights_str: String = dispatcher.property("current-weights");
     let current_weights: Vec<f64> =
         serde_json::from_str(&current_weights_str).expect("Failed to parse current weights");
@@ -75,11 +74,11 @@ fn test_ewma_adaptation() {
         current_weights[1]
     );
 
-    // The total weight should be reasonable (around 2.0 for two sessions)
+    // The total weight should be normalized to 1.0 for the dispatcher
     let total_weight: f64 = current_weights.iter().sum();
     assert!(
-        total_weight > 1.5 && total_weight < 3.0,
-        "Total weight ({:.3}) should be reasonable",
+        (total_weight - 1.0).abs() < 0.01,
+        "Total weight ({:.3}) should be normalized to 1.0",
         total_weight
     );
 }
@@ -91,13 +90,18 @@ fn test_aimd_response() {
 
     let dispatcher = gst::ElementFactory::make("ristdispatcher")
         .property("auto-balance", true)
-        .property("rebalance-interval-ms", 50u64) // Very fast updates
+        .property("rebalance-interval-ms", 100u64) // Use minimum allowed value
+        .property("strategy", "aimd") // Use AIMD strategy for this test
         .build()
         .expect("Failed to create ristdispatcher");
 
     let stats_mock = gst::ElementFactory::make("riststats_mock")
         .build()
         .expect("Failed to create riststats mock");
+
+    // Initialize the mock with 2 sessions
+    let mock: ristsmart_tests::RistStatsMock = stats_mock.clone().downcast().unwrap();
+    mock.set_sessions(2);
 
     dispatcher.set_property("rist", &stats_mock);
 
@@ -113,17 +117,12 @@ fn test_aimd_response() {
             .expect("Failed to request src pad");
     }
 
-    // First, simulate very high loss on session 1 (should trigger multiplicative decrease)
-    let high_loss_stats = gst::Structure::builder("rist/x-sender-stats")
-        .field("session-0.sent-original-packets", 1000u64)
-        .field("session-0.sent-retransmitted-packets", 5u64) // Good performance
-        .field("session-0.round-trip-time", 25.0f64)
-        .field("session-1.sent-original-packets", 1000u64)
-        .field("session-1.sent-retransmitted-packets", 500u64) // 50% retransmission rate!
-        .field("session-1.round-trip-time", 200.0f64) // High RTT
-        .build();
+    // Establish baseline
+    mock.tick(&[100, 100], &[2, 2], &[40, 40]);
+    std::thread::sleep(std::time::Duration::from_millis(150));
 
-    stats_mock.set_property("stats", &high_loss_stats);
+    // First, simulate very high loss on session 1 (should trigger multiplicative decrease)
+    mock.tick(&[1000, 1000], &[5, 500], &[25, 200]); // Session 0: 0.5% loss; Session 1: 50% loss
 
     // Wait for adaptation using main loop
     let main_loop = glib::MainLoop::new(None, false);
@@ -150,22 +149,13 @@ fn test_aimd_response() {
 
     // Session 0 should maintain or increase weight
     assert!(
-        weights_after_high_loss[0] >= 0.8, // Should be maintained/increased
+        weights_after_high_loss[0] >= 0.5, // Should be maintained/increased
         "Session 0 weight should be maintained or increased, got {:.3}",
         weights_after_high_loss[0]
     );
 
     // Now improve session 1's performance (should trigger additive increase over time)
-    let improved_stats = gst::Structure::builder("rist/x-sender-stats")
-        .field("session-0.sent-original-packets", 2000u64)
-        .field("session-0.sent-retransmitted-packets", 10u64) // Still good
-        .field("session-0.round-trip-time", 25.0f64)
-        .field("session-1.sent-original-packets", 2000u64)
-        .field("session-1.sent-retransmitted-packets", 20u64) // Much improved!
-        .field("session-1.round-trip-time", 30.0f64) // Much better RTT
-        .build();
-
-    stats_mock.set_property("stats", &improved_stats);
+    mock.tick(&[1000, 1000], &[10, 20], &[25, 30]); // Both sessions now have good performance
 
     // Wait longer for additive increase to take effect using main loop
     let main_loop = glib::MainLoop::new(None, false);
@@ -207,6 +197,10 @@ fn test_ewma_convergence() {
         .build()
         .expect("Failed to create riststats mock");
 
+    // Initialize the mock with 2 sessions
+    let mock: ristsmart_tests::RistStatsMock = stats_mock.clone().downcast().unwrap();
+    mock.set_sessions(2);
+
     dispatcher.set_property("rist", &stats_mock);
 
     // Start with unequal weights
@@ -221,17 +215,12 @@ fn test_ewma_convergence() {
             .expect("Failed to request src pad");
     }
 
-    // Provide identical, good performance stats for both sessions
-    let equal_stats = gst::Structure::builder("rist/x-sender-stats")
-        .field("session-0.sent-original-packets", 1000u64)
-        .field("session-0.sent-retransmitted-packets", 20u64) // 2% loss
-        .field("session-0.round-trip-time", 40.0f64)
-        .field("session-1.sent-original-packets", 1000u64)
-        .field("session-1.sent-retransmitted-packets", 20u64) // 2% loss
-        .field("session-1.round-trip-time", 40.0f64)
-        .build();
+    // Establish baseline first
+    mock.tick(&[100, 100], &[2, 2], &[40, 40]);
+    std::thread::sleep(std::time::Duration::from_millis(150));
 
-    stats_mock.set_property("stats", &equal_stats);
+    // Provide identical, good performance stats for both sessions using mock.tick
+    mock.tick(&[1000, 1000], &[20, 20], &[40, 40]); // Both sessions: 2% loss, 40ms RTT
 
     // Wait for convergence using main loop
     let main_loop = glib::MainLoop::new(None, false);

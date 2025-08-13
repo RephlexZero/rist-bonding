@@ -116,11 +116,11 @@ mod counter_sink {
 
         fn property(&self, id: usize, _pspec: &glib::ParamSpec) -> glib::Value {
             match id {
-                0 => self.inner.count.load(Ordering::Relaxed).to_value(),
-                1 => (self.inner.got_eos.load(Ordering::Relaxed) != 0).to_value(),
-                2 => (self.inner.got_flush_start.load(Ordering::Relaxed) != 0).to_value(),
-                3 => (self.inner.got_flush_stop.load(Ordering::Relaxed) != 0).to_value(),
-                _ => 0u32.to_value(),
+                1 => self.inner.count.load(Ordering::Relaxed).to_value(), // count property (1-based indexing)
+                2 => (self.inner.got_eos.load(Ordering::Relaxed) != 0).to_value(), // got-eos property
+                3 => (self.inner.got_flush_start.load(Ordering::Relaxed) != 0).to_value(), // got-flush-start property
+                4 => (self.inner.got_flush_stop.load(Ordering::Relaxed) != 0).to_value(), // got-flush-stop property
+                _ => false.to_value(), // Return false for unknown properties
             }
         }
     }
@@ -484,6 +484,87 @@ mod riststats_mock {
         pub fn recover(&self, idx: usize) {
             let imp = self.imp();
             let mut model = imp.model.lock().unwrap();
+
+            // If we have custom stats, we need to create a new structure with updated values
+            if let Some(ref custom_stats) = model.custom_stats {
+                let session_key = format!("session-{}", idx);
+
+                // Get current values from the custom stats
+                let current_retrans = custom_stats
+                    .get::<u64>(&format!("{}.sent-retransmitted-packets", session_key))
+                    .unwrap_or(0);
+                let current_rtt = custom_stats
+                    .get::<f64>(&format!("{}.round-trip-time", session_key))
+                    .unwrap_or(100.0);
+                let current_original = custom_stats
+                    .get::<u64>(&format!("{}.sent-original-packets", session_key))
+                    .unwrap_or(1000);
+
+                // Apply recovery improvements
+                let recovery_factor = 0.3; // Reduce retrans by 30%
+                let new_retrans = (current_retrans as f64 * recovery_factor) as u64;
+
+                // Improve RTT
+                let target_rtt = 25.0; // Good baseline RTT in ms
+                let new_rtt = if current_rtt > target_rtt {
+                    let rtt_improvement = (current_rtt - target_rtt) * 0.6;
+                    (current_rtt - rtt_improvement.max(1.0)).max(target_rtt)
+                } else {
+                    target_rtt
+                };
+
+                // Increase original packets to show continued transmission
+                let new_original = current_original.saturating_add(100);
+
+                // Create a new structure with updated values
+                let mut builder = gst::Structure::builder(custom_stats.name());
+
+                // Manually add all fields, updating the ones we need to recover
+                // First, handle all session fields we know about
+                for session_idx in 0..2 {
+                    // Assume max 2 sessions for now
+                    let sess_key = format!("session-{}", session_idx);
+                    let orig_key = format!("{}.sent-original-packets", sess_key);
+                    let retrans_key = format!("{}.sent-retransmitted-packets", sess_key);
+                    let rtt_key = format!("{}.round-trip-time", sess_key);
+
+                    if session_idx == idx {
+                        // This is the session we're recovering - use new values
+                        builder = builder
+                            .field(&orig_key, new_original)
+                            .field(&retrans_key, new_retrans)
+                            .field(&rtt_key, new_rtt);
+                    } else {
+                        // Copy existing values for other sessions
+                        if let Ok(orig_val) = custom_stats.get::<u64>(&orig_key) {
+                            builder = builder.field(&orig_key, orig_val);
+                        }
+                        if let Ok(retrans_val) = custom_stats.get::<u64>(&retrans_key) {
+                            builder = builder.field(&retrans_key, retrans_val);
+                        }
+                        if let Ok(rtt_val) = custom_stats.get::<f64>(&rtt_key) {
+                            builder = builder.field(&rtt_key, rtt_val);
+                        }
+                    }
+                }
+
+                // Replace the custom stats with the new structure
+                model.custom_stats = Some(builder.build());
+
+                gst::debug!(
+                    CAT,
+                    "Session {} recovered: retrans={}→{}, rtt={:.1}ms→{:.1}ms, original={}→{}",
+                    idx,
+                    current_retrans,
+                    new_retrans,
+                    current_rtt,
+                    new_rtt,
+                    current_original,
+                    new_original
+                );
+            }
+
+            // Also update the session model for consistency
             if let Some(sess) = model.sessions.get_mut(idx) {
                 // Recovery logic: improve session performance metrics
 
@@ -510,16 +591,8 @@ mod riststats_mock {
                 // During recovery, original transmission should be consistent
                 let base_increment = 100u64; // Steady transmission rate
                 sess.sent_original = sess.sent_original.saturating_add(base_increment);
-
-                gst::debug!(
-                    CAT,
-                    "Session {} recovered: retrans={}, rtt={}ms, original={}",
-                    idx,
-                    sess.sent_retrans,
-                    sess.rtt_ms,
-                    sess.sent_original
-                );
             }
+
             drop(model);
             self.notify("stats");
         }

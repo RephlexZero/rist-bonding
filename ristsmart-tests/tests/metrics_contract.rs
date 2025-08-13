@@ -59,11 +59,16 @@ fn test_metrics_contract_validation() {
         .add_watch(move |_bus, msg| {
             if let Some(src) = msg.src() {
                 if src.name() == "ristdispatcher0" {
-                    if let gst::MessageView::Element(element_msg) = msg.view() {
-                        if let Some(structure) = element_msg.structure() {
-                            if structure.name() == "rist-dispatcher-metrics" {
-                                messages_clone.lock().unwrap().push(structure.to_owned());
+                    match msg.view() {
+                        gst::MessageView::Application(app_msg) => {
+                            if let Some(structure) = app_msg.structure() {
+                                if structure.name() == "rist-dispatcher-metrics" {
+                                    messages_clone.lock().unwrap().push(structure.to_owned());
+                                }
                             }
+                        }
+                        _ => {
+                            // Ignore other message types from ristdispatcher0 (StateChanged, etc.)
                         }
                     }
                 }
@@ -92,7 +97,18 @@ fn test_metrics_contract_validation() {
     }
 
     // Wait for metrics messages to accumulate
-    std::thread::sleep(Duration::from_millis(300));
+    // Use GLib MainLoop to process timer callbacks and bus messages
+    let main_loop = glib::MainLoop::new(None, false);
+    let main_loop_clone = main_loop.clone();
+
+    // Set a timeout to stop the main loop after 300ms
+    let _timeout_id = glib::timeout_add_local(Duration::from_millis(300), move || {
+        main_loop_clone.quit();
+        glib::ControlFlow::Break
+    });
+
+    // Run the main loop to process events
+    main_loop.run();
 
     appsrc.end_of_stream().expect("Failed to send EOS");
 

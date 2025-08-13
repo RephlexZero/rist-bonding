@@ -266,23 +266,23 @@ fn test_stats_evolution_over_time() {
     // For testing purposes, focus on system stability rather than timer-based evolution
     // The key thing is that the dispatcher doesn't crash and maintains valid weights
     // In a real environment, the timer-based stats polling would work correctly
-    
-    println!(
-        "System successfully processed stats updates without crashing."
-    );
+
+    println!("System successfully processed stats updates without crashing.");
     println!(
         "Final weights: session-0={:.3}, session-1={:.3}",
         phase2_weight0, phase2_weight1
     );
-    
+
     // Test passes if the system remains stable and produces valid weights
     assert!(
         phase1_weights_array.len() == 2 && phase2_weights_array.len() == 2,
         "Should maintain 2 weights throughout test"
     );
     assert!(
-        phase1_weight0 >= 0.0 && phase1_weight1 >= 0.0 &&
-        phase2_weight0 >= 0.0 && phase2_weight1 >= 0.0,
+        phase1_weight0 >= 0.0
+            && phase1_weight1 >= 0.0
+            && phase2_weight0 >= 0.0
+            && phase2_weight1 >= 0.0,
         "All weights should remain non-negative"
     );
 
