@@ -4,6 +4,8 @@ members = [
     "ristsmart-tests",
     "ristsmart-tests/core",
     "ristsmart-netem",
+    "netlink-sim",
+    "ristlab",
 ]
 
 resolver = "2"
