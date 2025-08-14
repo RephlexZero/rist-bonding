@@ -47,7 +47,7 @@ fn test_basic_data_flow_without_rist() {
     
     // Create a simple pipeline that doesn't require RIST transport elements
     let source = create_test_source();
-    let dispatcher = create_dispatcher(Some(&[0.7, 0.3]));
+    let dispatcher = create_dispatcher_for_testing(Some(&[0.7, 0.3]));
     let counter1 = create_counter_sink();
     let counter2 = create_counter_sink();
     
@@ -192,7 +192,7 @@ fn test_audio_pipeline_without_rist_transport() {
     let source = create_test_source(); // audiotestsrc
     let encoder = create_encoder_stub(Some(5000)); // Mock encoder
     let dynbitrate = create_dynbitrate();
-    let dispatcher = create_dispatcher(Some(&[0.6, 0.4]));
+    let dispatcher = create_dispatcher_for_testing(Some(&[0.6, 0.4]));
     let counter1 = create_counter_sink();
     let counter2 = create_counter_sink();
     

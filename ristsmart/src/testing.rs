@@ -15,8 +15,20 @@ use gst::prelude::*;
 
 /// Initialize GStreamer and register all RIST elements for testing
 /// This should be called at the start of each test
+#[cfg(feature = "test-plugin")]
 pub fn init_for_tests() {
     crate::register_for_tests();
+}
+
+/// Initialize GStreamer and register main RIST elements (without test harness)
+/// This version is available without the test-plugin feature
+#[cfg(not(feature = "test-plugin"))]
+pub fn init_for_tests() {
+    use gstreamer as gst;
+    let _ = gst::init();
+    // Register main elements with None plugin handle
+    let _ = crate::dispatcher::register_static();
+    let _ = crate::dynbitrate::register_static();
 }
 
 /// Create a mock RIST stats element with specified number of sessions
@@ -42,6 +54,19 @@ pub fn create_dispatcher(weights: Option<&[f64]>) -> gst::Element {
         let weights_json = serde_json::to_string(w).expect("Failed to serialize weights");
         dispatcher.set_property("weights", &weights_json);
     }
+    
+    dispatcher
+}
+
+/// Create a RIST dispatcher element configured for load balancing tests
+pub fn create_dispatcher_for_testing(weights: Option<&[f64]>) -> gst::Element {
+    let dispatcher = create_dispatcher(weights);
+    
+    // Configure for proper load balancing testing
+    dispatcher.set_property("auto-balance", false);
+    dispatcher.set_property("min-hold-ms", 0u64); // No hold time
+    dispatcher.set_property("switch-threshold", 1.0); // No threshold
+    dispatcher.set_property("health-warmup-ms", 0u64); // No warmup period
     
     dispatcher
 }

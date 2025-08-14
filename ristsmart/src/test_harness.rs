@@ -361,6 +361,8 @@ pub mod riststats_mock {
     struct Model {
         sessions: Vec<SessionModel>,
         custom_stats: Option<gst::Structure>,
+        quality: f64,
+        rtt: u32,
     }
 
     impl Default for Model {
@@ -368,6 +370,8 @@ pub mod riststats_mock {
             Self {
                 sessions: vec![SessionModel::default(); 2],
                 custom_stats: None,
+                quality: 95.0,
+                rtt: 10,
             }
         }
     }
@@ -395,36 +399,81 @@ pub mod riststats_mock {
 
         fn properties() -> &'static [glib::ParamSpec] {
             static PROPS: Lazy<Vec<glib::ParamSpec>> = Lazy::new(|| {
-                vec![glib::ParamSpecBoxed::builder::<gst::Structure>("stats")
-                    .nick("Stats structure")
-                    .flags(glib::ParamFlags::READABLE | glib::ParamFlags::WRITABLE)
-                    .build()]
+                vec![
+                    glib::ParamSpecBoxed::builder::<gst::Structure>("stats")
+                        .nick("Stats structure")
+                        .flags(glib::ParamFlags::READABLE | glib::ParamFlags::WRITABLE)
+                        .build(),
+                    glib::ParamSpecDouble::builder("quality")
+                        .nick("Quality percentage")
+                        .blurb("Link quality as percentage (0.0-100.0)")
+                        .minimum(0.0)
+                        .maximum(100.0)
+                        .default_value(95.0)
+                        .flags(glib::ParamFlags::READABLE | glib::ParamFlags::WRITABLE)
+                        .build(),
+                    glib::ParamSpecUInt::builder("rtt")
+                        .nick("Round-trip time")
+                        .blurb("Round-trip time in milliseconds")
+                        .minimum(0)
+                        .maximum(10000)
+                        .default_value(10)
+                        .flags(glib::ParamFlags::READABLE | glib::ParamFlags::WRITABLE)
+                        .build(),
+                ]
             });
             PROPS.as_ref()
         }
 
         fn set_property(&self, id: usize, value: &glib::Value, _pspec: &glib::ParamSpec) {
-            if id == 1 {
-                if let Ok(s) = value.get::<gst::Structure>() {
-                    let mut model = self.model.lock().unwrap();
-                    model.custom_stats = Some(s);
+            match id {
+                1 => {
+                    if let Ok(s) = value.get::<gst::Structure>() {
+                        let mut model = self.model.lock().unwrap();
+                        model.custom_stats = Some(s);
+                    }
                 }
+                2 => {
+                    if let Ok(quality) = value.get::<f64>() {
+                        let mut model = self.model.lock().unwrap();
+                        model.quality = quality;
+                    }
+                }
+                3 => {
+                    if let Ok(rtt) = value.get::<u32>() {
+                        let mut model = self.model.lock().unwrap();
+                        model.rtt = rtt;
+                    }
+                }
+                _ => {}
             }
         }
 
         fn property(&self, id: usize, _pspec: &glib::ParamSpec) -> glib::Value {
-            if id == 1 {
-                let model = self.model.lock().unwrap();
-                if let Some(ref custom) = model.custom_stats {
-                    return custom.to_value();
+            match id {
+                1 => {
+                    let model = self.model.lock().unwrap();
+                    if let Some(ref custom) = model.custom_stats {
+                        return custom.to_value();
+                    }
+                    drop(model);
+                    let s = self.build_stats_structure();
+                    s.to_value()
                 }
-                drop(model);
-                let s = self.build_stats_structure();
-                return s.to_value();
+                2 => {
+                    let model = self.model.lock().unwrap();
+                    model.quality.to_value()
+                }
+                3 => {
+                    let model = self.model.lock().unwrap();
+                    model.rtt.to_value()
+                }
+                _ => {
+                    gst::Structure::builder("rist/x-sender-stats")
+                        .build()
+                        .to_value()
+                }
             }
-            gst::Structure::builder("rist/x-sender-stats")
-                .build()
-                .to_value()
         }
     }
 

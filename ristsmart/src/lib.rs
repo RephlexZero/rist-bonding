@@ -1,8 +1,8 @@
 use gst::glib;
 use gstreamer as gst;
 
-mod dispatcher;
-mod dynbitrate;
+pub mod dispatcher;
+pub mod dynbitrate;
 
 // Test harness (only compiled with test-plugin feature)
 #[cfg(feature = "test-plugin")]

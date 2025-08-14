@@ -13,7 +13,7 @@ fn test_integrated_dispatcher_flow() {
     init_for_tests();
     
     // Create elements using convenience functions
-    let dispatcher = create_dispatcher(Some(&[0.6, 0.4]));
+    let dispatcher = create_dispatcher_for_testing(Some(&[0.6, 0.4]));
     let counter1 = create_counter_sink();
     let counter2 = create_counter_sink();
     let source = create_test_source();
@@ -117,7 +117,7 @@ fn test_element_properties() {
     dispatcher.set_property("strategy", "ewma");
     
     // Test getting properties
-    let interval: u32 = get_property(&dispatcher, "rebalance-interval-ms")
+    let interval: u64 = get_property(&dispatcher, "rebalance-interval-ms")
         .expect("Failed to get rebalance interval");
     let strategy: String = get_property(&dispatcher, "strategy")
         .expect("Failed to get strategy");
