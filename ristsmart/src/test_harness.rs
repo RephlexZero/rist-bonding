@@ -1,3 +1,8 @@
+//! Test harness elements for RIST dispatcher testing
+//! 
+//! This module contains mock elements that are only compiled when the 'test-plugin' feature is enabled.
+//! These elements provide controlled testing environments for the RIST dispatcher and dynamic bitrate controller.
+
 use anyhow::Result;
 use glib::subclass::prelude::*;
 use gst::glib;
@@ -6,41 +11,25 @@ use gst::subclass::prelude::{ElementImpl, GstObjectImpl};
 use gstreamer as gst;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use once_cell::sync::Lazy;
 
-extern crate gstristsmart;
-
-// Re-export plugin test registration
-pub fn register_everything_for_tests() {
+/// Register all test harness elements
+pub fn register_test_elements() -> Result<()> {
     let _ = gst::init();
     
-    // Static register the plugin under test
-    println!("Registering gstristsmart elements...");
-    gstristsmart::register_for_tests();
+    counter_sink::register()?;
+    encoder_stub::register()?;
+    riststats_mock::register()?;
     
-    // Test if elements are available after registration
-    if gst::ElementFactory::find("ristdispatcher").is_some() {
-        println!("✓ ristdispatcher registered successfully");
-    } else {
-        println!("✗ ristdispatcher not found after registration");
-    }
-    
-    if gst::ElementFactory::find("dynbitrate").is_some() {
-        println!("✓ dynbitrate registered successfully");
-    } else {
-        println!("✗ dynbitrate not found after registration");
-    }
-
-    // Register harness elements
-    counter_sink::register().expect("register counter_sink");
-    encoder_stub::register().expect("register encoder_stub");
-    riststats_mock::register().expect("register riststats_mock");
+    Ok(())
 }
 
-// Re-export test harness elements for external use
+// Re-export test elements
 pub use riststats_mock::RistStatsMock;
 
-// 1) counter_sink: counts buffers and records EOS/FLUSH
-mod counter_sink {
+/// Counter sink: counts buffers and records EOS/FLUSH events
+/// Useful for verifying that the correct number of buffers flow through pipelines
+pub mod counter_sink {
     use super::*;
 
     #[derive(Default)]
@@ -51,7 +40,7 @@ mod counter_sink {
         got_flush_stop: AtomicU64,
     }
 
-    ::glib::wrapper! {
+    glib::wrapper! {
         pub struct CounterSink(ObjectSubclass<Impl>) @extends gst::Element, gst::Object;
     }
 
@@ -60,7 +49,7 @@ mod counter_sink {
         inner: Arc<Inner>,
     }
 
-    #[::glib::object_subclass]
+    #[glib::object_subclass]
     impl ObjectSubclass for Impl {
         const NAME: &'static str = "counter_sink";
         type Type = CounterSink;
@@ -111,7 +100,6 @@ mod counter_sink {
         }
 
         fn properties() -> &'static [glib::ParamSpec] {
-            use once_cell::sync::Lazy;
             static PROPS: Lazy<Vec<glib::ParamSpec>> = Lazy::new(|| {
                 vec![
                     glib::ParamSpecUInt64::builder("count")
@@ -133,11 +121,11 @@ mod counter_sink {
 
         fn property(&self, id: usize, _pspec: &glib::ParamSpec) -> glib::Value {
             match id {
-                1 => self.inner.count.load(Ordering::Relaxed).to_value(), // count property (1-based indexing)
-                2 => (self.inner.got_eos.load(Ordering::Relaxed) != 0).to_value(), // got-eos property
-                3 => (self.inner.got_flush_start.load(Ordering::Relaxed) != 0).to_value(), // got-flush-start property
-                4 => (self.inner.got_flush_stop.load(Ordering::Relaxed) != 0).to_value(), // got-flush-stop property
-                _ => false.to_value(), // Return false for unknown properties
+                1 => self.inner.count.load(Ordering::Relaxed).to_value(),
+                2 => (self.inner.got_eos.load(Ordering::Relaxed) != 0).to_value(),
+                3 => (self.inner.got_flush_start.load(Ordering::Relaxed) != 0).to_value(),
+                4 => (self.inner.got_flush_stop.load(Ordering::Relaxed) != 0).to_value(),
+                _ => false.to_value(),
             }
         }
     }
@@ -146,20 +134,18 @@ mod counter_sink {
 
     impl ElementImpl for Impl {
         fn metadata() -> Option<&'static gst::subclass::ElementMetadata> {
-            use once_cell::sync::Lazy;
             static META: Lazy<gst::subclass::ElementMetadata> = Lazy::new(|| {
                 gst::subclass::ElementMetadata::new(
                     "Counter Sink",
                     "Sink/Testing",
                     "Counts buffers and events for testing",
-                    "tests",
+                    "RIST Test Harness",
                 )
             });
             Some(&*META)
         }
 
         fn pad_templates() -> &'static [gst::PadTemplate] {
-            use once_cell::sync::Lazy;
             static TEMPLS: Lazy<Vec<gst::PadTemplate>> = Lazy::new(|| {
                 vec![gst::PadTemplate::new(
                     "sink",
@@ -183,8 +169,9 @@ mod counter_sink {
     }
 }
 
-// 2) encoder_stub: passthrough with bitrate property and optional key unit signal
-mod encoder_stub {
+/// Encoder stub: passthrough with bitrate property and optional key unit signal
+/// Simulates an encoder for testing dynamic bitrate adjustment
+pub mod encoder_stub {
     use super::*;
 
     pub struct Inner {
@@ -194,12 +181,12 @@ mod encoder_stub {
     impl Default for Inner {
         fn default() -> Self {
             Self {
-                bitrate_kbps: Mutex::new(3000), // Use the default value from property spec
+                bitrate_kbps: Mutex::new(3000),
             }
         }
     }
 
-    ::glib::wrapper! {
+    glib::wrapper! {
         pub struct EncoderStub(ObjectSubclass<Impl>) @extends gst::Element, gst::Object;
     }
 
@@ -208,7 +195,7 @@ mod encoder_stub {
         inner: Arc<Inner>,
     }
 
-    #[::glib::object_subclass]
+    #[glib::object_subclass]
     impl ObjectSubclass for Impl {
         const NAME: &'static str = "encoder_stub";
         type Type = EncoderStub;
@@ -250,7 +237,6 @@ mod encoder_stub {
                     }
                 })
                 .event_function(|pad, parent, event| {
-                    // Passthrough events downstream
                     if let Some(elem) = parent.and_then(|p| p.downcast_ref::<EncoderStub>()) {
                         if let Some(src) = elem.static_pad("src") {
                             return src.push_event(event);
@@ -265,7 +251,6 @@ mod encoder_stub {
         }
 
         fn properties() -> &'static [glib::ParamSpec] {
-            use once_cell::sync::Lazy;
             static PROPS: Lazy<Vec<glib::ParamSpec>> = Lazy::new(|| {
                 vec![glib::ParamSpecUInt::builder("bitrate")
                     .nick("Bitrate (kbps)")
@@ -283,9 +268,7 @@ mod encoder_stub {
                     let v = value.get::<u32>().unwrap_or(3000);
                     *self.inner.bitrate_kbps.lock().unwrap() = v;
                 }
-                _ => {
-                    // Ignore unknown properties
-                }
+                _ => {}
             }
         }
 
@@ -293,16 +276,13 @@ mod encoder_stub {
             match pspec.name() {
                 "bitrate" => {
                     let val = *self.inner.bitrate_kbps.lock().unwrap();
-                    return val.to_value();
+                    val.to_value()
                 }
-                _ => {
-                    0u32.to_value()
-                }
+                _ => 0u32.to_value(),
             }
         }
 
         fn signals() -> &'static [glib::subclass::Signal] {
-            use once_cell::sync::Lazy;
             static SIGS: Lazy<Vec<glib::subclass::Signal>> =
                 Lazy::new(|| vec![glib::subclass::Signal::builder("force-key-unit").build()]);
             SIGS.as_ref()
@@ -313,20 +293,18 @@ mod encoder_stub {
 
     impl ElementImpl for Impl {
         fn metadata() -> Option<&'static gst::subclass::ElementMetadata> {
-            use once_cell::sync::Lazy;
             static META: Lazy<gst::subclass::ElementMetadata> = Lazy::new(|| {
                 gst::subclass::ElementMetadata::new(
                     "Encoder Stub",
                     "Filter/Testing",
-                    "Passthrough encoder with bitrate property",
-                    "tests",
+                    "Passthrough encoder with bitrate property for testing",
+                    "RIST Test Harness",
                 )
             });
             Some(&*META)
         }
 
         fn pad_templates() -> &'static [gst::PadTemplate] {
-            use once_cell::sync::Lazy;
             static TEMPLS: Lazy<Vec<gst::PadTemplate>> = Lazy::new(|| {
                 vec![
                     gst::PadTemplate::new(
@@ -359,10 +337,10 @@ mod encoder_stub {
     }
 }
 
-// 3) riststats_mock: exposes a `stats` property with session-stats array and helpers to mutate
-mod riststats_mock {
+/// RIST stats mock: provides controllable mock statistics for testing
+/// Exposes a `stats` property with session-stats array and helpers to mutate
+pub mod riststats_mock {
     use super::*;
-    use once_cell::sync::Lazy;
 
     static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
         gst::DebugCategory::new(
@@ -382,19 +360,19 @@ mod riststats_mock {
     #[derive(Debug)]
     struct Model {
         sessions: Vec<SessionModel>,
-        custom_stats: Option<gst::Structure>, // Store custom stats structure
+        custom_stats: Option<gst::Structure>,
     }
 
     impl Default for Model {
         fn default() -> Self {
             Self {
-                sessions: vec![SessionModel::default(); 2], // Default to 2 sessions for testing
+                sessions: vec![SessionModel::default(); 2],
                 custom_stats: None,
             }
         }
     }
 
-    ::glib::wrapper! {
+    glib::wrapper! {
         pub struct RistStatsMock(ObjectSubclass<Impl>) @extends gst::Element, gst::Object;
     }
 
@@ -403,7 +381,7 @@ mod riststats_mock {
         model: Arc<Mutex<Model>>,
     }
 
-    #[::glib::object_subclass]
+    #[glib::object_subclass]
     impl ObjectSubclass for Impl {
         const NAME: &'static str = "riststats_mock";
         type Type = RistStatsMock;
@@ -416,7 +394,6 @@ mod riststats_mock {
         }
 
         fn properties() -> &'static [glib::ParamSpec] {
-            use once_cell::sync::Lazy;
             static PROPS: Lazy<Vec<glib::ParamSpec>> = Lazy::new(|| {
                 vec![glib::ParamSpecBoxed::builder::<gst::Structure>("stats")
                     .nick("Stats structure")
@@ -428,8 +405,6 @@ mod riststats_mock {
 
         fn set_property(&self, id: usize, value: &glib::Value, _pspec: &glib::ParamSpec) {
             if id == 1 {
-                // GStreamer uses 1-based indexing
-                // Store custom stats structure for testing
                 if let Ok(s) = value.get::<gst::Structure>() {
                     let mut model = self.model.lock().unwrap();
                     model.custom_stats = Some(s);
@@ -439,8 +414,6 @@ mod riststats_mock {
 
         fn property(&self, id: usize, _pspec: &glib::ParamSpec) -> glib::Value {
             if id == 1 {
-                // GStreamer uses 1-based indexing
-                // Return custom stats if available, otherwise build default structure
                 let model = self.model.lock().unwrap();
                 if let Some(ref custom) = model.custom_stats {
                     return custom.to_value();
@@ -477,6 +450,7 @@ mod riststats_mock {
     }
 
     impl RistStatsMock {
+        /// Set the number of mock sessions
         pub fn set_sessions(&self, n: usize) {
             let imp = self.imp();
             let mut model = imp.model.lock().unwrap();
@@ -485,6 +459,7 @@ mod riststats_mock {
             self.notify("stats");
         }
 
+        /// Simulate traffic progression
         pub fn tick(&self, delta_original: &[u64], delta_retrans: &[u64], rtt_ms: &[u64]) {
             let imp = self.imp();
             let mut model = imp.model.lock().unwrap();
@@ -504,6 +479,7 @@ mod riststats_mock {
             self.notify("stats");
         }
 
+        /// Simulate network degradation
         pub fn degrade(&self, idx: usize, extra_retrans: u64, new_rtt: u64) {
             let imp = self.imp();
             let mut model = imp.model.lock().unwrap();
@@ -515,15 +491,15 @@ mod riststats_mock {
             self.notify("stats");
         }
 
+        /// Simulate network recovery
         pub fn recover(&self, idx: usize) {
             let imp = self.imp();
             let mut model = imp.model.lock().unwrap();
 
-            // If we have custom stats, we need to create a new structure with updated values
+            // Handle custom stats recovery
             if let Some(ref custom_stats) = model.custom_stats {
                 let session_key = format!("session-{}", idx);
 
-                // Get current values from the custom stats
                 let current_retrans = custom_stats
                     .get::<u64>(&format!("{}.sent-retransmitted-packets", session_key))
                     .unwrap_or(0);
@@ -534,12 +510,10 @@ mod riststats_mock {
                     .get::<u64>(&format!("{}.sent-original-packets", session_key))
                     .unwrap_or(1000);
 
-                // Apply recovery improvements
-                let recovery_factor = 0.3; // Reduce retrans by 30%
+                let recovery_factor = 0.3;
                 let new_retrans = (current_retrans as f64 * recovery_factor) as u64;
 
-                // Improve RTT
-                let target_rtt = 25.0; // Good baseline RTT in ms
+                let target_rtt = 25.0;
                 let new_rtt = if current_rtt > target_rtt {
                     let rtt_improvement = (current_rtt - target_rtt) * 0.6;
                     (current_rtt - rtt_improvement.max(1.0)).max(target_rtt)
@@ -547,29 +521,22 @@ mod riststats_mock {
                     target_rtt
                 };
 
-                // Increase original packets to show continued transmission
                 let new_original = current_original.saturating_add(100);
 
-                // Create a new structure with updated values
                 let mut builder = gst::Structure::builder(custom_stats.name());
 
-                // Manually add all fields, updating the ones we need to recover
-                // First, handle all session fields we know about
                 for session_idx in 0..2 {
-                    // Assume max 2 sessions for now
                     let sess_key = format!("session-{}", session_idx);
                     let orig_key = format!("{}.sent-original-packets", sess_key);
                     let retrans_key = format!("{}.sent-retransmitted-packets", sess_key);
                     let rtt_key = format!("{}.round-trip-time", sess_key);
 
                     if session_idx == idx {
-                        // This is the session we're recovering - use new values
                         builder = builder
                             .field(&orig_key, new_original)
                             .field(&retrans_key, new_retrans)
                             .field(&rtt_key, new_rtt);
                     } else {
-                        // Copy existing values for other sessions
                         if let Ok(orig_val) = custom_stats.get::<u64>(&orig_key) {
                             builder = builder.field(&orig_key, orig_val);
                         }
@@ -582,7 +549,6 @@ mod riststats_mock {
                     }
                 }
 
-                // Replace the custom stats with the new structure
                 model.custom_stats = Some(builder.build());
 
                 gst::debug!(
@@ -598,32 +564,22 @@ mod riststats_mock {
                 );
             }
 
-            // Also update the session model for consistency
+            // Also update session model
             if let Some(sess) = model.sessions.get_mut(idx) {
-                // Recovery logic: improve session performance metrics
-
-                // 1. Reduce retransmission rate by improving the "link quality"
-                // Simulate recovery by reducing accumulated retransmissions
-                let recovery_factor = 0.3; // Reduce retrans by 30%
+                let recovery_factor = 0.3;
                 sess.sent_retrans = (sess.sent_retrans as f64 * recovery_factor) as u64;
 
-                // 2. Improve RTT by simulating better network conditions
-                // Target RTT should be reasonable for recovered connection
-                let target_rtt = 25u64; // Good baseline RTT in ms
+                let target_rtt = 25u64;
                 let current_rtt = sess.rtt_ms;
 
-                // Gradual recovery towards target RTT
                 if current_rtt > target_rtt {
                     let rtt_improvement = ((current_rtt - target_rtt) as f64 * 0.6) as u64;
                     sess.rtt_ms = current_rtt - rtt_improvement.max(1);
                 } else if current_rtt < target_rtt {
-                    // If RTT is already very good, slight degradation for realism
                     sess.rtt_ms = target_rtt;
                 }
 
-                // 3. Stabilize original packet transmission
-                // During recovery, original transmission should be consistent
-                let base_increment = 100u64; // Steady transmission rate
+                let base_increment = 100u64;
                 sess.sent_original = sess.sent_original.saturating_add(base_increment);
             }
 
@@ -633,15 +589,15 @@ mod riststats_mock {
     }
 
     impl GstObjectImpl for Impl {}
+    
     impl ElementImpl for Impl {
         fn metadata() -> Option<&'static gst::subclass::ElementMetadata> {
-            use once_cell::sync::Lazy;
             static ELEMENT_METADATA: Lazy<gst::subclass::ElementMetadata> = Lazy::new(|| {
                 gst::subclass::ElementMetadata::new(
                     "RIST Stats Mock",
                     "Test/Source",
                     "Test element that provides mock RIST sender statistics",
-                    "Test Harness",
+                    "RIST Test Harness",
                 )
             });
             Some(&*ELEMENT_METADATA)

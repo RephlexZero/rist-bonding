@@ -1,10 +1,7 @@
 [workspace]
 members = [
     "ristsmart",
-    "ristsmart-tests",
-    "ristsmart-tests/core",
-    "ristsmart-netem",
-    "netlink-sim",
+    "netlink-sim", 
     "ristlab",
 ]
 
