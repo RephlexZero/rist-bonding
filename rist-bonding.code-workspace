@@ -1,0 +1,11 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "gstreamer/subprojects/gst-plugins-bad/gst/rist"
+		}
+	],
+	"settings": {}
+}
