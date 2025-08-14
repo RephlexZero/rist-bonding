@@ -19,6 +19,139 @@ pub struct LinkParams {
     pub bucket_bytes: usize,
 }
 
+impl LinkParams {
+    /// Create parameters for a good quality link
+    pub fn good() -> Self {
+        Self {
+            base_delay_ms: 10,
+            jitter_ms: 2,
+            loss_pct: 0.0001,
+            reorder_pct: 0.0,
+            duplicate_pct: 0.0,
+            rate_bps: 50_000_000, // 50 Mbps
+            bucket_bytes: 128 * 1024,
+        }
+    }
+
+    /// Create parameters for a poor quality link
+    pub fn poor() -> Self {
+        Self {
+            base_delay_ms: 100,
+            jitter_ms: 25,
+            loss_pct: 0.02,
+            reorder_pct: 0.01,
+            duplicate_pct: 0.001,
+            rate_bps: 2_000_000, // 2 Mbps
+            bucket_bytes: 32 * 1024,
+        }
+    }
+
+    /// Create parameters for a typical internet connection
+    pub fn typical() -> Self {
+        Self {
+            base_delay_ms: 35,
+            jitter_ms: 8,
+            loss_pct: 0.001,
+            reorder_pct: 0.005,
+            duplicate_pct: 0.0,
+            rate_bps: 20_000_000, // 20 Mbps
+            bucket_bytes: 64 * 1024,
+        }
+    }
+
+    /// Create parameters for a mobile/cellular connection
+    pub fn cellular() -> Self {
+        Self {
+            base_delay_ms: 80,
+            jitter_ms: 40,
+            loss_pct: 0.005,
+            reorder_pct: 0.008,
+            duplicate_pct: 0.0005,
+            rate_bps: 10_000_000, // 10 Mbps
+            bucket_bytes: 48 * 1024,
+        }
+    }
+
+    /// Create parameters for a satellite link
+    pub fn satellite() -> Self {
+        Self {
+            base_delay_ms: 300,
+            jitter_ms: 50,
+            loss_pct: 0.003,
+            reorder_pct: 0.002,
+            duplicate_pct: 0.0,
+            rate_bps: 5_000_000, // 5 Mbps
+            bucket_bytes: 32 * 1024,
+        }
+    }
+
+    /// Builder pattern for custom link parameters
+    pub fn builder() -> LinkParamsBuilder {
+        LinkParamsBuilder::default()
+    }
+}
+
+/// Builder for creating custom LinkParams
+#[derive(Default)]
+pub struct LinkParamsBuilder {
+    base_delay_ms: Option<u64>,
+    jitter_ms: Option<u64>,
+    loss_pct: Option<f32>,
+    reorder_pct: Option<f32>,
+    duplicate_pct: Option<f32>,
+    rate_bps: Option<u64>,
+    bucket_bytes: Option<usize>,
+}
+
+impl LinkParamsBuilder {
+    pub fn base_delay_ms(mut self, ms: u64) -> Self {
+        self.base_delay_ms = Some(ms);
+        self
+    }
+
+    pub fn jitter_ms(mut self, ms: u64) -> Self {
+        self.jitter_ms = Some(ms);
+        self
+    }
+
+    pub fn loss_pct(mut self, pct: f32) -> Self {
+        self.loss_pct = Some(pct);
+        self
+    }
+
+    pub fn reorder_pct(mut self, pct: f32) -> Self {
+        self.reorder_pct = Some(pct);
+        self
+    }
+
+    pub fn duplicate_pct(mut self, pct: f32) -> Self {
+        self.duplicate_pct = Some(pct);
+        self
+    }
+
+    pub fn rate_bps(mut self, bps: u64) -> Self {
+        self.rate_bps = Some(bps);
+        self
+    }
+
+    pub fn bucket_bytes(mut self, bytes: usize) -> Self {
+        self.bucket_bytes = Some(bytes);
+        self
+    }
+
+    pub fn build(self) -> LinkParams {
+        LinkParams {
+            base_delay_ms: self.base_delay_ms.unwrap_or(10),
+            jitter_ms: self.jitter_ms.unwrap_or(2),
+            loss_pct: self.loss_pct.unwrap_or(0.0),
+            reorder_pct: self.reorder_pct.unwrap_or(0.0),
+            duplicate_pct: self.duplicate_pct.unwrap_or(0.0),
+            rate_bps: self.rate_bps.unwrap_or(10_000_000),
+            bucket_bytes: self.bucket_bytes.unwrap_or(64 * 1024),
+        }
+    }
+}
+
 /// Simple token bucket rate limiter.
 struct TokenBucket {
     rate_bps: u64,
@@ -52,8 +185,10 @@ impl TokenBucket {
 }
 
 /// Emulator maintains NAT-style mapping of reverse destinations.
+#[derive(Debug)]
 pub struct Emulator {
     pub reverse_dst: HashMap<u16, SocketAddr>,
+    #[allow(dead_code)] // RNG doesn't implement Debug but is used internally
     pub rng: StdRng,
 }
 
@@ -209,4 +344,194 @@ pub async fn run_link(
     });
 
     Ok(())
+}
+
+/// Test scenario configurations for common RIST testing scenarios
+#[derive(Clone, Debug)]
+pub struct TestScenario {
+    pub name: String,
+    pub description: String,
+    pub forward_params: LinkParams,
+    pub reverse_params: LinkParams,
+    pub duration_seconds: Option<u64>,
+}
+
+impl TestScenario {
+    /// Dual-link bonding scenario with asymmetric quality
+    pub fn bonding_asymmetric() -> Self {
+        Self {
+            name: "bonding_asymmetric".to_string(),
+            description: "Two links with different quality characteristics for bonding tests".to_string(),
+            forward_params: LinkParams::typical(),
+            reverse_params: LinkParams::builder()
+                .base_delay_ms(10)
+                .jitter_ms(3)
+                .loss_pct(0.0005)
+                .rate_bps(1_000_000)
+                .build(),
+            duration_seconds: None,
+        }
+    }
+
+    /// Degraded network scenario
+    pub fn degraded_network() -> Self {
+        Self {
+            name: "degraded_network".to_string(),
+            description: "Simulates network degradation with high loss and jitter".to_string(),
+            forward_params: LinkParams::poor(),
+            reverse_params: LinkParams::poor(),
+            duration_seconds: Some(60),
+        }
+    }
+
+    /// Good quality baseline scenario
+    pub fn baseline_good() -> Self {
+        Self {
+            name: "baseline_good".to_string(),
+            description: "Baseline good quality network for comparing against other scenarios".to_string(),
+            forward_params: LinkParams::good(),
+            reverse_params: LinkParams::good(),
+            duration_seconds: Some(30),
+        }
+    }
+
+    /// Mobile/cellular network simulation
+    pub fn mobile_network() -> Self {
+        Self {
+            name: "mobile_network".to_string(),
+            description: "Simulates mobile/cellular network characteristics".to_string(),
+            forward_params: LinkParams::cellular(),
+            reverse_params: LinkParams::cellular(),
+            duration_seconds: Some(45),
+        }
+    }
+
+    /// Varying quality scenario (starts good, degrades, recovers)
+    pub fn varying_quality() -> Self {
+        Self {
+            name: "varying_quality".to_string(),
+            description: "Network that varies in quality over time".to_string(),
+            forward_params: LinkParams::typical(),
+            reverse_params: LinkParams::typical(),
+            duration_seconds: Some(120),
+        }
+    }
+}
+
+/// Network simulator orchestrator for running test scenarios
+#[derive(Debug)]
+pub struct NetworkOrchestrator {
+    emulator: std::sync::Arc<tokio::sync::Mutex<Emulator>>,
+    active_links: Vec<LinkHandle>,
+    next_port_forward: u16,
+    next_port_reverse: u16,
+}
+
+#[derive(Debug)]
+pub struct LinkHandle {
+    pub ingress_port: u16,
+    pub egress_port: u16,
+    pub rx_port: u16,
+    pub scenario: TestScenario,
+}
+
+impl NetworkOrchestrator {
+    pub fn new(seed: u64) -> Self {
+        Self {
+            emulator: std::sync::Arc::new(tokio::sync::Mutex::new(Emulator::new(seed))),
+            active_links: Vec::new(),
+            next_port_forward: 6001,
+            next_port_reverse: 6101,
+        }
+    }
+
+    /// Start a test scenario with automatic port allocation
+    pub async fn start_scenario(&mut self, scenario: TestScenario, rx_port: u16) -> Result<LinkHandle> {
+        let ingress_port = self.next_port_forward;
+        let egress_port = self.next_port_reverse;
+        
+        self.next_port_forward += 1;
+        self.next_port_reverse += 1;
+
+        run_link(
+            ingress_port,
+            egress_port,
+            rx_port,
+            self.emulator.clone(),
+            scenario.forward_params.clone(),
+            scenario.reverse_params.clone(),
+        ).await?;
+
+        let handle = LinkHandle {
+            ingress_port,
+            egress_port,
+            rx_port,
+            scenario,
+        };
+
+        self.active_links.push(handle.clone());
+        Ok(handle)
+    }
+
+    /// Start multiple scenarios for bonding tests
+    pub async fn start_bonding_scenarios(&mut self, scenarios: Vec<TestScenario>, rx_port: u16) -> Result<Vec<LinkHandle>> {
+        let mut handles = Vec::new();
+        for scenario in scenarios {
+            let handle = self.start_scenario(scenario, rx_port).await?;
+            handles.push(handle);
+        }
+        Ok(handles)
+    }
+
+    /// Get summary of active links
+    pub fn get_active_links(&self) -> &[LinkHandle] {
+        &self.active_links
+    }
+
+    /// Run a scenario for its specified duration (if any)
+    pub async fn run_scenario_duration(&self, handle: &LinkHandle) -> Result<()> {
+        if let Some(duration) = handle.scenario.duration_seconds {
+            println!("Running scenario '{}' for {} seconds", handle.scenario.name, duration);
+            sleep(Duration::from_secs(duration)).await;
+            println!("Scenario '{}' completed", handle.scenario.name);
+        }
+        Ok(())
+    }
+}
+
+impl Clone for LinkHandle {
+    fn clone(&self) -> Self {
+        Self {
+            ingress_port: self.ingress_port,
+            egress_port: self.egress_port,
+            rx_port: self.rx_port,
+            scenario: self.scenario.clone(),
+        }
+    }
+}
+
+/// Convenience function to start a typical RIST bonding test setup
+pub async fn start_rist_bonding_test(rx_port: u16) -> Result<NetworkOrchestrator> {
+    let mut orchestrator = NetworkOrchestrator::new(42);
+    
+    // Start two links with different characteristics for bonding
+    let scenario_a = TestScenario::bonding_asymmetric();
+    let mut scenario_b = TestScenario::bonding_asymmetric();
+    
+    // Modify second link to have different characteristics
+    scenario_b.forward_params.base_delay_ms = 80;
+    scenario_b.forward_params.loss_pct = 0.005;
+    scenario_b.forward_params.rate_bps = 6_000_000;
+    scenario_b.name = "bonding_asymmetric_b".to_string();
+    
+    let _handles = orchestrator.start_bonding_scenarios(vec![scenario_a, scenario_b], rx_port).await?;
+    
+    println!("RIST bonding test setup complete:");
+    for (i, handle) in orchestrator.get_active_links().iter().enumerate() {
+        println!("  Link {}: {} -> {} (rx: {})", 
+            i + 1, handle.ingress_port, handle.egress_port, handle.rx_port);
+        println!("    Scenario: {} - {}", handle.scenario.name, handle.scenario.description);
+    }
+    
+    Ok(orchestrator)
 }

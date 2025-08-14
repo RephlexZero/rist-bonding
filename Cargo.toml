@@ -2,7 +2,6 @@
 members = [
     "ristsmart",
     "netlink-sim", 
-    "ristlab",
 ]
 
 resolver = "2"

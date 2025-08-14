@@ -13,6 +13,90 @@ use crate::test_harness::RistStatsMock;
 use gstreamer as gst;
 use gst::prelude::*;
 
+/// Network simulation integration (only available in tests)
+#[cfg(test)]
+pub mod network_sim {
+    use netlink_sim::{NetworkOrchestrator, TestScenario, start_rist_bonding_test};
+    use gstreamer::prelude::*;
+    use std::future::Future;
+    use tokio::time::{timeout, Duration};
+    
+    /// Start a network simulation scenario for RIST testing
+    pub async fn setup_network_scenario(scenario: TestScenario, rx_port: u16) -> Result<NetworkOrchestrator, Box<dyn std::error::Error>> {
+        let mut orchestrator = NetworkOrchestrator::new(42);
+        let _handle = orchestrator.start_scenario(scenario, rx_port).await?;
+        Ok(orchestrator)
+    }
+    
+    /// Setup dual-link bonding test environment
+    pub async fn setup_bonding_test(rx_port: u16) -> Result<NetworkOrchestrator, Box<dyn std::error::Error>> {
+        let orchestrator = start_rist_bonding_test(rx_port).await?;
+        Ok(orchestrator)
+    }
+    
+    /// Run a test with network simulation for a specific duration
+    pub async fn run_test_with_network<F, Fut>(
+        scenario: TestScenario, 
+        rx_port: u16,
+        test_duration_secs: u64,
+        test_fn: F
+    ) -> Result<(), Box<dyn std::error::Error>>
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: Future<Output = Result<(), String>> + Send + 'static,
+    {
+        let _orchestrator = setup_network_scenario(scenario, rx_port).await?;
+        
+        // Run the test with a timeout
+        let test_future = test_fn();
+        let result = timeout(Duration::from_secs(test_duration_secs), test_future).await;
+        
+        match result {
+            Ok(test_result) => test_result.map_err(|e| e.into()),
+            Err(_) => Err(format!("Test timed out after {} seconds", test_duration_secs).into()),
+        }
+    }
+    
+    /// Create preset network scenarios for common test cases
+    pub fn get_test_scenarios() -> Vec<TestScenario> {
+        vec![
+            TestScenario::baseline_good(),
+            TestScenario::degraded_network(),
+            TestScenario::mobile_network(),
+            TestScenario::bonding_asymmetric(),
+            TestScenario::varying_quality(),
+        ]
+    }
+    
+    /// Helper to test RIST dispatcher behavior under different network conditions
+    pub async fn test_dispatcher_with_network(
+        weights: Option<&[f64]>,
+        scenario: TestScenario,
+        rx_port: u16,
+        test_duration_secs: u64,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let _orchestrator = setup_network_scenario(scenario, rx_port).await?;
+        
+        // Initialize RIST elements
+        crate::testing::init_for_tests();
+        
+        let dispatcher = crate::testing::create_dispatcher_for_testing(weights);
+        
+        // Create a simple test pipeline
+        let pipeline = gstreamer::Pipeline::new();
+        let src = crate::testing::create_test_source();
+        let sink = crate::testing::create_fake_sink();
+        
+        pipeline.add_many([&src, &dispatcher, &sink])?;
+        gstreamer::Element::link_many([&src, &dispatcher, &sink])?;
+        
+        // Run the test
+        crate::testing::run_pipeline_for_duration(&pipeline, test_duration_secs)?;
+        
+        Ok(())
+    }
+}
+
 /// Initialize GStreamer and register all RIST elements for testing
 /// This should be called at the start of each test
 #[cfg(feature = "test-plugin")]
