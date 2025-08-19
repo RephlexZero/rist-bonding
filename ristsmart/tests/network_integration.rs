@@ -3,7 +3,6 @@
 use gstristsmart::testing;
 use gstreamer::prelude::*;
 use netlink_sim::{TestScenario, NetworkOrchestrator, start_rist_bonding_test};
-use serde_json::json;
 
 // Helper functions for network simulation integration
 async fn setup_network_scenario(scenario: TestScenario, rx_port: u16) -> Result<NetworkOrchestrator, Box<dyn std::error::Error>> {
@@ -139,20 +138,35 @@ fn build_sender_pipeline(ports: (u16, u16)) -> (gstreamer::Pipeline, gstreamer::
         .property("is-live", true)
         .build()
         .expect("Failed to create audiotestsrc");
-    let dispatcher = testing::create_dispatcher_for_testing(Some(&[0.5, 0.5]));
-    let sessions = json!([
-        {"address": "127.0.0.1", "port": ports.0},
-        {"address": "127.0.0.1", "port": ports.1},
-    ]);
+    
+    // Create capsfilter to specify audio format for RTP payloader
+    let caps = gstreamer::Caps::builder("audio/x-raw")
+        .field("format", "S16BE")
+        .field("layout", "interleaved")
+        .field("channels", 2)
+        .field("rate", 48000)
+        .build();
+    let capsfilter = gstreamer::ElementFactory::make("capsfilter")
+        .property("caps", &caps)
+        .build()
+        .expect("Failed to create capsfilter");
+    
+    // Add RTP payloader since ristsink expects RTP payloaded data (per documentation)
+    let payloader = gstreamer::ElementFactory::make("rtpL16pay")
+        .build()
+        .expect("Failed to create rtpL16pay");
+    
+    // Create ristsink with bonding addresses - it will handle multiple sessions internally
+    let bonding_addresses = format!("127.0.0.1:{},127.0.0.1:{}", ports.0, ports.1);
     let ristsink = gstreamer::ElementFactory::make("ristsink")
-        .property("sessions", sessions.to_string())
+        .property("bonding-addresses", bonding_addresses)
         .build()
         .expect("Failed to create ristsink");
 
     pipeline
-        .add_many([&src, &dispatcher, &ristsink])
+        .add_many([&src, &capsfilter, &payloader, &ristsink])
         .expect("failed to add elements");
-    gstreamer::Element::link_many([&src, &dispatcher, &ristsink])
+    gstreamer::Element::link_many([&src, &capsfilter, &payloader, &ristsink])
         .expect("failed to link sender pipeline");
 
     (pipeline, ristsink)
@@ -166,31 +180,37 @@ fn build_receiver_pipeline(rx_port: u16) -> (gstreamer::Pipeline, gstreamer::Ele
         .property("port", rx_port as u32)
         .build()
         .expect("Failed to create ristsrc");
+    
+    // Add RTP depayloader since ristsrc outputs RTP data (per documentation)
+    // Use natural caps negotiation without restrictive capsfilter
+    let depayloader = gstreamer::ElementFactory::make("rtpL16depay")
+        .build()
+        .expect("Failed to create rtpL16depay");
+    
     let counter = testing::create_counter_sink();
 
     pipeline
-        .add_many([&ristsrc, &counter])
+        .add_many([&ristsrc, &depayloader, &counter])
         .expect("failed to add receiver elements");
-    ristsrc
-        .link(&counter)
+    gstreamer::Element::link_many([&ristsrc, &depayloader, &counter])
         .expect("failed to link receiver pipeline");
 
     (pipeline, counter)
 }
 
-// Run two pipelines concurrently for duration seconds
+// Run two pipelines concurrently for longer duration to allow jitter buffer
 async fn run_pipelines(
     sender: gstreamer::Pipeline,
     receiver: gstreamer::Pipeline,
-    duration: u64,
 ) {
-    let s_handle = tokio::task::spawn_blocking(move || {
-        testing::run_pipeline_for_duration(&sender, duration).unwrap();
-    });
-    let r_handle = tokio::task::spawn_blocking(move || {
-        testing::run_pipeline_for_duration(&receiver, duration).unwrap();
-    });
-    let _ = tokio::join!(s_handle, r_handle);
+    receiver.set_state(gstreamer::State::Playing).unwrap();
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    sender.set_state(gstreamer::State::Playing).unwrap();
+    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;  // Increased from 2 to 10 seconds
+
+    sender.set_state(gstreamer::State::Null).unwrap();
+    receiver.set_state(gstreamer::State::Null).unwrap();
 }
 
 /// End-to-end test using real RIST transport elements over simulated links
@@ -200,20 +220,38 @@ async fn test_end_to_end_rist_over_simulated_links() {
     testing::init_for_tests();
 
     let rx_port = 6000u16;
-    let mut orchestrator = NetworkOrchestrator::new(0);
+    let mut orchestrator = NetworkOrchestrator::new(8000); // Start from 8000 (even)
+    
+    // Get first link
     let link1 = orchestrator
         .start_scenario(TestScenario::baseline_good(), rx_port)
         .await
         .expect("failed to start first link");
-    let link2 = orchestrator
+    
+    // Skip to next even port for second link
+    let mut link2 = orchestrator
         .start_scenario(TestScenario::degraded_network(), rx_port)
         .await
         .expect("failed to start second link");
+    
+    // If second link is odd, get another one
+    while link2.ingress_port % 2 != 0 {
+        link2 = orchestrator
+            .start_scenario(TestScenario::degraded_network(), rx_port)
+            .await
+            .expect("failed to start second link");
+    }
 
-    let (sender_pipeline, ristsink) = build_sender_pipeline((link1.ingress_port, link2.ingress_port));
+    let port1 = link1.ingress_port;
+    let port2 = link2.ingress_port;
+    
+    println!("Using even ingress ports: {} and {}", port1, port2);
+
+    // Run for longer to allow jitter buffer to properly release packets
+    let (sender_pipeline, ristsink) = build_sender_pipeline((port1, port2));
     let (receiver_pipeline, counter) = build_receiver_pipeline(rx_port);
-
-    run_pipelines(sender_pipeline, receiver_pipeline, 2).await;
+    
+    run_pipelines(sender_pipeline, receiver_pipeline).await;
 
     let count: u64 = testing::get_property(&counter, "count").unwrap();
     assert!(count > 0, "counter_sink received no buffers");
