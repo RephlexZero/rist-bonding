@@ -28,6 +28,8 @@ once_cell = "1.21.3"
 
 # Test dependencies (only when test-plugin feature is enabled)
 glib = { version = "0.21.1", optional = true }
+netlink-sim = { path = "../netlink-sim", optional = true }
+tokio = { version = "1.47.1", features = ["full"], optional = true }
 
 [dev-dependencies]
 # Dependencies for integration tests
@@ -38,12 +40,10 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["fmt", "env-filter"] }
 plotters = "0.3.7"
 plotters-svg = "0.3.7"
-# Network simulation for integration testing
-netlink-sim = { path = "../netlink-sim" }
-tokio = { version = "1.47.1", features = ["full"] }
 
 [build-dependencies]
 
 [features]
-default = ["test-plugin"]
+default = ["test-plugin", "network-sim"]
 test-plugin = ["glib"]
+network-sim = ["netlink-sim", "tokio"]

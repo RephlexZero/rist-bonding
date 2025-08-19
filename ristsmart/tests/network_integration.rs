@@ -1,7 +1,7 @@
 //! End-to-end RIST bonding test over the network simulator.
 
 use gstreamer::prelude::*;
-use gstristsmart::testing;
+use gstristsmart::testing::{self, network_sim::*};
 use netlink_sim::{NetworkOrchestrator, TestScenario};
 
 /// Create a sender pipeline with sessions pointing to orchestrator ingress ports.
@@ -280,7 +280,7 @@ async fn setup_network_scenario(
 #[tokio::test]
 async fn test_end_to_end_rist_over_simulated_network() {
     testing::init_for_tests();
-    
+
     let scenario = TestScenario::baseline_good();
     let rx_port = 5204; // Use different port range
     
@@ -289,15 +289,16 @@ async fn test_end_to_end_rist_over_simulated_network() {
         scenario,
         rx_port,
         5, // 5 second test
-    ).await;
-    
+    )
+    .await;
+
     assert!(result.is_ok(), "Test failed: {:?}", result);
 }
 
-#[tokio::test] 
+#[tokio::test]
 async fn test_dispatcher_with_poor_network() {
     testing::init_for_tests();
-    
+
     let scenario = TestScenario::degraded_network();
     let rx_port = 5206; // Use even port number
     
@@ -306,9 +307,14 @@ async fn test_dispatcher_with_poor_network() {
         scenario,
         rx_port,
         5, // 5 second test
-    ).await;
-    
-    assert!(result.is_ok(), "Test with poor network failed: {:?}", result);
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "Test with poor network failed: {:?}",
+        result
+    );
 }
 
 #[tokio::test]
@@ -317,29 +323,43 @@ async fn test_bonding_setup() {
     
     let result = setup_bonding_test(rx_port).await;
     assert!(result.is_ok(), "Bonding setup failed: {:?}", result.err());
-    
+
     let orchestrator = result.unwrap();
     let active_links = orchestrator.get_active_links();
-    
+
     // Should have 2 links for bonding
-    assert_eq!(active_links.len(), 2, "Expected 2 active links for bonding test");
-    
+    assert_eq!(
+        active_links.len(),
+        2,
+        "Expected 2 active links for bonding test"
+    );
+
     // Verify different ingress ports
-    assert_ne!(active_links[0].ingress_port, active_links[1].ingress_port, 
-        "Links should have different ingress ports");
+    assert_ne!(
+        active_links[0].ingress_port, active_links[1].ingress_port,
+        "Links should have different ingress ports"
+    );
 }
 
-#[tokio::test] 
+#[tokio::test]
 async fn test_multiple_scenarios() {
     let scenarios = get_test_scenarios();
-    
-    assert!(scenarios.len() >= 4, "Expected at least 4 predefined scenarios");
-    
+
+    assert!(
+        scenarios.len() >= 4,
+        "Expected at least 4 predefined scenarios"
+    );
+
     // Test each scenario setup (without running full tests)
     for (i, scenario) in scenarios.into_iter().enumerate().take(3) {
         let rx_port = 5230 + (i as u16 * 10); // Use well-spaced port ranges
         let result = setup_network_scenario(scenario, rx_port).await;
-        assert!(result.is_ok(), "Failed to setup scenario {}: {:?}", i, result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to setup scenario {}: {:?}",
+            i,
+            result.err()
+        );
     }
 }
 
@@ -349,7 +369,11 @@ async fn test_cellular_network_scenario() {
     let rx_port = 5220; // Use even port number
 
     let result = setup_network_scenario(scenario, rx_port).await;
-    assert!(result.is_ok(), "Failed to setup cellular scenario: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to setup cellular scenario: {:?}",
+        result.err()
+    );
 }
 
 /// End-to-end test using real RIST transport elements over simulated links
@@ -360,19 +384,19 @@ async fn test_end_to_end_rist_over_simulated_links() {
 
     let rx_port = 6000u16;
     let mut orchestrator = NetworkOrchestrator::new(8000); // Start from 8000 (even)
-    
+
     // Get first link
     let link1 = orchestrator
         .start_scenario(TestScenario::baseline_good(), rx_port)
         .await
         .expect("failed to start first link");
-    
+
     // Skip to next even port for second link
     let mut link2 = orchestrator
         .start_scenario(TestScenario::degraded_network(), rx_port)
         .await
         .expect("failed to start second link");
-    
+
     // If second link is odd, get another one
     while link2.ingress_port % 2 != 0 {
         link2 = orchestrator
@@ -383,7 +407,7 @@ async fn test_end_to_end_rist_over_simulated_links() {
 
     let port1 = link1.ingress_port;
     let port2 = link2.ingress_port;
-    
+
     println!("Using even ingress ports: {} and {}", port1, port2);
 
     // Run for longer to allow jitter buffer to properly release packets
