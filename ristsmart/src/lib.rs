@@ -45,7 +45,7 @@ pub fn register_for_tests() {
     // Register main elements with None plugin handle
     let _ = dispatcher::register_static();
     let _ = dynbitrate::register_static();
-    
+
     // Register test harness elements
     if let Err(e) = test_harness::register_test_elements() {
         eprintln!("Failed to register test harness elements: {}", e);

@@ -7,14 +7,14 @@ use netlink_sim::{NetworkOrchestrator, TestScenario};
 /// Create a sender pipeline with sessions pointing to orchestrator ingress ports.
 fn build_sender_pipeline(ports: &[u16]) -> (gstreamer::Pipeline, gstreamer::Element) {
     let pipeline = gstreamer::Pipeline::new();
-    
+
     // Create video test source at 1080p60
     let videotestsrc = gstreamer::ElementFactory::make("videotestsrc")
         .property("is-live", true)
         .property("num-buffers", 300) // 5 seconds at 60fps
         .build()
         .expect("Failed to create videotestsrc");
-    
+
     // Create audio test source with sine wave
     let audiotestsrc = gstreamer::ElementFactory::make("audiotestsrc")
         .property("is-live", true)
@@ -22,16 +22,16 @@ fn build_sender_pipeline(ports: &[u16]) -> (gstreamer::Pipeline, gstreamer::Elem
         .property("freq", 440.0) // 440 Hz sine wave (A4 note)
         .build()
         .expect("Failed to create audiotestsrc");
-    
+
     // Video processing chain
     let videoconvert = gstreamer::ElementFactory::make("videoconvert")
         .build()
         .expect("Failed to create videoconvert");
-    
+
     let videoscale = gstreamer::ElementFactory::make("videoscale")
         .build()
         .expect("Failed to create videoscale");
-    
+
     // Video caps for 1080p60
     let video_caps = gstreamer::Caps::builder("video/x-raw")
         .field("width", 1920)
@@ -43,29 +43,29 @@ fn build_sender_pipeline(ports: &[u16]) -> (gstreamer::Pipeline, gstreamer::Elem
         .property("caps", &video_caps)
         .build()
         .expect("Failed to create video capsfilter");
-    
+
     // H.265 encoder
     let x265enc = gstreamer::ElementFactory::make("x265enc")
         .property("bitrate", 5000u32) // 5 Mbps for 1080p60
         .build()
         .expect("Failed to create x265enc");
-    
+
     // RTP H.265 payloader
     let rtph265pay = gstreamer::ElementFactory::make("rtph265pay")
         .property("pt", 96u32)
         .property("config-interval", -1i32) // Send VPS/SPS/PPS with every IDR
         .build()
         .expect("Failed to create rtph265pay");
-    
+
     // Audio processing chain
     let audioconvert = gstreamer::ElementFactory::make("audioconvert")
         .build()
         .expect("Failed to create audioconvert");
-        
+
     let audioresample = gstreamer::ElementFactory::make("audioresample")
         .build()
         .expect("Failed to create audioresample");
-    
+
     // Audio caps for L16 (16-bit PCM)
     let audio_caps = gstreamer::Caps::builder("audio/x-raw")
         .field("format", "S16BE") // Big endian for L16
@@ -77,25 +77,22 @@ fn build_sender_pipeline(ports: &[u16]) -> (gstreamer::Pipeline, gstreamer::Elem
         .property("caps", &audio_caps)
         .build()
         .expect("Failed to create audio capsfilter");
-    
+
     // RTP L16 payloader (raw audio)
     let rtp_l16pay = gstreamer::ElementFactory::make("rtpL16pay")
         .property("pt", 97u32)
         .build()
         .expect("Failed to create rtpL16pay");
-    
+
     // RTP muxer to combine video and audio streams
     let rtpmux = gstreamer::ElementFactory::make("rtpmux")
         .build()
         .expect("Failed to create rtpmux");
 
     // Create bonding addresses as comma-separated string
-    let bonding_addresses: Vec<String> = ports
-        .iter()
-        .map(|p| format!("127.0.0.1:{}", p))
-        .collect();
+    let bonding_addresses: Vec<String> = ports.iter().map(|p| format!("127.0.0.1:{}", p)).collect();
     let bonding_addresses_str = bonding_addresses.join(",");
-    
+
     let ristsink = gstreamer::ElementFactory::make("ristsink")
         .property("bonding-addresses", bonding_addresses_str)
         .build()
@@ -104,26 +101,55 @@ fn build_sender_pipeline(ports: &[u16]) -> (gstreamer::Pipeline, gstreamer::Elem
     // Add all elements to pipeline
     pipeline
         .add_many([
-            &videotestsrc, &videoconvert, &videoscale, &video_capsfilter, &x265enc, &rtph265pay,
-            &audiotestsrc, &audioconvert, &audioresample, &audio_capsfilter, &rtp_l16pay,
-            &rtpmux, &ristsink
+            &videotestsrc,
+            &videoconvert,
+            &videoscale,
+            &video_capsfilter,
+            &x265enc,
+            &rtph265pay,
+            &audiotestsrc,
+            &audioconvert,
+            &audioresample,
+            &audio_capsfilter,
+            &rtp_l16pay,
+            &rtpmux,
+            &ristsink,
         ])
         .expect("failed to add elements");
-    
+
     // Link video chain: videotestsrc -> videoconvert -> videoscale -> caps -> x265enc -> rtph265pay
-    gstreamer::Element::link_many([&videotestsrc, &videoconvert, &videoscale, &video_capsfilter, &x265enc, &rtph265pay])
-        .expect("failed to link video chain");
-    
+    gstreamer::Element::link_many([
+        &videotestsrc,
+        &videoconvert,
+        &videoscale,
+        &video_capsfilter,
+        &x265enc,
+        &rtph265pay,
+    ])
+    .expect("failed to link video chain");
+
     // Link audio chain: audiotestsrc -> audioconvert -> audioresample -> caps -> rtp_l16pay
-    gstreamer::Element::link_many([&audiotestsrc, &audioconvert, &audioresample, &audio_capsfilter, &rtp_l16pay])
-        .expect("failed to link audio chain");
-    
+    gstreamer::Element::link_many([
+        &audiotestsrc,
+        &audioconvert,
+        &audioresample,
+        &audio_capsfilter,
+        &rtp_l16pay,
+    ])
+    .expect("failed to link audio chain");
+
     // Connect RTP payloaders to muxer
-    rtph265pay.link(&rtpmux).expect("failed to link video to rtpmux");
-    rtp_l16pay.link(&rtpmux).expect("failed to link audio to rtpmux");
-    
+    rtph265pay
+        .link(&rtpmux)
+        .expect("failed to link video to rtpmux");
+    rtp_l16pay
+        .link(&rtpmux)
+        .expect("failed to link audio to rtpmux");
+
     // Connect muxer to ristsink
-    rtpmux.link(&ristsink).expect("failed to link rtpmux to ristsink");
+    rtpmux
+        .link(&ristsink)
+        .expect("failed to link rtpmux to ristsink");
 
     (pipeline, ristsink)
 }
@@ -136,68 +162,78 @@ fn build_receiver_pipeline(port: u16) -> (gstreamer::Pipeline, gstreamer::Elemen
         .property("port", port as u32)
         .build()
         .expect("Failed to create ristsrc");
-    
+
     // RTP demuxer to separate video and audio streams
     let rtpptdemux = gstreamer::ElementFactory::make("rtpptdemux")
         .build()
         .expect("Failed to create rtpptdemux");
-    
+
     // Video processing chain
     let rtph265depay = gstreamer::ElementFactory::make("rtph265depay")
         .build()
         .expect("Failed to create rtph265depay");
-    
+
     let avdec_h265 = gstreamer::ElementFactory::make("avdec_h265")
         .build()
         .expect("Failed to create avdec_h265");
-    
+
     let videoconvert = gstreamer::ElementFactory::make("videoconvert")
         .build()
         .expect("Failed to create videoconvert");
-    
+
     // Audio processing chain
     let rtp_l16depay = gstreamer::ElementFactory::make("rtpL16depay")
         .build()
         .expect("Failed to create rtpL16depay");
-    
+
     let audioconvert = gstreamer::ElementFactory::make("audioconvert")
         .build()
         .expect("Failed to create audioconvert");
-    
+
     // Counter sinks for testing
     let video_counter = testing::create_counter_sink();
     let audio_counter = testing::create_counter_sink();
 
     pipeline
         .add_many([
-            &ristsrc, &rtpptdemux,
-            &rtph265depay, &avdec_h265, &videoconvert, &video_counter,
-            &rtp_l16depay, &audioconvert, &audio_counter
+            &ristsrc,
+            &rtpptdemux,
+            &rtph265depay,
+            &avdec_h265,
+            &videoconvert,
+            &video_counter,
+            &rtp_l16depay,
+            &audioconvert,
+            &audio_counter,
         ])
         .expect("failed to add receiver elements");
-    
+
     // Link initial chain: ristsrc -> rtpptdemux
-    ristsrc.link(&rtpptdemux).expect("failed to link ristsrc to rtpptdemux");
-    
+    ristsrc
+        .link(&rtpptdemux)
+        .expect("failed to link ristsrc to rtpptdemux");
+
     // Link video chain: rtph265depay -> avdec_h265 -> videoconvert -> video_counter
     gstreamer::Element::link_many([&rtph265depay, &avdec_h265, &videoconvert, &video_counter])
         .expect("failed to link video chain");
-    
+
     // Link audio chain: rtp_l16depay -> audioconvert -> audio_counter
     gstreamer::Element::link_many([&rtp_l16depay, &audioconvert, &audio_counter])
         .expect("failed to link audio chain");
-    
+
     // Connect rtpptdemux pads dynamically when available
     let video_depay_clone = rtph265depay.clone();
     let audio_depay_clone = rtp_l16depay.clone();
-    
+
     rtpptdemux.connect_pad_added(move |_element, src_pad| {
         let pad_name = src_pad.name();
-        if pad_name.as_str().contains("96") { // H.265 video
+        if pad_name.as_str().contains("96") {
+            // H.265 video
             if let Some(sink_pad) = video_depay_clone.static_pad("sink") {
                 let _ = src_pad.link(&sink_pad);
             }
-        } else if pad_name.as_str().contains("97") { // L16 audio  
+        } else if pad_name.as_str().contains("97") {
+            // L16 audio
             if let Some(sink_pad) = audio_depay_clone.static_pad("sink") {
                 let _ = src_pad.link(&sink_pad);
             }
@@ -227,31 +263,39 @@ async fn test_dispatcher_with_network(
     duration: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut orchestrator = NetworkOrchestrator::new(8000u64 + rx_port as u64);
-    
+
     // Start network links
-    let link1 = orchestrator.start_scenario(scenario.clone(), rx_port).await?;
+    let link1 = orchestrator
+        .start_scenario(scenario.clone(), rx_port)
+        .await?;
     let link2 = orchestrator.start_scenario(scenario, rx_port).await?;
-    
+
     let ports = vec![link1.ingress_port, link2.ingress_port];
     let (sender_pipeline, _ristsink) = build_sender_pipeline(&ports);
     let (receiver_pipeline, counter) = build_receiver_pipeline(rx_port);
-    
+
     run_pipelines(sender_pipeline, receiver_pipeline, duration).await;
-    
+
     let count: u64 = testing::get_property(&counter, "count").unwrap();
     assert!(count > 0, "counter_sink received no buffers");
-    
+
     Ok(())
 }
 
 /// Helper function to setup bonding test
-async fn setup_bonding_test(rx_port: u16) -> Result<NetworkOrchestrator, Box<dyn std::error::Error>> {
+async fn setup_bonding_test(
+    rx_port: u16,
+) -> Result<NetworkOrchestrator, Box<dyn std::error::Error>> {
     let mut orchestrator = NetworkOrchestrator::new(8000u64 + rx_port as u64);
-    
+
     // Start two network links for bonding
-    orchestrator.start_scenario(TestScenario::baseline_good(), rx_port).await?;
-    orchestrator.start_scenario(TestScenario::degraded_network(), rx_port).await?;
-    
+    orchestrator
+        .start_scenario(TestScenario::baseline_good(), rx_port)
+        .await?;
+    orchestrator
+        .start_scenario(TestScenario::degraded_network(), rx_port)
+        .await?;
+
     Ok(orchestrator)
 }
 
@@ -283,7 +327,7 @@ async fn test_end_to_end_rist_over_simulated_network() {
 
     let scenario = TestScenario::baseline_good();
     let rx_port = 5204; // Use different port range
-    
+
     let result = test_dispatcher_with_network(
         Some(&[0.6, 0.4]),
         scenario,
@@ -301,7 +345,7 @@ async fn test_dispatcher_with_poor_network() {
 
     let scenario = TestScenario::degraded_network();
     let rx_port = 5206; // Use even port number
-    
+
     let result = test_dispatcher_with_network(
         Some(&[0.5, 0.5]),
         scenario,
@@ -320,7 +364,7 @@ async fn test_dispatcher_with_poor_network() {
 #[tokio::test]
 async fn test_bonding_setup() {
     let rx_port = 5208; // Use even port number
-    
+
     let result = setup_bonding_test(rx_port).await;
     assert!(result.is_ok(), "Bonding setup failed: {:?}", result.err());
 
@@ -413,7 +457,7 @@ async fn test_end_to_end_rist_over_simulated_links() {
     // Run for longer to allow jitter buffer to properly release packets
     let (sender_pipeline, ristsink) = build_sender_pipeline(&[port1, port2]);
     let (receiver_pipeline, counter) = build_receiver_pipeline(rx_port);
-    
+
     run_pipelines(sender_pipeline, receiver_pipeline, 10).await;
 
     let count: u64 = testing::get_property(&counter, "count").unwrap();

@@ -1,5 +1,5 @@
 //! Test harness elements for RIST dispatcher testing
-//! 
+//!
 //! This module contains mock elements that are only compiled when the 'test-plugin' feature is enabled.
 //! These elements provide controlled testing environments for the RIST dispatcher and dynamic bitrate controller.
 
@@ -9,18 +9,18 @@ use gst::glib;
 use gst::prelude::*;
 use gst::subclass::prelude::{ElementImpl, GstObjectImpl};
 use gstreamer as gst;
+use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use once_cell::sync::Lazy;
 
 /// Register all test harness elements
 pub fn register_test_elements() -> Result<()> {
     let _ = gst::init();
-    
+
     counter_sink::register()?;
     encoder_stub::register()?;
     riststats_mock::register()?;
-    
+
     Ok(())
 }
 
@@ -468,11 +468,9 @@ pub mod riststats_mock {
                     let model = self.model.lock().unwrap();
                     model.rtt.to_value()
                 }
-                _ => {
-                    gst::Structure::builder("rist/x-sender-stats")
-                        .build()
-                        .to_value()
-                }
+                _ => gst::Structure::builder("rist/x-sender-stats")
+                    .build()
+                    .to_value(),
             }
         }
     }
@@ -638,7 +636,7 @@ pub mod riststats_mock {
     }
 
     impl GstObjectImpl for Impl {}
-    
+
     impl ElementImpl for Impl {
         fn metadata() -> Option<&'static gst::subclass::ElementMetadata> {
             static ELEMENT_METADATA: Lazy<gst::subclass::ElementMetadata> = Lazy::new(|| {

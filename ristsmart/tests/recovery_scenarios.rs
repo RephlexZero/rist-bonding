@@ -3,10 +3,10 @@
 //! These tests simulate real-world network conditions including degradation,
 //! recovery, and multiple failure/recovery cycles to ensure robust behavior.
 
-use gstristsmart::testing::*;
-use gstristsmart::test_pipeline;
-use gstreamer as gst;
 use gst::prelude::*;
+use gstreamer as gst;
+use gstristsmart::test_pipeline;
+use gstristsmart::testing::*;
 
 #[test]
 fn test_single_link_degradation_recovery() {
@@ -25,7 +25,7 @@ fn test_single_link_degradation_recovery() {
 
     // Create a test source with more buffers to ensure we don't hit the limit
     let source = gst::ElementFactory::make("audiotestsrc")
-        .property("num-buffers", 500)  // Increased from default 100
+        .property("num-buffers", 500) // Increased from default 100
         .property("freq", 440.0)
         .build()
         .expect("Failed to create audiotestsrc");
@@ -36,8 +36,12 @@ fn test_single_link_degradation_recovery() {
     let src_1 = dispatcher.request_pad_simple("src_%u").unwrap();
 
     source.link(&dispatcher).expect("Failed to link source");
-    src_0.link(&counter1.static_pad("sink").unwrap()).expect("Failed to link src_0");
-    src_1.link(&counter2.static_pad("sink").unwrap()).expect("Failed to link src_1");
+    src_0
+        .link(&counter1.static_pad("sink").unwrap())
+        .expect("Failed to link src_0");
+    src_1
+        .link(&counter2.static_pad("sink").unwrap())
+        .expect("Failed to link src_1");
 
     // Phase 1: Normal operation
     println!("Phase 1: Normal operation");
@@ -45,7 +49,10 @@ fn test_single_link_degradation_recovery() {
 
     let phase1_count1: u64 = get_property(&counter1, "count").unwrap();
     let phase1_count2: u64 = get_property(&counter2, "count").unwrap();
-    println!("Phase 1 - Counter 1: {}, Counter 2: {}", phase1_count1, phase1_count2);
+    println!(
+        "Phase 1 - Counter 1: {}, Counter 2: {}",
+        phase1_count1, phase1_count2
+    );
 
     // Phase 2: Degrade link 0
     println!("Phase 2: Degrading link 0");
@@ -55,7 +62,10 @@ fn test_single_link_degradation_recovery() {
 
     let phase2_count1: u64 = get_property(&counter1, "count").unwrap();
     let phase2_count2: u64 = get_property(&counter2, "count").unwrap();
-    println!("Phase 2 - Counter 1: {}, Counter 2: {}", phase2_count1, phase2_count2);
+    println!(
+        "Phase 2 - Counter 1: {}, Counter 2: {}",
+        phase2_count1, phase2_count2
+    );
 
     // Phase 3: Recover link 0
     println!("Phase 3: Recovering link 0");
@@ -65,22 +75,36 @@ fn test_single_link_degradation_recovery() {
 
     let phase3_count1: u64 = get_property(&counter1, "count").unwrap();
     let phase3_count2: u64 = get_property(&counter2, "count").unwrap();
-    println!("Phase 3 - Counter 1: {}, Counter 2: {}", phase3_count1, phase3_count2);
+    println!(
+        "Phase 3 - Counter 1: {}, Counter 2: {}",
+        phase3_count1, phase3_count2
+    );
 
     // Verify progression through all phases
-    assert!(phase2_count1 > phase1_count1, "Should have continued sending in phase 2");
-    
+    assert!(
+        phase2_count1 > phase1_count1,
+        "Should have continued sending in phase 2"
+    );
+
     // In phase 3, the total traffic should continue, but individual paths might change
     // based on load balancing decisions
     let phase1_total = phase1_count1 + phase1_count2;
     let phase2_total = phase2_count1 + phase2_count2;
     let phase3_total = phase3_count1 + phase3_count2;
-    
-    assert!(phase2_total > phase1_total, "Total traffic should continue in phase 2");
-    assert!(phase3_total > phase2_total, "Total traffic should continue in phase 3");
-    
-    println!("Traffic totals - Phase 1: {}, Phase 2: {}, Phase 3: {}", 
-             phase1_total, phase2_total, phase3_total);
+
+    assert!(
+        phase2_total > phase1_total,
+        "Total traffic should continue in phase 2"
+    );
+    assert!(
+        phase3_total > phase2_total,
+        "Total traffic should continue in phase 3"
+    );
+
+    println!(
+        "Traffic totals - Phase 1: {}, Phase 2: {}, Phase 3: {}",
+        phase1_total, phase2_total, phase3_total
+    );
 
     println!("✅ Single link degradation recovery test completed");
 }
@@ -102,19 +126,36 @@ fn test_multiple_recovery_cycles() {
     println!("Cycle 1: Link 0 degradation");
     mock_stats.degrade(0, 100, 200);
     let degraded_stats = mock_stats.property::<gst::Structure>("stats");
-    
-    let cycle1_retrans = degraded_stats.get::<u64>("session-0.sent-retransmitted-packets").unwrap();
-    let cycle1_rtt = degraded_stats.get::<f64>("session-0.round-trip-time").unwrap();
-    println!("After degradation - Retrans: {}, RTT: {}", cycle1_retrans, cycle1_rtt);
+
+    let cycle1_retrans = degraded_stats
+        .get::<u64>("session-0.sent-retransmitted-packets")
+        .unwrap();
+    let cycle1_rtt = degraded_stats
+        .get::<f64>("session-0.round-trip-time")
+        .unwrap();
+    println!(
+        "After degradation - Retrans: {}, RTT: {}",
+        cycle1_retrans, cycle1_rtt
+    );
 
     mock_stats.recover(0);
     let recovered_stats = mock_stats.property::<gst::Structure>("stats");
-    
-    let cycle1_recovered_retrans = recovered_stats.get::<u64>("session-0.sent-retransmitted-packets").unwrap();
-    let cycle1_recovered_rtt = recovered_stats.get::<f64>("session-0.round-trip-time").unwrap();
-    println!("After recovery - Retrans: {}, RTT: {}", cycle1_recovered_retrans, cycle1_recovered_rtt);
 
-    assert!(cycle1_recovered_retrans < cycle1_retrans, "Should recover from degradation");
+    let cycle1_recovered_retrans = recovered_stats
+        .get::<u64>("session-0.sent-retransmitted-packets")
+        .unwrap();
+    let cycle1_recovered_rtt = recovered_stats
+        .get::<f64>("session-0.round-trip-time")
+        .unwrap();
+    println!(
+        "After recovery - Retrans: {}, RTT: {}",
+        cycle1_recovered_retrans, cycle1_recovered_rtt
+    );
+
+    assert!(
+        cycle1_recovered_retrans < cycle1_retrans,
+        "Should recover from degradation"
+    );
     assert!(cycle1_recovered_rtt < cycle1_rtt, "RTT should improve");
 
     // Cycle 2: Degrade session 1, then recover
@@ -125,12 +166,22 @@ fn test_multiple_recovery_cycles() {
     let final_stats = mock_stats.property::<gst::Structure>("stats");
     println!("Final stats: {}", final_stats);
 
-    let final_retrans_0 = final_stats.get::<u64>("session-0.sent-retransmitted-packets").unwrap();
-    let final_retrans_1 = final_stats.get::<u64>("session-1.sent-retransmitted-packets").unwrap();
+    let final_retrans_0 = final_stats
+        .get::<u64>("session-0.sent-retransmitted-packets")
+        .unwrap();
+    let final_retrans_1 = final_stats
+        .get::<u64>("session-1.sent-retransmitted-packets")
+        .unwrap();
 
     // Both sessions should have reasonable stats after multiple cycles
-    assert!(final_retrans_0 < 200, "Session 0 should have reasonable retrans count");
-    assert!(final_retrans_1 < 200, "Session 1 should have reasonable retrans count");
+    assert!(
+        final_retrans_0 < 200,
+        "Session 0 should have reasonable retrans count"
+    );
+    assert!(
+        final_retrans_1 < 200,
+        "Session 1 should have reasonable retrans count"
+    );
 
     println!("✅ Multiple recovery cycles test completed");
 }
@@ -155,7 +206,14 @@ fn test_dispatcher_recovery_integration() {
     let counter2 = create_counter_sink();
     let counter3 = create_counter_sink();
 
-    test_pipeline!(pipeline, &source, &dispatcher, &counter1, &counter2, &counter3);
+    test_pipeline!(
+        pipeline,
+        &source,
+        &dispatcher,
+        &counter1,
+        &counter2,
+        &counter3
+    );
 
     // Set up three output paths
     let src_0 = dispatcher.request_pad_simple("src_%u").unwrap();
@@ -163,9 +221,15 @@ fn test_dispatcher_recovery_integration() {
     let src_2 = dispatcher.request_pad_simple("src_%u").unwrap();
 
     source.link(&dispatcher).expect("Failed to link source");
-    src_0.link(&counter1.static_pad("sink").unwrap()).expect("Failed to link src_0");
-    src_1.link(&counter2.static_pad("sink").unwrap()).expect("Failed to link src_1");
-    src_2.link(&counter3.static_pad("sink").unwrap()).expect("Failed to link src_2");
+    src_0
+        .link(&counter1.static_pad("sink").unwrap())
+        .expect("Failed to link src_0");
+    src_1
+        .link(&counter2.static_pad("sink").unwrap())
+        .expect("Failed to link src_1");
+    src_2
+        .link(&counter3.static_pad("sink").unwrap())
+        .expect("Failed to link src_2");
 
     // Simulate complex scenario: two links degrade, then recover at different times
     mock_stats.tick(&[100, 100, 100], &[2, 2, 2], &[20, 20, 20]);
@@ -192,8 +256,10 @@ fn test_dispatcher_recovery_integration() {
     let final_count2: u64 = get_property(&counter2, "count").unwrap();
     let final_count3: u64 = get_property(&counter3, "count").unwrap();
 
-    println!("Final counts - Counter 1: {}, Counter 2: {}, Counter 3: {}", 
-             final_count1, final_count2, final_count3);
+    println!(
+        "Final counts - Counter 1: {}, Counter 2: {}, Counter 3: {}",
+        final_count1, final_count2, final_count3
+    );
 
     assert!(final_count1 > 0, "Counter 1 should have received traffic");
     assert!(final_count2 > 0, "Counter 2 should have received traffic");
@@ -214,38 +280,58 @@ fn test_graceful_degradation_behavior() {
     mock_stats.tick(&[1000, 800], &[20, 15], &[35, 28]);
 
     let initial_stats = mock_stats.property::<gst::Structure>("stats");
-    let session0_initial_retrans = initial_stats.get::<u64>("session-0.sent-retransmitted-packets").unwrap();
-    let session1_initial_retrans = initial_stats.get::<u64>("session-1.sent-retransmitted-packets").unwrap();
+    let session0_initial_retrans = initial_stats
+        .get::<u64>("session-0.sent-retransmitted-packets")
+        .unwrap();
+    let session1_initial_retrans = initial_stats
+        .get::<u64>("session-1.sent-retransmitted-packets")
+        .unwrap();
 
-    println!("Initial retrans - Session 0: {}, Session 1: {}", 
-             session0_initial_retrans, session1_initial_retrans);
+    println!(
+        "Initial retrans - Session 0: {}, Session 1: {}",
+        session0_initial_retrans, session1_initial_retrans
+    );
 
     // Gradually degrade one link while keeping the other stable
     mock_stats.degrade(0, 30, 50); // Moderate degradation
     let moderate_stats = mock_stats.property::<gst::Structure>("stats");
-    let session0_moderate_retrans = moderate_stats.get::<u64>("session-0.sent-retransmitted-packets").unwrap();
+    let session0_moderate_retrans = moderate_stats
+        .get::<u64>("session-0.sent-retransmitted-packets")
+        .unwrap();
 
     // Further degrade the same link
     mock_stats.degrade(0, 50, 100); // Severe degradation
     let severe_stats = mock_stats.property::<gst::Structure>("stats");
-    let session0_severe_retrans = severe_stats.get::<u64>("session-0.sent-retransmitted-packets").unwrap();
+    let session0_severe_retrans = severe_stats
+        .get::<u64>("session-0.sent-retransmitted-packets")
+        .unwrap();
 
-    println!("Degradation progression - Moderate: {}, Severe: {}", 
-             session0_moderate_retrans, session0_severe_retrans);
+    println!(
+        "Degradation progression - Moderate: {}, Severe: {}",
+        session0_moderate_retrans, session0_severe_retrans
+    );
 
-    assert!(session0_severe_retrans > session0_moderate_retrans, 
-           "Progressive degradation should be reflected in stats");
-    assert!(session0_moderate_retrans > session0_initial_retrans,
-           "Moderate degradation should increase retrans");
+    assert!(
+        session0_severe_retrans > session0_moderate_retrans,
+        "Progressive degradation should be reflected in stats"
+    );
+    assert!(
+        session0_moderate_retrans > session0_initial_retrans,
+        "Moderate degradation should increase retrans"
+    );
 
     // Now test recovery brings it back to reasonable levels
     mock_stats.recover(0);
     let recovered_stats = mock_stats.property::<gst::Structure>("stats");
-    let session0_recovered_retrans = recovered_stats.get::<u64>("session-0.sent-retransmitted-packets").unwrap();
+    let session0_recovered_retrans = recovered_stats
+        .get::<u64>("session-0.sent-retransmitted-packets")
+        .unwrap();
 
     println!("After recovery: {}", session0_recovered_retrans);
-    assert!(session0_recovered_retrans < session0_severe_retrans,
-           "Recovery should improve the degraded link");
+    assert!(
+        session0_recovered_retrans < session0_severe_retrans,
+        "Recovery should improve the degraded link"
+    );
 
     println!("✅ Graceful degradation behavior test completed");
 }

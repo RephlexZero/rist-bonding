@@ -2,10 +2,10 @@
 //!
 //! These tests focus on the core algorithm behavior, property access, and pipeline creation.
 
-use gstristsmart::testing::*;
-use gstristsmart::test_pipeline;
-use gstreamer as gst;
 use gst::prelude::*;
+use gstreamer as gst;
+use gstristsmart::test_pipeline;
+use gstristsmart::testing::*;
 
 #[test]
 fn test_basic_property_access() {
@@ -19,13 +19,19 @@ fn test_basic_property_access() {
     let weights_json = r#"[1.0, 2.0]"#;
     dispatcher.set_property("weights", weights_json);
     let retrieved_weights: String = get_property(&dispatcher, "weights").unwrap();
-    println!("Set weights: '{}', Retrieved: '{}'", weights_json, retrieved_weights);
+    println!(
+        "Set weights: '{}', Retrieved: '{}'",
+        weights_json, retrieved_weights
+    );
     assert_eq!(retrieved_weights, "[1.0,2.0]"); // JSON formatting may differ
 
     // Test rebalance interval property
     dispatcher.set_property("rebalance-interval-ms", 1000u64);
     let retrieved_interval: u64 = get_property(&dispatcher, "rebalance-interval-ms").unwrap();
-    println!("Set rebalance-interval-ms: 1000, Retrieved: {}", retrieved_interval);
+    println!(
+        "Set rebalance-interval-ms: 1000, Retrieved: {}",
+        retrieved_interval
+    );
     assert_eq!(retrieved_interval, 1000);
 
     // Test strategy enum property
@@ -68,7 +74,11 @@ fn test_basic_pipeline_creation() {
         .request_pad_simple("src_1")
         .expect("Failed to request src_1 pad");
 
-    println!("✅ Source pads created: {} and {}", src_pad_0.name(), src_pad_1.name());
+    println!(
+        "✅ Source pads created: {} and {}",
+        src_pad_0.name(),
+        src_pad_1.name()
+    );
 
     // Test sink pad access
     let sink_pad = dispatcher
@@ -173,10 +183,14 @@ fn test_weighted_distribution_pipeline() {
     let src_1 = dispatcher.request_pad_simple("src_%u").unwrap();
 
     // Link elements
-    source.link(&dispatcher).expect("Failed to link source to dispatcher");
-    src_0.link(&counter1.static_pad("sink").unwrap())
+    source
+        .link(&dispatcher)
+        .expect("Failed to link source to dispatcher");
+    src_0
+        .link(&counter1.static_pad("sink").unwrap())
         .expect("Failed to link dispatcher src_0");
-    src_1.link(&counter2.static_pad("sink").unwrap())
+    src_1
+        .link(&counter2.static_pad("sink").unwrap())
         .expect("Failed to link dispatcher src_1");
 
     // Run the pipeline

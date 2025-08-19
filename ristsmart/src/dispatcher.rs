@@ -1007,7 +1007,11 @@ impl ElementImpl for DispatcherImpl {
             if let Some(ref stream_start) = state.cached_stream_start {
                 let ok = pad.push_event(stream_start.clone());
                 if !ok {
-                    gst::warning!(CAT, "Failed to replay STREAM_START event to new src pad {}", pad.name());
+                    gst::warning!(
+                        CAT,
+                        "Failed to replay STREAM_START event to new src pad {}",
+                        pad.name()
+                    );
                 } else {
                     gst::trace!(CAT, "Replayed STREAM_START to {}", pad.name());
                 }
@@ -1016,7 +1020,11 @@ impl ElementImpl for DispatcherImpl {
             if let Some(ref caps) = state.cached_caps {
                 let ok = pad.push_event(caps.clone());
                 if !ok {
-                    gst::warning!(CAT, "Failed to replay CAPS event to new src pad {}", pad.name());
+                    gst::warning!(
+                        CAT,
+                        "Failed to replay CAPS event to new src pad {}",
+                        pad.name()
+                    );
                 } else {
                     gst::trace!(CAT, "Replayed CAPS to {}", pad.name());
                 }
@@ -1025,7 +1033,11 @@ impl ElementImpl for DispatcherImpl {
             if let Some(ref segment) = state.cached_segment {
                 let ok = pad.push_event(segment.clone());
                 if !ok {
-                    gst::warning!(CAT, "Failed to replay SEGMENT event to new src pad {}", pad.name());
+                    gst::warning!(
+                        CAT,
+                        "Failed to replay SEGMENT event to new src pad {}",
+                        pad.name()
+                    );
                 } else {
                     gst::trace!(CAT, "Replayed SEGMENT to {}", pad.name());
                 }
@@ -1035,7 +1047,12 @@ impl ElementImpl for DispatcherImpl {
             for (i, tag_event) in state.cached_tags.iter().enumerate() {
                 let ok = pad.push_event(tag_event.clone());
                 if !ok {
-                    gst::warning!(CAT, "Failed to replay TAG event #{} to new src pad {}", i, pad.name());
+                    gst::warning!(
+                        CAT,
+                        "Failed to replay TAG event #{} to new src pad {}",
+                        i,
+                        pad.name()
+                    );
                 } else {
                     gst::trace!(CAT, "Replayed TAG #{} to {}", i, pad.name());
                 }

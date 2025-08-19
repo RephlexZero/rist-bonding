@@ -1,9 +1,9 @@
 //! Stress test: repeatedly request and release src pads while pipeline is running
 //! to catch pad-lifecycle races.
 
-use gstristsmart::testing::*;
-use gstreamer as gst;
 use gst::prelude::*;
+use gstreamer as gst;
+use gstristsmart::testing::*;
 
 #[test]
 fn stress_pad_lifecycle() {
@@ -20,12 +20,12 @@ fn stress_pad_lifecycle() {
         if i % 10 == 0 {
             println!("Stress iteration {}", i);
         }
-        
+
         // Request a pad
         if let Some(pad) = dispatcher.request_pad_simple("src_%u") {
             // Verify pad is valid
             assert!(pad.name().len() > 0, "Pad should have a valid name");
-            
+
             // Release the pad
             dispatcher.release_request_pad(&pad);
         } else {
@@ -35,7 +35,10 @@ fn stress_pad_lifecycle() {
 
     // Final sanity check: request a pad and ensure dispatcher still responds
     if let Some(pad) = dispatcher.request_pad_simple("src_%u") {
-        assert!(pad.name().len() > 0, "Failed to request pad after stress test");
+        assert!(
+            pad.name().len() > 0,
+            "Failed to request pad after stress test"
+        );
         dispatcher.release_request_pad(&pad);
     } else {
         panic!("Failed to request final test pad");

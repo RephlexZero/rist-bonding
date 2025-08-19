@@ -3,10 +3,10 @@
 //! These tests verify that the dispatcher can adapt to changing network conditions
 //! based on RIST statistics and properly rebalance traffic accordingly.
 
-use gstristsmart::testing::*;
-use gstristsmart::test_pipeline;
-use gstreamer as gst;
 use gst::prelude::*;
+use gstreamer as gst;
+use gstristsmart::test_pipeline;
+use gstristsmart::testing::*;
 use std::time::Duration;
 
 #[test]
@@ -47,9 +47,15 @@ fn test_stats_driven_dispatcher_rebalancing() {
     let src_0 = dispatcher.request_pad_simple("src_%u").unwrap();
     let src_1 = dispatcher.request_pad_simple("src_%u").unwrap();
 
-    source.link(&dispatcher).expect("Failed to link source to dispatcher");
-    src_0.link(&counter1.static_pad("sink").unwrap()).expect("Failed to link src_0");
-    src_1.link(&counter2.static_pad("sink").unwrap()).expect("Failed to link src_1");
+    source
+        .link(&dispatcher)
+        .expect("Failed to link source to dispatcher");
+    src_0
+        .link(&counter1.static_pad("sink").unwrap())
+        .expect("Failed to link src_0");
+    src_1
+        .link(&counter2.static_pad("sink").unwrap())
+        .expect("Failed to link src_1");
 
     // Run initial phase
     run_pipeline_for_duration(&pipeline, 1).expect("Pipeline run failed");
@@ -57,26 +63,40 @@ fn test_stats_driven_dispatcher_rebalancing() {
     let initial_count1: u64 = get_property(&counter1, "count").unwrap();
     let initial_count2: u64 = get_property(&counter2, "count").unwrap();
 
-    println!("Initial distribution - Counter 1: {}, Counter 2: {}", 
-             initial_count1, initial_count2);
+    println!(
+        "Initial distribution - Counter 1: {}, Counter 2: {}",
+        initial_count1, initial_count2
+    );
 
     // Now improve session 1 and see if dispatcher adapts
     mock_stats.recover(1); // This should improve session 1's stats
 
     // Continue running
-    pipeline.set_state(gst::State::Playing).expect("Failed to restart pipeline");
+    pipeline
+        .set_state(gst::State::Playing)
+        .expect("Failed to restart pipeline");
     std::thread::sleep(Duration::from_secs(1));
-    pipeline.set_state(gst::State::Null).expect("Failed to stop pipeline");
+    pipeline
+        .set_state(gst::State::Null)
+        .expect("Failed to stop pipeline");
 
     let final_count1: u64 = get_property(&counter1, "count").unwrap();
     let final_count2: u64 = get_property(&counter2, "count").unwrap();
 
-    println!("Final distribution - Counter 1: {}, Counter 2: {}", 
-             final_count1, final_count2);
+    println!(
+        "Final distribution - Counter 1: {}, Counter 2: {}",
+        final_count1, final_count2
+    );
 
     // Verify that traffic was distributed (both counters should have some packets)
-    assert!(final_count1 > initial_count1, "Counter 1 should have received more packets");
-    assert!(final_count2 >= initial_count2, "Counter 2 should have maintained or increased");
+    assert!(
+        final_count1 > initial_count1,
+        "Counter 1 should have received more packets"
+    );
+    assert!(
+        final_count2 >= initial_count2,
+        "Counter 2 should have maintained or increased"
+    );
 
     println!("✅ Stats-driven rebalancing test completed");
 }
@@ -105,10 +125,15 @@ fn test_coordinated_stats_polling() {
     println!("Stats after degradation: {}", stats2);
 
     // Verify degradation is reflected in stats
-    let session1_retrans = stats2.get::<u64>("session-1.sent-retransmitted-packets").unwrap();
+    let session1_retrans = stats2
+        .get::<u64>("session-1.sent-retransmitted-packets")
+        .unwrap();
     let session1_rtt = stats2.get::<f64>("session-1.round-trip-time").unwrap();
 
-    assert!(session1_retrans > 5, "Session 1 should have increased retransmissions");
+    assert!(
+        session1_retrans > 5,
+        "Session 1 should have increased retransmissions"
+    );
     assert!(session1_rtt > 25.0, "Session 1 should have increased RTT");
 
     // Simulate recovery
@@ -118,11 +143,19 @@ fn test_coordinated_stats_polling() {
     let stats3 = mock_stats.property::<gst::Structure>("stats");
     println!("Stats after recovery: {}", stats3);
 
-    let recovered_retrans = stats3.get::<u64>("session-1.sent-retransmitted-packets").unwrap();
+    let recovered_retrans = stats3
+        .get::<u64>("session-1.sent-retransmitted-packets")
+        .unwrap();
     let recovered_rtt = stats3.get::<f64>("session-1.round-trip-time").unwrap();
 
-    assert!(recovered_retrans < session1_retrans, "Retransmissions should decrease after recovery");
-    assert!(recovered_rtt < session1_rtt, "RTT should improve after recovery");
+    assert!(
+        recovered_retrans < session1_retrans,
+        "Retransmissions should decrease after recovery"
+    );
+    assert!(
+        recovered_rtt < session1_rtt,
+        "RTT should improve after recovery"
+    );
 
     println!("✅ Coordinated stats polling test completed");
 }
@@ -143,13 +176,18 @@ fn test_dynbitrate_integration() {
     test_pipeline!(pipeline, &source, &encoder, &dynbitrate, &sink);
 
     // Link elements
-    source.link(&encoder).expect("Failed to link source to encoder");
-    encoder.link(&dynbitrate).expect("Failed to link encoder to dynbitrate");
-    dynbitrate.link(&sink).expect("Failed to link dynbitrate to sink");
+    source
+        .link(&encoder)
+        .expect("Failed to link source to encoder");
+    encoder
+        .link(&dynbitrate)
+        .expect("Failed to link encoder to dynbitrate");
+    dynbitrate
+        .link(&sink)
+        .expect("Failed to link dynbitrate to sink");
 
     // Test initial state
-    wait_for_state_change(&pipeline, gst::State::Paused, 5)
-        .expect("Failed to pause pipeline");
+    wait_for_state_change(&pipeline, gst::State::Paused, 5).expect("Failed to pause pipeline");
 
     let initial_bitrate: u32 = get_property(&encoder, "bitrate").unwrap();
     println!("Initial encoder bitrate: {} kbps", initial_bitrate);
