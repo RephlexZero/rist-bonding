@@ -3,31 +3,127 @@
 use gstreamer::prelude::*;
 use gstristsmart::testing;
 use netlink_sim::{NetworkOrchestrator, TestScenario};
-use serde_json::json;
 
 /// Create a sender pipeline with sessions pointing to orchestrator ingress ports.
 fn build_sender_pipeline(ports: &[u16]) -> (gstreamer::Pipeline, gstreamer::Element) {
     let pipeline = gstreamer::Pipeline::new();
-    let src = gstreamer::ElementFactory::make("audiotestsrc")
+    
+    // Create video test source at 1080p60
+    let videotestsrc = gstreamer::ElementFactory::make("videotestsrc")
         .property("is-live", true)
+        .property("num-buffers", 300) // 5 seconds at 60fps
+        .build()
+        .expect("Failed to create videotestsrc");
+    
+    // Create audio test source with sine wave
+    let audiotestsrc = gstreamer::ElementFactory::make("audiotestsrc")
+        .property("is-live", true)
+        .property("num-buffers", 240) // 5 seconds at 48kHz/1024 samples per buffer
+        .property("freq", 440.0) // 440 Hz sine wave (A4 note)
         .build()
         .expect("Failed to create audiotestsrc");
-    let dispatcher = testing::create_dispatcher_for_testing(Some(&[0.5, 0.5]));
+    
+    // Video processing chain
+    let videoconvert = gstreamer::ElementFactory::make("videoconvert")
+        .build()
+        .expect("Failed to create videoconvert");
+    
+    let videoscale = gstreamer::ElementFactory::make("videoscale")
+        .build()
+        .expect("Failed to create videoscale");
+    
+    // Video caps for 1080p60
+    let video_caps = gstreamer::Caps::builder("video/x-raw")
+        .field("width", 1920)
+        .field("height", 1080)
+        .field("framerate", gstreamer::Fraction::new(60, 1))
+        .field("format", "I420")
+        .build();
+    let video_capsfilter = gstreamer::ElementFactory::make("capsfilter")
+        .property("caps", &video_caps)
+        .build()
+        .expect("Failed to create video capsfilter");
+    
+    // H.265 encoder
+    let x265enc = gstreamer::ElementFactory::make("x265enc")
+        .property("bitrate", 5000u32) // 5 Mbps for 1080p60
+        .build()
+        .expect("Failed to create x265enc");
+    
+    // RTP H.265 payloader
+    let rtph265pay = gstreamer::ElementFactory::make("rtph265pay")
+        .property("pt", 96u32)
+        .property("config-interval", -1i32) // Send VPS/SPS/PPS with every IDR
+        .build()
+        .expect("Failed to create rtph265pay");
+    
+    // Audio processing chain
+    let audioconvert = gstreamer::ElementFactory::make("audioconvert")
+        .build()
+        .expect("Failed to create audioconvert");
+        
+    let audioresample = gstreamer::ElementFactory::make("audioresample")
+        .build()
+        .expect("Failed to create audioresample");
+    
+    // Audio caps for L16 (16-bit PCM)
+    let audio_caps = gstreamer::Caps::builder("audio/x-raw")
+        .field("format", "S16BE") // Big endian for L16
+        .field("layout", "interleaved")
+        .field("channels", 2)
+        .field("rate", 48000)
+        .build();
+    let audio_capsfilter = gstreamer::ElementFactory::make("capsfilter")
+        .property("caps", &audio_caps)
+        .build()
+        .expect("Failed to create audio capsfilter");
+    
+    // RTP L16 payloader (raw audio)
+    let rtp_l16pay = gstreamer::ElementFactory::make("rtpL16pay")
+        .property("pt", 97u32)
+        .build()
+        .expect("Failed to create rtpL16pay");
+    
+    // RTP muxer to combine video and audio streams
+    let rtpmux = gstreamer::ElementFactory::make("rtpmux")
+        .build()
+        .expect("Failed to create rtpmux");
 
-    let sessions: Vec<_> = ports
+    // Create bonding addresses as comma-separated string
+    let bonding_addresses: Vec<String> = ports
         .iter()
-        .map(|p| json!({"address": "127.0.0.1", "port": p}))
+        .map(|p| format!("127.0.0.1:{}", p))
         .collect();
+    let bonding_addresses_str = bonding_addresses.join(",");
+    
     let ristsink = gstreamer::ElementFactory::make("ristsink")
-        .property("bonding-addresses", sessions.to_string())
+        .property("bonding-addresses", bonding_addresses_str)
         .build()
         .expect("Failed to create ristsink");
 
+    // Add all elements to pipeline
     pipeline
-        .add_many([&src, &dispatcher, &ristsink])
+        .add_many([
+            &videotestsrc, &videoconvert, &videoscale, &video_capsfilter, &x265enc, &rtph265pay,
+            &audiotestsrc, &audioconvert, &audioresample, &audio_capsfilter, &rtp_l16pay,
+            &rtpmux, &ristsink
+        ])
         .expect("failed to add elements");
-    gstreamer::Element::link_many([&src, &dispatcher, &ristsink])
-        .expect("failed to link sender pipeline");
+    
+    // Link video chain: videotestsrc -> videoconvert -> videoscale -> caps -> x265enc -> rtph265pay
+    gstreamer::Element::link_many([&videotestsrc, &videoconvert, &videoscale, &video_capsfilter, &x265enc, &rtph265pay])
+        .expect("failed to link video chain");
+    
+    // Link audio chain: audiotestsrc -> audioconvert -> audioresample -> caps -> rtp_l16pay
+    gstreamer::Element::link_many([&audiotestsrc, &audioconvert, &audioresample, &audio_capsfilter, &rtp_l16pay])
+        .expect("failed to link audio chain");
+    
+    // Connect RTP payloaders to muxer
+    rtph265pay.link(&rtpmux).expect("failed to link video to rtpmux");
+    rtp_l16pay.link(&rtpmux).expect("failed to link audio to rtpmux");
+    
+    // Connect muxer to ristsink
+    rtpmux.link(&ristsink).expect("failed to link rtpmux to ristsink");
 
     (pipeline, ristsink)
 }
@@ -40,16 +136,76 @@ fn build_receiver_pipeline(port: u16) -> (gstreamer::Pipeline, gstreamer::Elemen
         .property("port", port as u32)
         .build()
         .expect("Failed to create ristsrc");
-    let counter = testing::create_counter_sink();
+    
+    // RTP demuxer to separate video and audio streams
+    let rtpptdemux = gstreamer::ElementFactory::make("rtpptdemux")
+        .build()
+        .expect("Failed to create rtpptdemux");
+    
+    // Video processing chain
+    let rtph265depay = gstreamer::ElementFactory::make("rtph265depay")
+        .build()
+        .expect("Failed to create rtph265depay");
+    
+    let avdec_h265 = gstreamer::ElementFactory::make("avdec_h265")
+        .build()
+        .expect("Failed to create avdec_h265");
+    
+    let videoconvert = gstreamer::ElementFactory::make("videoconvert")
+        .build()
+        .expect("Failed to create videoconvert");
+    
+    // Audio processing chain
+    let rtp_l16depay = gstreamer::ElementFactory::make("rtpL16depay")
+        .build()
+        .expect("Failed to create rtpL16depay");
+    
+    let audioconvert = gstreamer::ElementFactory::make("audioconvert")
+        .build()
+        .expect("Failed to create audioconvert");
+    
+    // Counter sinks for testing
+    let video_counter = testing::create_counter_sink();
+    let audio_counter = testing::create_counter_sink();
 
     pipeline
-        .add_many([&ristsrc, &counter])
+        .add_many([
+            &ristsrc, &rtpptdemux,
+            &rtph265depay, &avdec_h265, &videoconvert, &video_counter,
+            &rtp_l16depay, &audioconvert, &audio_counter
+        ])
         .expect("failed to add receiver elements");
-    ristsrc
-        .link(&counter)
-        .expect("failed to link receiver pipeline");
+    
+    // Link initial chain: ristsrc -> rtpptdemux
+    ristsrc.link(&rtpptdemux).expect("failed to link ristsrc to rtpptdemux");
+    
+    // Link video chain: rtph265depay -> avdec_h265 -> videoconvert -> video_counter
+    gstreamer::Element::link_many([&rtph265depay, &avdec_h265, &videoconvert, &video_counter])
+        .expect("failed to link video chain");
+    
+    // Link audio chain: rtp_l16depay -> audioconvert -> audio_counter
+    gstreamer::Element::link_many([&rtp_l16depay, &audioconvert, &audio_counter])
+        .expect("failed to link audio chain");
+    
+    // Connect rtpptdemux pads dynamically when available
+    let video_depay_clone = rtph265depay.clone();
+    let audio_depay_clone = rtp_l16depay.clone();
+    
+    rtpptdemux.connect_pad_added(move |_element, src_pad| {
+        let pad_name = src_pad.name();
+        if pad_name.as_str().contains("96") { // H.265 video
+            if let Some(sink_pad) = video_depay_clone.static_pad("sink") {
+                let _ = src_pad.link(&sink_pad);
+            }
+        } else if pad_name.as_str().contains("97") { // L16 audio  
+            if let Some(sink_pad) = audio_depay_clone.static_pad("sink") {
+                let _ = src_pad.link(&sink_pad);
+            }
+        }
+    });
 
-    (pipeline, counter)
+    // Return the video counter as the primary counter for testing
+    (pipeline, video_counter)
 }
 
 /// Run two pipelines concurrently for `duration` seconds.
@@ -63,13 +219,70 @@ async fn run_pipelines(sender: gstreamer::Pipeline, receiver: gstreamer::Pipelin
     let _ = tokio::join!(s_handle, r_handle);
 }
 
+/// Helper function to test dispatcher with network simulation
+async fn test_dispatcher_with_network(
+    _weights: Option<&[f64]>,
+    scenario: TestScenario,
+    rx_port: u16,
+    duration: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut orchestrator = NetworkOrchestrator::new(8000u64 + rx_port as u64);
+    
+    // Start network links
+    let link1 = orchestrator.start_scenario(scenario.clone(), rx_port).await?;
+    let link2 = orchestrator.start_scenario(scenario, rx_port).await?;
+    
+    let ports = vec![link1.ingress_port, link2.ingress_port];
+    let (sender_pipeline, _ristsink) = build_sender_pipeline(&ports);
+    let (receiver_pipeline, counter) = build_receiver_pipeline(rx_port);
+    
+    run_pipelines(sender_pipeline, receiver_pipeline, duration).await;
+    
+    let count: u64 = testing::get_property(&counter, "count").unwrap();
+    assert!(count > 0, "counter_sink received no buffers");
+    
+    Ok(())
+}
+
+/// Helper function to setup bonding test
+async fn setup_bonding_test(rx_port: u16) -> Result<NetworkOrchestrator, Box<dyn std::error::Error>> {
+    let mut orchestrator = NetworkOrchestrator::new(8000u64 + rx_port as u64);
+    
+    // Start two network links for bonding
+    orchestrator.start_scenario(TestScenario::baseline_good(), rx_port).await?;
+    orchestrator.start_scenario(TestScenario::degraded_network(), rx_port).await?;
+    
+    Ok(orchestrator)
+}
+
+/// Helper function to get test scenarios
+fn get_test_scenarios() -> Vec<TestScenario> {
+    vec![
+        TestScenario::baseline_good(),
+        TestScenario::degraded_network(),
+        TestScenario::mobile_network(),
+        // Additional baseline scenarios for testing
+        TestScenario::baseline_good(),
+    ]
+}
+
+/// Helper function to setup network scenario
+async fn setup_network_scenario(
+    scenario: TestScenario,
+    rx_port: u16,
+) -> Result<NetworkOrchestrator, Box<dyn std::error::Error>> {
+    let mut orchestrator = NetworkOrchestrator::new(8000u64 + rx_port as u64);
+    orchestrator.start_scenario(scenario, rx_port).await?;
+    Ok(orchestrator)
+}
+
 /// End-to-end test using real RIST transport elements over simulated links.
 #[tokio::test]
 async fn test_end_to_end_rist_over_simulated_network() {
     testing::init_for_tests();
     
     let scenario = TestScenario::baseline_good();
-    let rx_port = 5004;
+    let rx_port = 5204; // Use different port range
     
     let result = test_dispatcher_with_network(
         Some(&[0.6, 0.4]),
@@ -86,7 +299,7 @@ async fn test_dispatcher_with_poor_network() {
     testing::init_for_tests();
     
     let scenario = TestScenario::degraded_network();
-    let rx_port = 5005;
+    let rx_port = 5206; // Use even port number
     
     let result = test_dispatcher_with_network(
         Some(&[0.5, 0.5]),
@@ -100,7 +313,7 @@ async fn test_dispatcher_with_poor_network() {
 
 #[tokio::test]
 async fn test_bonding_setup() {
-    let rx_port = 5006;
+    let rx_port = 5208; // Use even port number
     
     let result = setup_bonding_test(rx_port).await;
     assert!(result.is_ok(), "Bonding setup failed: {:?}", result.err());
@@ -124,7 +337,7 @@ async fn test_multiple_scenarios() {
     
     // Test each scenario setup (without running full tests)
     for (i, scenario) in scenarios.into_iter().enumerate().take(3) {
-        let rx_port = 5030 + i as u16; // Use different port range to avoid conflicts
+        let rx_port = 5230 + (i as u16 * 10); // Use well-spaced port ranges
         let result = setup_network_scenario(scenario, rx_port).await;
         assert!(result.is_ok(), "Failed to setup scenario {}: {:?}", i, result.err());
     }
@@ -133,92 +346,10 @@ async fn test_multiple_scenarios() {
 #[tokio::test]
 async fn test_cellular_network_scenario() {
     let scenario = TestScenario::mobile_network();
-    let rx_port = 5020;
+    let rx_port = 5220; // Use even port number
 
     let result = setup_network_scenario(scenario, rx_port).await;
     assert!(result.is_ok(), "Failed to setup cellular scenario: {:?}", result.err());
-}
-
-// Helper to build sender pipeline with two RIST sessions
-fn build_sender_pipeline(ports: (u16, u16)) -> (gstreamer::Pipeline, gstreamer::Element) {
-    let pipeline = gstreamer::Pipeline::new();
-    let src = gstreamer::ElementFactory::make("audiotestsrc")
-        .property("is-live", true)
-        .build()
-        .expect("Failed to create audiotestsrc");
-    
-    // Create capsfilter to specify audio format for RTP payloader
-    let caps = gstreamer::Caps::builder("audio/x-raw")
-        .field("format", "S16BE")
-        .field("layout", "interleaved")
-        .field("channels", 2)
-        .field("rate", 48000)
-        .build();
-    let capsfilter = gstreamer::ElementFactory::make("capsfilter")
-        .property("caps", &caps)
-        .build()
-        .expect("Failed to create capsfilter");
-    
-    // Add RTP payloader since ristsink expects RTP payloaded data (per documentation)
-    let payloader = gstreamer::ElementFactory::make("rtpL16pay")
-        .build()
-        .expect("Failed to create rtpL16pay");
-    
-    // Create ristsink with bonding addresses - it will handle multiple sessions internally
-    let bonding_addresses = format!("127.0.0.1:{},127.0.0.1:{}", ports.0, ports.1);
-    let ristsink = gstreamer::ElementFactory::make("ristsink")
-        .property("bonding-addresses", bonding_addresses)
-        .build()
-        .expect("Failed to create ristsink");
-
-    pipeline
-        .add_many([&src, &capsfilter, &payloader, &ristsink])
-        .expect("failed to add elements");
-    gstreamer::Element::link_many([&src, &capsfilter, &payloader, &ristsink])
-        .expect("failed to link sender pipeline");
-
-    (pipeline, ristsink)
-}
-
-// Helper to build receiver pipeline listening on rx_port
-fn build_receiver_pipeline(rx_port: u16) -> (gstreamer::Pipeline, gstreamer::Element) {
-    let pipeline = gstreamer::Pipeline::new();
-    let ristsrc = gstreamer::ElementFactory::make("ristsrc")
-        .property("address", "0.0.0.0")
-        .property("port", rx_port as u32)
-        .build()
-        .expect("Failed to create ristsrc");
-    
-    // Add RTP depayloader since ristsrc outputs RTP data (per documentation)
-    // Use natural caps negotiation without restrictive capsfilter
-    let depayloader = gstreamer::ElementFactory::make("rtpL16depay")
-        .build()
-        .expect("Failed to create rtpL16depay");
-    
-    let counter = testing::create_counter_sink();
-
-    pipeline
-        .add_many([&ristsrc, &depayloader, &counter])
-        .expect("failed to add receiver elements");
-    gstreamer::Element::link_many([&ristsrc, &depayloader, &counter])
-        .expect("failed to link receiver pipeline");
-
-    (pipeline, counter)
-}
-
-// Run two pipelines concurrently for longer duration to allow jitter buffer
-async fn run_pipelines(
-    sender: gstreamer::Pipeline,
-    receiver: gstreamer::Pipeline,
-) {
-    receiver.set_state(gstreamer::State::Playing).unwrap();
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-    sender.set_state(gstreamer::State::Playing).unwrap();
-    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;  // Increased from 2 to 10 seconds
-
-    sender.set_state(gstreamer::State::Null).unwrap();
-    receiver.set_state(gstreamer::State::Null).unwrap();
 }
 
 /// End-to-end test using real RIST transport elements over simulated links
@@ -256,10 +387,10 @@ async fn test_end_to_end_rist_over_simulated_links() {
     println!("Using even ingress ports: {} and {}", port1, port2);
 
     // Run for longer to allow jitter buffer to properly release packets
-    let (sender_pipeline, ristsink) = build_sender_pipeline((port1, port2));
+    let (sender_pipeline, ristsink) = build_sender_pipeline(&[port1, port2]);
     let (receiver_pipeline, counter) = build_receiver_pipeline(rx_port);
     
-    run_pipelines(sender_pipeline, receiver_pipeline).await;
+    run_pipelines(sender_pipeline, receiver_pipeline, 10).await;
 
     let count: u64 = testing::get_property(&counter, "count").unwrap();
     assert!(count > 0, "counter_sink received no buffers");
