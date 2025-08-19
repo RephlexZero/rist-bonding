@@ -278,36 +278,32 @@ async fn run_pipe(
     }
 }
 
-/// Spawn tasks for a bidirectional link.
-pub async fn run_link(
-    ingress_forward_port: u16,
-    egress_forward_port: u16,
-    rx_port: u16,
+/// Spawn forwarding tasks for a single UDP port pair.
+async fn spawn_port_forwarder(
+    ingress_port: u16,
+    egress_port: u16,
+    dst_port: u16,
     emu: std::sync::Arc<tokio::sync::Mutex<Emulator>>,
     fwd_params: LinkParams,
     rev_params: LinkParams,
+    seed: u64,
 ) -> Result<()> {
-    // Ingress from sender
-    let ingress = UdpSocket::bind(("127.0.0.1", ingress_forward_port)).await?;
-    let rev_ingress = UdpSocket::bind(("127.0.0.1", egress_forward_port)).await?;
-
-    // Egress sockets with fixed source ports
-    let fwd_send = std::sync::Arc::new(UdpSocket::bind(("127.0.0.1", 0)).await?);
-    let rev_send = std::sync::Arc::new(UdpSocket::bind(("127.0.0.1", 0)).await?);
+    let ingress = std::sync::Arc::new(UdpSocket::bind(("127.0.0.1", ingress_port)).await?);
+    let egress = std::sync::Arc::new(UdpSocket::bind(("127.0.0.1", egress_port)).await?);
 
     let (tx_fwd, rx_fwd) = mpsc::channel::<(Vec<u8>, SocketAddr)>(1024);
     let (tx_rev, rx_rev) = mpsc::channel::<(Vec<u8>, SocketAddr)>(1024);
 
     let fwd_pipe = Pipe::new(fwd_params);
     let rev_pipe = Pipe::new(rev_params);
-    let rng1 = Mutex::new(StdRng::seed_from_u64(1));
-    let rng2 = Mutex::new(StdRng::seed_from_u64(2));
+    let rng1 = Mutex::new(StdRng::seed_from_u64(seed * 2));
+    let rng2 = Mutex::new(StdRng::seed_from_u64(seed * 2 + 1));
 
-    let rx_addr: SocketAddr = format!("127.0.0.1:{rx_port}").parse().unwrap();
-    tokio::spawn(run_pipe(rx_fwd, fwd_send.clone(), rx_addr, fwd_pipe, rng1));
+    let rx_addr: SocketAddr = format!("127.0.0.1:{dst_port}").parse().unwrap();
+    tokio::spawn(run_pipe(rx_fwd, egress.clone(), rx_addr, fwd_pipe, rng1));
     tokio::spawn(run_pipe(
         rx_rev,
-        rev_send.clone(),
+        ingress.clone(),
         "127.0.0.1:9".parse().unwrap(),
         rev_pipe,
         rng2,
@@ -320,7 +316,7 @@ pub async fn run_link(
         loop {
             if let Ok((n, src)) = ingress.recv_from(&mut buf).await {
                 let mut e = emu_fwd.lock().await;
-                e.reverse_dst.insert(ingress_forward_port, src);
+                e.reverse_dst.insert(ingress_port, src);
                 drop(e);
                 let _ = tx_fwd.send((buf[..n].to_vec(), rx_addr)).await;
             }
@@ -331,10 +327,10 @@ pub async fn run_link(
     tokio::spawn(async move {
         let mut buf = vec![0u8; 65536];
         loop {
-            if let Ok((n, _src)) = rev_ingress.recv_from(&mut buf).await {
+            if let Ok((n, _src)) = egress.recv_from(&mut buf).await {
                 let dst = {
                     let e = emu.lock().await;
-                    e.reverse_dst.get(&ingress_forward_port).cloned()
+                    e.reverse_dst.get(&ingress_port).cloned()
                 };
                 if let Some(dst_addr) = dst {
                     let _ = tx_rev.send((buf[..n].to_vec(), dst_addr)).await;
@@ -342,6 +338,41 @@ pub async fn run_link(
             }
         }
     });
+
+    Ok(())
+}
+
+/// Spawn tasks for a bidirectional link (RTP + RTCP ports).
+pub async fn run_link(
+    ingress_forward_port: u16,
+    egress_forward_port: u16,
+    rx_port: u16,
+    emu: std::sync::Arc<tokio::sync::Mutex<Emulator>>,
+    fwd_params: LinkParams,
+    rev_params: LinkParams,
+) -> Result<()> {
+    spawn_port_forwarder(
+        ingress_forward_port,
+        egress_forward_port,
+        rx_port,
+        emu.clone(),
+        fwd_params.clone(),
+        rev_params.clone(),
+        1,
+    )
+    .await?;
+
+    // Also forward the associated RTCP ports (port+1)
+    spawn_port_forwarder(
+        ingress_forward_port + 1,
+        egress_forward_port + 1,
+        rx_port + 1,
+        emu,
+        fwd_params,
+        rev_params,
+        2,
+    )
+    .await?;
 
     Ok(())
 }
@@ -361,7 +392,8 @@ impl TestScenario {
     pub fn bonding_asymmetric() -> Self {
         Self {
             name: "bonding_asymmetric".to_string(),
-            description: "Two links with different quality characteristics for bonding tests".to_string(),
+            description: "Two links with different quality characteristics for bonding tests"
+                .to_string(),
             forward_params: LinkParams::typical(),
             reverse_params: LinkParams::builder()
                 .base_delay_ms(10)
@@ -388,7 +420,8 @@ impl TestScenario {
     pub fn baseline_good() -> Self {
         Self {
             name: "baseline_good".to_string(),
-            description: "Baseline good quality network for comparing against other scenarios".to_string(),
+            description: "Baseline good quality network for comparing against other scenarios"
+                .to_string(),
             forward_params: LinkParams::good(),
             reverse_params: LinkParams::good(),
             duration_seconds: Some(30),
@@ -453,12 +486,16 @@ impl NetworkOrchestrator {
     }
 
     /// Start a test scenario with automatic port allocation
-    pub async fn start_scenario(&mut self, scenario: TestScenario, rx_port: u16) -> Result<LinkHandle> {
+    pub async fn start_scenario(
+        &mut self,
+        scenario: TestScenario,
+        rx_port: u16,
+    ) -> Result<LinkHandle> {
         let ingress_port = self.next_port_forward;
         let egress_port = self.next_port_reverse;
-        
-        self.next_port_forward += 1;
-        self.next_port_reverse += 1;
+
+        self.next_port_forward += 2;
+        self.next_port_reverse += 2;
 
         run_link(
             ingress_port,
@@ -467,7 +504,8 @@ impl NetworkOrchestrator {
             self.emulator.clone(),
             scenario.forward_params.clone(),
             scenario.reverse_params.clone(),
-        ).await?;
+        )
+        .await?;
 
         let handle = LinkHandle {
             ingress_port,
@@ -481,7 +519,11 @@ impl NetworkOrchestrator {
     }
 
     /// Start multiple scenarios for bonding tests
-    pub async fn start_bonding_scenarios(&mut self, scenarios: Vec<TestScenario>, rx_port: u16) -> Result<Vec<LinkHandle>> {
+    pub async fn start_bonding_scenarios(
+        &mut self,
+        scenarios: Vec<TestScenario>,
+        rx_port: u16,
+    ) -> Result<Vec<LinkHandle>> {
         let mut handles = Vec::new();
         for scenario in scenarios {
             let handle = self.start_scenario(scenario, rx_port).await?;
@@ -498,7 +540,10 @@ impl NetworkOrchestrator {
     /// Run a scenario for its specified duration (if any)
     pub async fn run_scenario_duration(&self, handle: &LinkHandle) -> Result<()> {
         if let Some(duration) = handle.scenario.duration_seconds {
-            println!("Running scenario '{}' for {} seconds", handle.scenario.name, duration);
+            println!(
+                "Running scenario '{}' for {} seconds",
+                handle.scenario.name, duration
+            );
             sleep(Duration::from_secs(duration)).await;
             println!("Scenario '{}' completed", handle.scenario.name);
         }
@@ -520,25 +565,35 @@ impl Clone for LinkHandle {
 /// Convenience function to start a typical RIST bonding test setup
 pub async fn start_rist_bonding_test(rx_port: u16) -> Result<NetworkOrchestrator> {
     let mut orchestrator = NetworkOrchestrator::new(42);
-    
+
     // Start two links with different characteristics for bonding
     let scenario_a = TestScenario::bonding_asymmetric();
     let mut scenario_b = TestScenario::bonding_asymmetric();
-    
+
     // Modify second link to have different characteristics
     scenario_b.forward_params.base_delay_ms = 80;
     scenario_b.forward_params.loss_pct = 0.005;
     scenario_b.forward_params.rate_bps = 6_000_000;
     scenario_b.name = "bonding_asymmetric_b".to_string();
-    
-    let _handles = orchestrator.start_bonding_scenarios(vec![scenario_a, scenario_b], rx_port).await?;
-    
+
+    let _handles = orchestrator
+        .start_bonding_scenarios(vec![scenario_a, scenario_b], rx_port)
+        .await?;
+
     println!("RIST bonding test setup complete:");
     for (i, handle) in orchestrator.get_active_links().iter().enumerate() {
-        println!("  Link {}: {} -> {} (rx: {})", 
-            i + 1, handle.ingress_port, handle.egress_port, handle.rx_port);
-        println!("    Scenario: {} - {}", handle.scenario.name, handle.scenario.description);
+        println!(
+            "  Link {}: {} -> {} (rx: {})",
+            i + 1,
+            handle.ingress_port,
+            handle.egress_port,
+            handle.rx_port
+        );
+        println!(
+            "    Scenario: {} - {}",
+            handle.scenario.name, handle.scenario.description
+        );
     }
-    
+
     Ok(orchestrator)
 }
