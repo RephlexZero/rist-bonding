@@ -1,0 +1,50 @@
+[package]
+name = "demos"
+version = "0.1.0"
+edition = "2021"
+description = "Demo programs for network simulation backends"
+
+[dependencies]
+# Always available
+scenarios = { path = "../scenarios" }
+observability = { path = "../observability", optional = true }
+tokio = { version = "1.0", features = ["full"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Optional backends
+netlink-sim = { path = "../../netlink-sim", optional = true }
+netns-testbench = { path = "../netns-testbench", optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["fmt"], optional = true }
+
+[features]
+default = ["network-sim"]
+network-sim = ["netlink-sim", "tracing", "tracing-subscriber"]
+netns-sim = ["netns-testbench", "tracing-subscriber"]
+observability-demo = ["observability", "tracing", "tracing-subscriber"]
+
+[[bin]]
+name = "test_network_sim_demo"
+path = "src/test_network_sim_demo.rs"
+required-features = ["network-sim"]
+
+[[bin]]
+name = "test_netns_demo"
+path = "src/test_netns_demo.rs"
+required-features = ["netns-sim"]
+
+[[bin]]
+name = "enhanced_scheduler"
+path = "src/enhanced_scheduler.rs"
+required-features = ["netns-sim"]
+
+[[bin]]
+name = "test_race_car_demo"
+path = "src/bin/test_race_car_demo.rs"
+required-features = ["network-sim"]
+
+[[bin]]
+name = "observability_demo"
+path = "src/bin/observability_demo.rs"
+required-features = ["observability-demo"]

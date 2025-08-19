@@ -1,0 +1,22 @@
+[package]
+name = "bench-cli"
+version = "0.1.0"
+edition = "2021"
+description = "CLI tool for running RIST network testbench scenarios"
+license = "MIT"
+
+[[bin]]
+name = "bench-cli"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.0", features = ["derive"] }
+tokio = { version = "1.0", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+serde_json = "1.0"
+
+# Local dependencies
+scenarios = { path = "../scenarios" }
+netns-testbench = { path = "../netns-testbench" }

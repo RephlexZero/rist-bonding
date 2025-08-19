@@ -2,6 +2,13 @@
 members = [
     "ristsmart",
     "netlink-sim", 
+    "crates/rist-elements",
+    "crates/netns-testbench",
+    "crates/scenarios",
+    "crates/bench-cli",
+    "crates/demos",
+    "crates/observability",
+    "crates/integration_tests",
 ]
 
 resolver = "2"

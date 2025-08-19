@@ -1,0 +1,43 @@
+[package]
+name = "observability"
+version = "0.1.0"
+edition = "2021"
+description = "Observability and metrics collection for RIST network simulation"
+
+[dependencies]
+# Metrics and monitoring
+metrics = "0.21"
+metrics-exporter-prometheus = "0.12"
+metrics-util = "0.15"
+
+# Async and concurrency
+tokio = { version = "1.0", features = ["full"] }
+tokio-stream = "0.1"
+parking_lot = "0.12"
+async-trait = "0.1"
+futures = "0.3"
+
+# Serialization and data handling  
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+csv = "1.3"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Tracing and logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "json"] }
+tracing-appender = "0.2"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# HTTP server for metrics endpoint
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors"] }
+hyper = "1.0"
+
+# Utilities
+uuid = { version = "1.0", features = ["v4", "serde"] }
+dashmap = "5.5"

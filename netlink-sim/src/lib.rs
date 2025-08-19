@@ -597,3 +597,6 @@ pub async fn start_rist_bonding_test(rx_port: u16) -> Result<NetworkOrchestrator
 
     Ok(orchestrator)
 }
+
+#[cfg(feature = "enhanced")]
+pub mod enhanced;
