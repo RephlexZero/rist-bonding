@@ -3,6 +3,7 @@
 use gstristsmart::testing;
 use gstreamer::prelude::*;
 use netlink_sim::{TestScenario, NetworkOrchestrator, start_rist_bonding_test};
+use serde_json::json;
 
 // Helper functions for network simulation integration
 async fn setup_network_scenario(scenario: TestScenario, rx_port: u16) -> Result<NetworkOrchestrator, Box<dyn std::error::Error>> {
@@ -126,7 +127,109 @@ async fn test_multiple_scenarios() {
 async fn test_cellular_network_scenario() {
     let scenario = TestScenario::mobile_network();
     let rx_port = 5020;
-    
+
     let result = setup_network_scenario(scenario, rx_port).await;
     assert!(result.is_ok(), "Failed to setup cellular scenario: {:?}", result.err());
+}
+
+// Helper to build sender pipeline with two RIST sessions
+fn build_sender_pipeline(ports: (u16, u16)) -> (gstreamer::Pipeline, gstreamer::Element) {
+    let pipeline = gstreamer::Pipeline::new();
+    let src = gstreamer::ElementFactory::make("audiotestsrc")
+        .property("is-live", true)
+        .build()
+        .expect("Failed to create audiotestsrc");
+    let dispatcher = testing::create_dispatcher_for_testing(Some(&[0.5, 0.5]));
+    let sessions = json!([
+        {"address": "127.0.0.1", "port": ports.0},
+        {"address": "127.0.0.1", "port": ports.1},
+    ]);
+    let ristsink = gstreamer::ElementFactory::make("ristsink")
+        .property("sessions", sessions.to_string())
+        .build()
+        .expect("Failed to create ristsink");
+
+    pipeline
+        .add_many([&src, &dispatcher, &ristsink])
+        .expect("failed to add elements");
+    gstreamer::Element::link_many([&src, &dispatcher, &ristsink])
+        .expect("failed to link sender pipeline");
+
+    (pipeline, ristsink)
+}
+
+// Helper to build receiver pipeline listening on rx_port
+fn build_receiver_pipeline(rx_port: u16) -> (gstreamer::Pipeline, gstreamer::Element) {
+    let pipeline = gstreamer::Pipeline::new();
+    let ristsrc = gstreamer::ElementFactory::make("ristsrc")
+        .property("address", "0.0.0.0")
+        .property("port", rx_port as u32)
+        .build()
+        .expect("Failed to create ristsrc");
+    let counter = testing::create_counter_sink();
+
+    pipeline
+        .add_many([&ristsrc, &counter])
+        .expect("failed to add receiver elements");
+    ristsrc
+        .link(&counter)
+        .expect("failed to link receiver pipeline");
+
+    (pipeline, counter)
+}
+
+// Run two pipelines concurrently for duration seconds
+async fn run_pipelines(
+    sender: gstreamer::Pipeline,
+    receiver: gstreamer::Pipeline,
+    duration: u64,
+) {
+    let s_handle = tokio::task::spawn_blocking(move || {
+        testing::run_pipeline_for_duration(&sender, duration).unwrap();
+    });
+    let r_handle = tokio::task::spawn_blocking(move || {
+        testing::run_pipeline_for_duration(&receiver, duration).unwrap();
+    });
+    let _ = tokio::join!(s_handle, r_handle);
+}
+
+/// End-to-end test using real RIST transport elements over simulated links
+#[tokio::test]
+#[ignore]
+async fn test_end_to_end_rist_over_simulated_links() {
+    testing::init_for_tests();
+
+    let rx_port = 6000u16;
+    let mut orchestrator = NetworkOrchestrator::new(0);
+    let link1 = orchestrator
+        .start_scenario(TestScenario::baseline_good(), rx_port)
+        .await
+        .expect("failed to start first link");
+    let link2 = orchestrator
+        .start_scenario(TestScenario::degraded_network(), rx_port)
+        .await
+        .expect("failed to start second link");
+
+    let (sender_pipeline, ristsink) = build_sender_pipeline((link1.ingress_port, link2.ingress_port));
+    let (receiver_pipeline, counter) = build_receiver_pipeline(rx_port);
+
+    run_pipelines(sender_pipeline, receiver_pipeline, 2).await;
+
+    let count: u64 = testing::get_property(&counter, "count").unwrap();
+    assert!(count > 0, "counter_sink received no buffers");
+
+    // Verify that both sessions sent packets if stats are available
+    if let Ok(stats) = testing::get_property::<gstreamer::Structure>(&ristsink, "stats") {
+        if let Ok(val) = stats.get::<gstreamer::glib::Value>("session-stats") {
+            if let Ok(arr) = val.get::<gstreamer::glib::ValueArray>() {
+                assert_eq!(arr.len(), 2, "expected stats for two sessions");
+                for session in arr.iter() {
+                    if let Ok(s) = session.get::<gstreamer::Structure>() {
+                        let sent = s.get::<u64>("sent-original-packets").unwrap_or(0);
+                        assert!(sent > 0, "session sent no packets");
+                    }
+                }
+            }
+        }
+    }
 }
