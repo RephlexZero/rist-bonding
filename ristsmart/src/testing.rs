@@ -13,8 +13,8 @@ use crate::test_harness::RistStatsMock;
 use gstreamer as gst;
 use gst::prelude::*;
 
-/// Network simulation integration (only available in tests)
-#[cfg(test)]
+/// Network simulation integration (requires the `network-sim` feature)
+#[cfg(feature = "network-sim")]
 pub mod network_sim {
     use netlink_sim::{NetworkOrchestrator, TestScenario, start_rist_bonding_test};
     use gstreamer::prelude::*;
