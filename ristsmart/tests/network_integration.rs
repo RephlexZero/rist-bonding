@@ -6,7 +6,10 @@ use netlink_sim::{TestScenario, NetworkOrchestrator, start_rist_bonding_test};
 
 // Helper functions for network simulation integration
 async fn setup_network_scenario(scenario: TestScenario, rx_port: u16) -> Result<NetworkOrchestrator, Box<dyn std::error::Error>> {
-    let mut orchestrator = NetworkOrchestrator::new(42);
+    // Seed the orchestrator based on the rx_port so multiple orchestrators
+    // started during tests allocate different port ranges and don't collide.
+    let seed = rx_port as u64 + 1000;
+    let mut orchestrator = NetworkOrchestrator::new(seed);
     let _handle = orchestrator.start_scenario(scenario, rx_port).await?;
     Ok(orchestrator)
 }

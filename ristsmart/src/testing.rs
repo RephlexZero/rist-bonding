@@ -23,7 +23,9 @@ pub mod network_sim {
     
     /// Start a network simulation scenario for RIST testing
     pub async fn setup_network_scenario(scenario: TestScenario, rx_port: u16) -> Result<NetworkOrchestrator, Box<dyn std::error::Error>> {
-        let mut orchestrator = NetworkOrchestrator::new(42);
+        // Use rx_port-derived seed so test runs using different ports don't collide
+        let seed = rx_port as u64 + 1000;
+        let mut orchestrator = NetworkOrchestrator::new(seed);
         let _handle = orchestrator.start_scenario(scenario, rx_port).await?;
         Ok(orchestrator)
     }

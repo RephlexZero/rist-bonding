@@ -437,11 +437,18 @@ pub struct LinkHandle {
 
 impl NetworkOrchestrator {
     pub fn new(seed: u64) -> Self {
+        // Derive base port ranges from the seed so multiple orchestrators
+        // created during tests don't allocate overlapping ports.
+        // We map seed -> a small offset in the 30000-40000 range.
+        let seed_offset = (seed % 1000) as u16; // 0..999
+        let base_forward = 30000u16.saturating_add(seed_offset.saturating_mul(10));
+        let base_reverse = 31000u16.saturating_add(seed_offset.saturating_mul(10));
+
         Self {
             emulator: std::sync::Arc::new(tokio::sync::Mutex::new(Emulator::new(seed))),
             active_links: Vec::new(),
-            next_port_forward: 6001,
-            next_port_reverse: 6101,
+            next_port_forward: base_forward,
+            next_port_reverse: base_reverse,
         }
     }
 

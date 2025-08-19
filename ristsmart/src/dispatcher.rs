@@ -101,6 +101,8 @@ pub struct DispatcherInner {
     // Pads
     sinkpad: Mutex<Option<gst::Pad>>,
     srcpads: Mutex<Vec<gst::Pad>>,
+    // Monotonic counter to generate unique src pad names (avoids name reuse after removals)
+    srcpad_counter: Mutex<usize>,
     // Config
     rebalance_interval_ms: Mutex<u64>,
     strategy: Mutex<Strategy>,
@@ -127,6 +129,7 @@ impl Default for DispatcherInner {
             state: Mutex::new(State::default()),
             sinkpad: Mutex::new(None),
             srcpads: Mutex::new(Vec::new()),
+            srcpad_counter: Mutex::new(0),
             rebalance_interval_ms: Mutex::new(500),
             strategy: Mutex::new(Strategy::default()),
             caps_any: Mutex::new(false),
@@ -878,10 +881,19 @@ impl ElementImpl for DispatcherImpl {
         }
 
         let mut srcpads = self.inner.srcpads.lock();
+        // The vector index for this new pad (position in `srcpads`)
         let idx = srcpads.len();
+
+        // Use a monotonic counter to generate unique pad names so that
+        // removed pads don't cause name collisions when new pads are created.
+        let mut counter = self.inner.srcpad_counter.lock();
+        let generated_idx = *counter;
+        *counter = counter.wrapping_add(1);
+        drop(counter);
+
         let pad_name = name
             .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("src_{}", idx));
+            .unwrap_or_else(|| format!("src_{}", generated_idx));
 
         // Get sink pad for upstream forwarding
         let sinkpad = self.inner.sinkpad.lock().clone();
@@ -984,33 +996,48 @@ impl ElementImpl for DispatcherImpl {
 
         self.obj().add_pad(&pad).ok()?;
 
-        // Replay cached sticky events to the new pad
+        // Replay cached sticky events to the new pad (with extra tracing)
         {
             let state = self.inner.state.lock();
 
+            gst::trace!(CAT, "Replaying cached sticky events to new pad {}: stream_start={}, caps={}, segment={}, tag_count={}",
+                pad.name(), state.cached_stream_start.is_some(), state.cached_caps.is_some(), state.cached_segment.is_some(), state.cached_tags.len());
+
             // Replay in correct order: stream-start → caps → segment → tags
             if let Some(ref stream_start) = state.cached_stream_start {
-                if !pad.push_event(stream_start.clone()) {
-                    gst::warning!(CAT, "Failed to replay STREAM_START event to new src pad");
+                let ok = pad.push_event(stream_start.clone());
+                if !ok {
+                    gst::warning!(CAT, "Failed to replay STREAM_START event to new src pad {}", pad.name());
+                } else {
+                    gst::trace!(CAT, "Replayed STREAM_START to {}", pad.name());
                 }
             }
 
             if let Some(ref caps) = state.cached_caps {
-                if !pad.push_event(caps.clone()) {
-                    gst::warning!(CAT, "Failed to replay CAPS event to new src pad");
+                let ok = pad.push_event(caps.clone());
+                if !ok {
+                    gst::warning!(CAT, "Failed to replay CAPS event to new src pad {}", pad.name());
+                } else {
+                    gst::trace!(CAT, "Replayed CAPS to {}", pad.name());
                 }
             }
 
             if let Some(ref segment) = state.cached_segment {
-                if !pad.push_event(segment.clone()) {
-                    gst::warning!(CAT, "Failed to replay SEGMENT event to new src pad");
+                let ok = pad.push_event(segment.clone());
+                if !ok {
+                    gst::warning!(CAT, "Failed to replay SEGMENT event to new src pad {}", pad.name());
+                } else {
+                    gst::trace!(CAT, "Replayed SEGMENT to {}", pad.name());
                 }
             }
 
             // Replay all cached tag events
-            for tag_event in &state.cached_tags {
-                if !pad.push_event(tag_event.clone()) {
-                    gst::warning!(CAT, "Failed to replay TAG event to new src pad");
+            for (i, tag_event) in state.cached_tags.iter().enumerate() {
+                let ok = pad.push_event(tag_event.clone());
+                if !ok {
+                    gst::warning!(CAT, "Failed to replay TAG event #{} to new src pad {}", i, pad.name());
+                } else {
+                    gst::trace!(CAT, "Replayed TAG #{} to {}", i, pad.name());
                 }
             }
         }
