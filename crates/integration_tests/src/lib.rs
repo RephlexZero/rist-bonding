@@ -9,6 +9,9 @@
 use anyhow::Result;
 use std::time::Duration;
 use tokio::{net::UdpSocket, process::Command, time::sleep};
+use tracing::{debug, info};
+
+pub mod element_pad_semantics;
 
 /// RIST Integration Test Suite
 pub struct RistIntegrationTest {
@@ -39,7 +42,7 @@ impl RistIntegrationTest {
 
     /// Start RIST dispatcher with dynamic bitrate control
     pub async fn start_rist_dispatcher(&mut self) -> Result<()> {
-        println!("🚀 Starting RIST dispatcher...");
+        info!("🚀 Starting RIST dispatcher...");
 
         // Build RIST dispatcher if needed
         self.build_rist_dispatcher().await?;
@@ -68,70 +71,69 @@ impl RistIntegrationTest {
 
         // Give dispatcher time to start up
         sleep(Duration::from_secs(2)).await;
-        println!("✓ RIST dispatcher started\n");
+        info!("✓ RIST dispatcher started");
         Ok(())
     }
 
     /// Set up race car bonding scenario
     pub async fn setup_race_car_bonding(&mut self) -> Result<Vec<netlink_sim::LinkHandle>> {
-        println!("🏁 Setting up race car cellular bonding...");
+        info!("🏁 Setting up race car cellular bonding...");
 
         let links = self
             .orchestrator
             .start_race_car_bonding(self.rx_port)
             .await?;
 
-        println!("✓ Bonding setup complete:");
+        info!("✓ Bonding setup complete");
         for (i, handle) in links.iter().enumerate() {
-            println!(
+            debug!(
                 "  Link {}: {} ({}kbps)",
                 i + 1,
                 handle.scenario.name,
                 handle.scenario.forward_params.rate_bps / 1000
             );
         }
-        println!();
 
         Ok(links)
     }
 
     /// Run realistic race car test pattern
     pub async fn run_race_car_test_pattern(&mut self) -> Result<TestResults> {
-        println!("🏎️  Running race car test pattern...");
+        info!("🏎️  Running race car test pattern...");
 
         let start_time = std::time::Instant::now();
         let mut results = TestResults::new(self.test_id.clone());
 
         // Phase 1: Strong signals (track start)
-        println!("  Phase 1: Track start - strong signals");
+        debug!("  Phase 1: Track start - strong signals");
         self.simulate_traffic_phase("strong", Duration::from_secs(10))
             .await?;
         results.add_phase("strong", self.collect_phase_metrics().await?);
 
         // Phase 2: Signal degradation (entering tunnel/obstruction)
-        println!("  Phase 2: Signal degradation");
+        debug!("  Phase 2: Signal degradation");
         self.apply_degradation_schedule().await?;
         self.simulate_traffic_phase("degraded", Duration::from_secs(15))
             .await?;
         results.add_phase("degraded", self.collect_phase_metrics().await?);
 
         // Phase 3: Handover spike (switching cell towers)
-        println!("  Phase 3: Handover event");
+        debug!("  Phase 3: Handover event");
         self.trigger_handover_event().await?;
         self.simulate_traffic_phase("handover", Duration::from_secs(8))
             .await?;
         results.add_phase("handover", self.collect_phase_metrics().await?);
 
         // Phase 4: Recovery (clear track)
-        println!("  Phase 4: Signal recovery");
+        debug!("  Phase 4: Signal recovery");
         self.apply_recovery_schedule().await?;
         self.simulate_traffic_phase("recovery", Duration::from_secs(12))
             .await?;
         results.add_phase("recovery", self.collect_phase_metrics().await?);
 
         results.total_duration = start_time.elapsed();
-        println!(
-            "✓ Race car test pattern completed ({:.1}s)\n",
+        info!(
+            "✓ Race car test pattern completed ({:.1}s)",
             results.total_duration.as_secs_f64()
         );
 
@@ -143,7 +145,7 @@ impl RistIntegrationTest {
         &self,
         results: &TestResults,
     ) -> Result<ValidationReport> {
-        println!("🔍 Validating RIST bonding behavior...");
+        info!("🔍 Validating RIST bonding behavior...");
 
         let mut report = ValidationReport::new();
 
@@ -177,8 +179,8 @@ impl RistIntegrationTest {
 
         report.load_balancing_working = balanced_utilization;
 
-        println!("✓ Bonding validation completed");
-        println!(
+        info!("✓ Bonding validation completed");
+        debug!(
             "  - Adaptive bitrate: {}",
             if report.adaptive_bitrate_working {
                 "✅"
@@ -186,7 +188,7 @@ impl RistIntegrationTest {
                 "❌"
             }
         );
-        println!(
+        debug!(
             "  - Bonding effectiveness: {}",
             if report.bonding_effective {
                 "✅"
@@ -194,7 +196,7 @@ impl RistIntegrationTest {
                 "❌"
             }
         );
-        println!(
+        debug!(
             "  - Load balancing: {}",
             if report.load_balancing_working {
                 "✅"
@@ -202,13 +204,12 @@ impl RistIntegrationTest {
                 "❌"
             }
         );
-        println!();
 
         Ok(report)
     }
 
     async fn build_rist_dispatcher(&self) -> Result<()> {
-        println!("🔨 Building RIST dispatcher...");
+        info!("🔨 Building RIST dispatcher...");
 
         let output = Command::new("cargo")
             .args(&["build", "--bin", "ristdispatcher"])
@@ -223,7 +224,7 @@ impl RistIntegrationTest {
             ));
         }
 
-        println!("✓ RIST dispatcher built successfully");
+        info!("✓ RIST dispatcher built successfully");
         Ok(())
     }
 
@@ -261,7 +262,7 @@ impl RistIntegrationTest {
             tokio::time::sleep(Duration::from_millis(interval)).await;
         }
 
-        println!("    Sent {} packets during {} phase", packet_count, phase);
+        debug!("    Sent {} packets during {} phase", packet_count, phase);
         Ok(())
     }
 

@@ -9,6 +9,10 @@ license = "MIT"
 name = "bench-cli"
 path = "src/main.rs"
 
+[features]
+default = []
+network-tests = []
+
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.0", features = ["derive"] }

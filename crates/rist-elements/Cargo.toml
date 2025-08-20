@@ -42,6 +42,7 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["fmt", "env-filter"] }
 plotters = "0.3.7"
 plotters-svg = "0.3.7"
+integration_tests = { path = "../integration_tests" }
 
 [build-dependencies]
 
