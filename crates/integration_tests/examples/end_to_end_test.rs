@@ -7,13 +7,14 @@
 //! - Comprehensive validation
 
 use anyhow::Result;
+use tracing_subscriber::fmt;
 use integration_tests::{RistIntegrationTest, TestResults, ValidationReport};
 use std::time::Instant;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
-    tracing_subscriber::init();
+    fmt::init();
 
     println!("🏁 RIST Bonding End-to-End Integration Test");
     println!("============================================\n");

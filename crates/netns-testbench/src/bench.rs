@@ -31,6 +31,7 @@ pub struct NetworkOrchestrator {
     netns_manager: NetNsManager,
     veth_manager: VethManager,
     addr_configurer: AddrConfigurer,
+    #[allow(dead_code)]
     qdisc_manager: Arc<QdiscManager>,
     scheduler: Scheduler,
     active_links: Vec<LinkHandle>,
@@ -44,7 +45,17 @@ impl NetworkOrchestrator {
     pub async fn new(seed: u64) -> Result<Self, TestbenchError> {
         info!("Initializing network orchestrator with seed: {}", seed);
 
-        let netns_manager = NetNsManager::new()?;
+        let mut netns_manager = NetNsManager::new()?;
+        
+        // Clean up any stale namespaces from previous runs
+        let cleaned = netns_manager.force_cleanup_stale_namespaces("tx0_link_").await
+            .unwrap_or(0) + netns_manager.force_cleanup_stale_namespaces("rx0_link_").await
+            .unwrap_or(0);
+        
+        if cleaned > 0 {
+            info!("Cleaned up {} stale namespaces", cleaned);
+        }
+
         let veth_manager = VethManager::new().await?;
         let addr_configurer = AddrConfigurer::new().await?;
         let qdisc_manager = Arc::new(QdiscManager::new());
@@ -131,18 +142,26 @@ impl NetworkOrchestrator {
         self.addr_configurer.configure_loopback(&ns_a, &self.netns_manager).await?;
         self.addr_configurer.configure_loopback(&ns_b, &self.netns_manager).await?;
 
-        // Create veth pair
-        let veth_a = format!("veth-{}-a", link_id);
-        let veth_b = format!("veth-{}-b", link_id);
-        
-        let _veth_pair = self.veth_manager.create_pair(&veth_a, &veth_b).await?;
+    // Create veth pair (ensure no leftovers from previous runs)
+    let veth_a = format!("veth-{}-a", link_id);
+    let veth_b = format!("veth-{}-b", link_id);
+
+    // Best-effort cleanup in default namespace if stale
+    let _ = self.veth_manager.delete_if_exists(&veth_a).await;
+    let _ = self.veth_manager.delete_if_exists(&veth_b).await;
+
+    let _veth_pair = self.veth_manager.create_pair(&veth_a, &veth_b).await?;
 
         // Move veth ends to namespaces
         self.veth_manager.move_to_namespace(&veth_a, &ns_a, &self.netns_manager).await?;
         self.veth_manager.move_to_namespace(&veth_b, &ns_b, &self.netns_manager).await?;
 
-        // Configure IP addresses (use /30 subnets)
-        let (addr_a, addr_b) = AddrConfigurer::generate_p2p_subnet(self.next_link_id as u8)?;
+    // Configure IP addresses (use /30 subnets)
+    // Use the numeric part of the current link id (prior to increment) for deterministic addressing.
+    // At this point, self.next_link_id has already been incremented by start_scenario(),
+    // so subtract 1 to get the actual link number used in names (e.g., link_1 -> id 1).
+    let link_num = (self.next_link_id - 1) as u8;
+    let (addr_a, addr_b) = AddrConfigurer::generate_p2p_subnet(link_num)?;
 
         self.addr_configurer.add_address(AddressConfig {
             interface: veth_a.clone(),
@@ -211,7 +230,6 @@ pub async fn start_rist_bonding_test(rx_port: u16) -> Result<NetworkOrchestrator
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scenarios::TestScenario;
 
     #[tokio::test]
     async fn test_orchestrator_creation() -> Result<(), TestbenchError> {

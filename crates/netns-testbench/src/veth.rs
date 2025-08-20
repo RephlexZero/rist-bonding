@@ -47,6 +47,7 @@ pub enum VethError {
 /// Information about a veth interface
 #[derive(Clone, Debug)]
 pub struct VethInfo {
+    #[allow(dead_code)]
     pub name: String,
     pub index: u32,
     pub peer_name: String,
@@ -140,6 +141,29 @@ impl PairManager {
 
         info!("Created veth pair: {} <-> {}", left_name, right_name);
         Ok(pair)
+    }
+
+    /// Delete an interface by name if it exists (best-effort).
+    /// This removes the interface in the current namespace along with its peer if it's a veth.
+    pub async fn delete_if_exists(&mut self, interface_name: &str) -> Result<(), VethError> {
+        match self.get_interface_info(interface_name).await {
+            Ok(info) => {
+                // Attempt to delete; for veth this removes both ends
+                self.handle
+                    .link()
+                    .del(info.index)
+                    .execute()
+                    .await
+                    .map_err(VethError::CreateFailed)?;
+
+                // Clean tracking if present
+                self.pairs.remove(interface_name);
+                info!("Deleted existing interface {}", interface_name);
+                Ok(())
+            }
+            Err(VethError::NotFound(_)) => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 
     /// Move an interface to a network namespace
@@ -345,6 +369,7 @@ impl PairManager {
 #[derive(Clone, Debug)]
 struct InterfaceInfo {
     index: u32,
+    #[allow(dead_code)]
     name: String,
     mtu: u32,
 }

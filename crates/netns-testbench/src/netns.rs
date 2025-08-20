@@ -3,7 +3,7 @@
 //! This module provides functionality to create, delete, and enter Linux
 //! network namespaces using the `/var/run/netns/<name>` convention.
 
-use nix::mount::{mount, umount, MsFlags};
+use nix::mount::{mount, umount2, MntFlags, MsFlags};
 use nix::sched::{setns, CloneFlags};
 use nix::unistd::getpid;
 use std::collections::HashMap;
@@ -64,6 +64,96 @@ impl Manager {
         })
     }
 
+    /// Attach to an existing namespace by name (opens the file and tracks it)
+    pub fn attach_existing_namespace(&mut self, name: &str) -> Result<(), NetNsError> {
+        let ns_path = self.base_dir.join(name);
+        if !ns_path.exists() {
+            return Err(NetNsError::NotFound(name.to_string()));
+        }
+
+        // Open the namespace file for later use
+        let file = OpenOptions::new()
+            .read(true)
+            .open(&ns_path)
+            .map_err(NetNsError::OpenNs)?;
+
+        self.namespaces.insert(name.to_string(), file);
+        Ok(())
+    }
+
+    /// Force cleanup of all stale namespaces with given prefix
+    pub async fn force_cleanup_stale_namespaces(&mut self, prefix: &str) -> Result<usize, NetNsError> {
+        let mut cleaned_count = 0;
+        
+        if let Ok(mut entries) = tokio::fs::read_dir(&self.base_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                if let Ok(name) = entry.file_name().into_string() {
+                    if name.starts_with(prefix) {
+                        debug!("Force cleaning stale namespace: {}", name);
+                        if let Ok(()) = self.force_delete_namespace(&name).await {
+                            cleaned_count += 1;
+                        }
+                    }
+                }
+            }
+        }
+        
+        Ok(cleaned_count)
+    }
+    
+    /// Force delete a namespace even if not in our tracking
+    pub async fn force_delete_namespace(&mut self, name: &str) -> Result<(), NetNsError> {
+        let ns_path = self.base_dir.join(name);
+        
+        debug!("Force deleting namespace: {}", name);
+        
+        // Remove from our tracking if present
+        self.namespaces.remove(name);
+        
+    // Try to unmount first (prefer MNT_DETACH to avoid EBUSY)
+        if ns_path.exists() {
+            // Multiple unmount attempts in case of busy resources
+            for attempt in 1..=3 {
+        match umount2(&ns_path, MntFlags::MNT_DETACH) {
+                    Ok(()) => break,
+                    Err(e) if attempt < 3 => {
+                        debug!("Unmount attempt {} failed for {}: {}, retrying", attempt, name, e);
+                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    },
+                    Err(e) => warn!("Failed to unmount namespace {} after {} attempts: {}", name, attempt, e),
+                }
+            }
+            
+            // Force remove the file
+            match tokio::fs::remove_file(&ns_path).await {
+                Ok(()) => info!("Force deleted namespace: {}", name),
+                Err(e) => {
+                    // Try using `ip netns del` and then system rm as last resorts
+                    let _ = tokio::process::Command::new("ip")
+                        .args(["netns", "del", name])
+                        .status()
+                        .await;
+                    let status = tokio::process::Command::new("rm")
+                        .arg("-f")
+                        .arg(&ns_path)
+                        .status()
+                        .await;
+                    if let Ok(status) = status {
+                        if status.success() {
+                            info!("Force deleted namespace with rm: {}", name);
+                        } else {
+                            return Err(NetNsError::CreateFile(e));
+                        }
+                    } else {
+                        return Err(NetNsError::CreateFile(e));
+                    }
+                },
+            }
+        }
+        
+        Ok(())
+    }
+
     /// Create a new network namespace
     pub async fn create_namespace(&mut self, name: &str) -> Result<(), NetNsError> {
         if self.namespaces.contains_key(name) {
@@ -72,9 +162,13 @@ impl Manager {
 
         let ns_path = self.base_dir.join(name);
         
-        // Check if namespace file already exists
+        // Check if namespace file already exists and clean it up
         if ns_path.exists() {
-            return Err(NetNsError::AlreadyExists(name.to_string()));
+            warn!("Cleaning up stale namespace file: {}", name);
+            if let Err(e) = self.force_delete_namespace(name).await {
+                warn!("Failed to clean up stale namespace {}: {}", name, e);
+                return Err(NetNsError::AlreadyExists(name.to_string()));
+            }
         }
 
         debug!("Creating namespace: {}", name);
@@ -105,11 +199,9 @@ impl Manager {
             let ns_path = ns_path.clone();
             let name = name.to_string();
             move || -> Result<(), NetNsError> {
-                unsafe {
-                    // Unshare network namespace
-                    if nix::sched::unshare(clone_flags).is_err() {
-                        return Err(NetNsError::Permission);
-                    }
+                // Unshare network namespace
+                if nix::sched::unshare(clone_flags).is_err() {
+                    return Err(NetNsError::Permission);
                 }
 
                 // Bind mount the new namespace
@@ -147,25 +239,39 @@ impl Manager {
         let ns_path = self.base_dir.join(name);
         
         if !ns_path.exists() {
-            return Err(NetNsError::NotFound(name.to_string()));
+            // Remove from tracking even if file doesn't exist
+            self.namespaces.remove(name);
+            return Ok(());
         }
 
         debug!("Deleting namespace: {}", name);
 
-        // Remove from our tracking
+        // Remove from our tracking first
         self.namespaces.remove(name);
 
-        // Unmount the namespace
-        if let Err(e) = umount(&ns_path) {
-            warn!("Failed to unmount namespace {}: {}", name, e);
+        // Try graceful cleanup first, then force cleanup if needed
+        match self.try_graceful_delete(&ns_path).await {
+            Ok(()) => {
+                info!("Deleted namespace: {}", name);
+                Ok(())
+            },
+            Err(_) => {
+                warn!("Graceful delete failed for {}, attempting force delete", name);
+                self.force_delete_namespace(name).await
+            }
         }
+    }
+    
+    /// Try graceful namespace deletion
+    async fn try_graceful_delete(&self, ns_path: &std::path::Path) -> Result<(), NetNsError> {
+        // Unmount the namespace (lazy unmount to avoid EBUSY)
+        umount2(ns_path, MntFlags::MNT_DETACH).map_err(NetNsError::Mount)?;
 
         // Remove the file
-        fs::remove_file(&ns_path)
+        fs::remove_file(ns_path)
             .await
             .map_err(NetNsError::CreateFile)?;
-
-        info!("Deleted namespace: {}", name);
+            
         Ok(())
     }
 
@@ -231,15 +337,22 @@ impl Manager {
 
 impl Drop for Manager {
     fn drop(&mut self) {
-        // Clean up all namespaces on drop
+        // Best-effort synchronous cleanup without requiring a Tokio runtime
         let names: Vec<String> = self.namespaces.keys().cloned().collect();
         for name in names {
-            if let Err(e) = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(self.delete_namespace(&name))
-            }) {
-                warn!("Failed to clean up namespace {}: {}", name, e);
+            let ns_path = self.base_dir.join(&name);
+            // Try lazy unmount; ignore errors
+            let _ = umount2(&ns_path, MntFlags::MNT_DETACH);
+            // Try std::fs remove; if it fails, try shell fallbacks
+            if let Err(e) = std::fs::remove_file(&ns_path) {
+                // Try `ip netns del <name>` then rm -f
+                let _ = std::process::Command::new("ip").args(["netns", "del", &name]).status();
+                let _ = std::process::Command::new("rm").args(["-f", ns_path.to_string_lossy().as_ref()]).status();
+                // As last resort, just warn
+                let _ = e; // suppress unused if success
             }
         }
+        self.namespaces.clear();
     }
 }
 
@@ -262,7 +375,7 @@ impl Drop for NamespaceGuard {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // use super::{Manager, NetNsError};
 
     #[tokio::test]
     #[cfg(feature = "sudo-tests")]

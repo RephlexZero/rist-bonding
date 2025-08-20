@@ -24,6 +24,18 @@
 			"type": "shell",
 			"command": "GST_PLUGIN_PATH=target/debug gst-inspect-1.0 ristdispatcher",
 			"group": "test"
+		},
+		{
+			"label": "cargo build (dev)",
+			"type": "shell",
+			"command": "PKG_CONFIG_PATH=/usr/lib/pkgconfig cargo build",
+			"group": "build"
+		},
+		{
+			"label": "cargo build (dev)",
+			"type": "shell",
+			"command": "PKG_CONFIG_PATH=/usr/lib/pkgconfig cargo build",
+			"group": "build"
 		}
 	]
 }

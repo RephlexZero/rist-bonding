@@ -9,7 +9,7 @@ use ipnetwork::{IpNetwork, Ipv4Network};
 use rtnetlink::{Handle, new_connection};
 use std::net::{IpAddr, Ipv4Addr};
 use thiserror::Error;
-use tracing::{debug, info};
+use tracing::{info, debug, error};
 
 #[derive(Error, Debug)]
 pub enum AddrError {
@@ -88,19 +88,34 @@ impl Configurer {
         // Find the interface
         let interface_index = self.find_interface_index(&handle, &config.interface).await?;
 
-        // Add the address
+        // Add the address - handle "already exists" gracefully
         let prefix_len = config.address.prefix();
         let ip = config.address.ip();
-        handle
+        match handle
             .address()
             .add(interface_index, ip, prefix_len)
             .execute()
-            .await
-            .map_err(AddrError::AddAddress)?;
-
-        info!("Added address {} to interface {} in namespace {:?}", 
-              config.address, config.interface, config.namespace);
-        Ok(())
+            .await {
+            Ok(_) => {
+                info!("Added address {} to interface {} in namespace {:?}", 
+                      config.address, config.interface, config.namespace);
+                Ok(())
+            },
+            Err(e) => {
+                // If address already exists, that's okay - continue
+                let error_msg = e.to_string();
+                if error_msg.contains("File exists") || 
+                   error_msg.contains("EEXIST") || 
+                   error_msg.contains("os error 17") {
+                    debug!("Address {} already exists on interface {} ({}), continuing", 
+                           config.address, config.interface, error_msg);
+                    Ok(())
+                } else {
+                    error!("Failed to add address {}: {}", config.address, error_msg);
+                    Err(AddrError::AddAddress(e))
+                }
+            }
+        }
     }
 
     /// Add a route
@@ -170,21 +185,39 @@ impl Configurer {
         let lo_index = self.find_interface_index(&handle, "lo").await?;
 
         // Add loopback address
-        handle
+        match handle
             .address()
             .add(lo_index, IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8)
             .execute()
-            .await
-            .map_err(AddrError::AddAddress)?;
+            .await {
+            Ok(_) => {}
+            Err(e) => {
+                let msg = e.to_string();
+                // If already configured, that's fine
+                if msg.contains("File exists") || msg.contains("EEXIST") || msg.contains("os error 17") {
+                    debug!("Loopback address already present in {}, continuing", namespace);
+                } else {
+                    return Err(AddrError::AddAddress(e));
+                }
+            }
+        }
 
         // Bring loopback up
-        handle
+        if let Err(e) = handle
             .link()
             .set(lo_index)
             .up()
             .execute()
             .await
-            .map_err(AddrError::Loopback)?;
+        {
+            let msg = e.to_string();
+            // Some kernels might return harmless errors if already up; log and continue
+            if msg.contains("File exists") || msg.contains("EEXIST") || msg.contains("Device or resource busy") {
+                debug!("Loopback already up in {} ({}), continuing", namespace, msg);
+            } else {
+                return Err(AddrError::Loopback(e));
+            }
+        }
 
         info!("Configured loopback in namespace {}", namespace);
         Ok(())
@@ -245,13 +278,17 @@ impl Configurer {
             return Err(AddrError::InvalidConfig("Link ID cannot be 0".to_string()));
         }
 
-        let base = 10 + (link_id as u32 - 1) * 4; // 10.0.0.x, 10.0.0.x+4, etc.
-        
-        if base > 250 {
+    // For /30 networks, valid subnets start at multiples of 4.
+    // Pick a base that is aligned on 4: 8, 12, 16, ...
+    // Then use base+1 and base+2 as the two host addresses.
+    // Example for link_id=1: base=8 -> hosts 10.0.0.9 and 10.0.0.10
+    let base = 8 + (link_id as u32 - 1) * 4; // 10.0.0.8, 10.0.0.12, ...
+
+    if base > 252 {
             return Err(AddrError::InvalidConfig(format!("Link ID {} too high", link_id)));
         }
 
-        let left_addr = Ipv4Network::new(Ipv4Addr::new(10, 0, 0, base as u8 + 1), 30)
+    let left_addr = Ipv4Network::new(Ipv4Addr::new(10, 0, 0, base as u8 + 1), 30)
             .map_err(|e| AddrError::InvalidConfig(e.to_string()))?;
         let right_addr = Ipv4Network::new(Ipv4Addr::new(10, 0, 0, base as u8 + 2), 30)
             .map_err(|e| AddrError::InvalidConfig(e.to_string()))?;
@@ -375,20 +412,22 @@ mod tests {
 
     #[test]
     fn test_p2p_subnet_generation() {
-        let (left, right) = Configurer::generate_p2p_subnet(1).unwrap();
-        assert_eq!(left.ip(), Ipv4Addr::new(10, 0, 0, 11));
-        assert_eq!(right.ip(), Ipv4Addr::new(10, 0, 0, 12));
+    let (left, right) = Configurer::generate_p2p_subnet(1).unwrap();
+    // /30 aligned network starting at .8 -> usable hosts .9 and .10
+    assert_eq!(left.ip(), Ipv4Addr::new(10, 0, 0, 9));
+    assert_eq!(right.ip(), Ipv4Addr::new(10, 0, 0, 10));
         assert_eq!(left.prefix(), 30);
         assert_eq!(right.prefix(), 30);
 
-        let (left2, right2) = Configurer::generate_p2p_subnet(2).unwrap();
-        assert_eq!(left2.ip(), Ipv4Addr::new(10, 0, 0, 15));
-        assert_eq!(right2.ip(), Ipv4Addr::new(10, 0, 0, 16));
+    let (left2, right2) = Configurer::generate_p2p_subnet(2).unwrap();
+    // Next /30 aligned network starting at .12 -> usable hosts .13 and .14
+    assert_eq!(left2.ip(), Ipv4Addr::new(10, 0, 0, 13));
+    assert_eq!(right2.ip(), Ipv4Addr::new(10, 0, 0, 14));
     }
 
     #[test]
     fn test_invalid_subnet_generation() {
         assert!(Configurer::generate_p2p_subnet(0).is_err());
-        assert!(Configurer::generate_p2p_subnet(64).is_err()); // Would exceed 255
+    assert!(Configurer::generate_p2p_subnet(64).is_err()); // Would exceed 255
     }
 }

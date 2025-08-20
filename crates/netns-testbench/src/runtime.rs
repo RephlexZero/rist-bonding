@@ -62,16 +62,7 @@ impl LinkRuntime {
         }
     }
 
-    /// Initialize state for Markov chain scheduling
-    fn init_markov_state(&mut self) {
-        if let Schedule::Markov { initial_state, .. } = &self.schedule {
-            self.markov_state = Some(MarkovState {
-                current_state: *initial_state,
-                next_transition_time: Instant::now(),
-                rng: StdRng::from_entropy(),
-            });
-        }
-    }
+    // Removed unused init_markov_state (state is initialized lazily in get_next_spec)
 
     /// Initialize state for trace replay scheduling
     fn init_replay_state(&mut self) -> Result<(), RuntimeError> {
