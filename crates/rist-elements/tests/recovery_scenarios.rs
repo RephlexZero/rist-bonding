@@ -5,8 +5,7 @@
 
 use gst::prelude::*;
 use gstreamer as gst;
-use gstristsmart::test_pipeline;
-use gstristsmart::testing::*;
+use gstristelements::testing::*;
 
 #[test]
 fn test_single_link_degradation_recovery() {
@@ -29,7 +28,8 @@ fn test_single_link_degradation_recovery() {
         .property("freq", 440.0)
         .build()
         .expect("Failed to create audiotestsrc");
-    test_pipeline!(pipeline, &source, &dispatcher, &counter1, &counter2);
+    let pipeline = gst::Pipeline::new();
+    pipeline.add_many([&source, &dispatcher, &counter1, &counter2]).expect("Failed to add elements to pipeline");
 
     // Link elements
     let src_0 = dispatcher.request_pad_simple("src_%u").unwrap();
@@ -206,14 +206,8 @@ fn test_dispatcher_recovery_integration() {
     let counter2 = create_counter_sink();
     let counter3 = create_counter_sink();
 
-    test_pipeline!(
-        pipeline,
-        &source,
-        &dispatcher,
-        &counter1,
-        &counter2,
-        &counter3
-    );
+    let pipeline = gst::Pipeline::new();
+    pipeline.add_many([&source, &dispatcher, &counter1, &counter2, &counter3]).expect("Failed to add elements to pipeline");
 
     // Set up three output paths
     let src_0 = dispatcher.request_pad_simple("src_%u").unwrap();

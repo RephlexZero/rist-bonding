@@ -3,7 +3,6 @@
 //! This module provides functionality to create, delete, and enter Linux
 //! network namespaces using the `/var/run/netns/<name>` convention.
 
-use anyhow::Context;
 use nix::mount::{mount, umount, MsFlags};
 use nix::sched::{setns, CloneFlags};
 use nix::unistd::getpid;

@@ -3,7 +3,7 @@
 
 use gst::prelude::*;
 use gstreamer as gst;
-use gstristsmart::testing::*;
+use gstristelements::testing::*;
 
 #[test]
 fn stress_pad_lifecycle() {

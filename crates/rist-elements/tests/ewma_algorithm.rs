@@ -4,8 +4,7 @@
 
 use gst::prelude::*;
 use gstreamer as gst;
-use gstristsmart::test_pipeline;
-use gstristsmart::testing::*;
+use gstristelements::testing::*;
 use std::time::Duration;
 
 #[test]
@@ -46,7 +45,8 @@ fn test_ewma_with_mock_statistics() {
     dispatcher.set_property("rebalance-interval-ms", 200u64);
     dispatcher.set_property("auto-balance", true);
 
-    test_pipeline!(pipeline, &source, &dispatcher, &counter1, &counter2);
+    let pipeline = gst::Pipeline::new();
+    pipeline.add_many([&source, &dispatcher, &counter1, &counter2]).expect("Failed to add elements to pipeline");
 
     // Create the pipeline: source -> dispatcher -> [counter1, counter2]
     let src_0 = dispatcher.request_pad_simple("src_%u").unwrap();
@@ -118,7 +118,8 @@ fn test_ewma_adaptation_over_time() {
     dispatcher.set_property("rebalance-interval-ms", 100u64); // Minimum valid value
     dispatcher.set_property("auto-balance", true);
 
-    test_pipeline!(pipeline, &source, &dispatcher, &counter1, &counter2);
+    let pipeline = gst::Pipeline::new();
+    pipeline.add_many([&source, &dispatcher, &counter1, &counter2]).expect("Failed to add elements to pipeline");
 
     // Set up pipeline: source -> dispatcher -> [counter1, counter2]
     let src_0 = dispatcher.request_pad_simple("src_%u").unwrap();

@@ -5,8 +5,7 @@
 
 use gst::prelude::*;
 use gstreamer as gst;
-use gstristsmart::test_pipeline;
-use gstristsmart::testing::*;
+use gstristelements::testing::*;
 
 #[test]
 fn test_rist_plugin_availability() {
@@ -59,7 +58,8 @@ fn test_basic_data_flow_without_rist() {
     let counter1 = create_counter_sink();
     let counter2 = create_counter_sink();
 
-    test_pipeline!(pipeline, &source, &dispatcher, &counter1, &counter2);
+    let pipeline = gst::Pipeline::new();
+    pipeline.add_many([&source, &dispatcher, &counter1, &counter2]).expect("Failed to add elements to pipeline");
 
     // Link elements
     let src_0 = dispatcher.request_pad_simple("src_%u").unwrap();
@@ -178,14 +178,8 @@ fn test_rist_pipeline_with_transport() {
     let dispatcher = create_dispatcher(Some(&[1.0])); // Single output for simplicity
     let counter = create_counter_sink();
 
-    test_pipeline!(
-        pipeline,
-        &source,
-        &dispatcher,
-        &ristsink,
-        &ristsrc,
-        &counter
-    );
+    let pipeline = gst::Pipeline::new();
+    pipeline.add_many([&source, &dispatcher, &ristsink, &ristsrc, &counter]).expect("Failed to add elements to pipeline");
 
     // Link: source -> dispatcher -> ristsink
     // And: ristsrc -> counter
@@ -231,15 +225,8 @@ fn test_audio_pipeline_without_rist_transport() {
     let counter1 = create_counter_sink();
     let counter2 = create_counter_sink();
 
-    test_pipeline!(
-        pipeline,
-        &source,
-        &encoder,
-        &dynbitrate,
-        &dispatcher,
-        &counter1,
-        &counter2
-    );
+    let pipeline = gst::Pipeline::new();
+    pipeline.add_many([&source, &encoder, &dynbitrate, &dispatcher, &counter1, &counter2]).expect("Failed to add elements to pipeline");
 
     // Link the pipeline
     source

@@ -1,7 +1,7 @@
 //! End-to-end RIST bonding test over the network simulator.
 
 use gstreamer::prelude::*;
-use gstristsmart::testing::{self, network_sim::*};
+use gstristelements::testing;
 use netlink_sim::{NetworkOrchestrator, TestScenario};
 
 /// Create a sender pipeline with sessions pointing to orchestrator ingress ports.

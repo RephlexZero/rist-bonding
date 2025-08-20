@@ -1,6 +1,6 @@
 //! Metrics collection and aggregation for network simulation
 
-use crate::{Result, ObservabilityError};
+use crate::Result;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -158,6 +158,7 @@ pub struct MetricsSnapshot {
 
 /// Collects metrics for individual links
 pub struct LinkMetricsCollector {
+    #[allow(dead_code)]
     link_id: String,
     stats: Arc<parking_lot::RwLock<LinkStats>>,
     qdisc_params: Arc<parking_lot::RwLock<QdiscParams>>,

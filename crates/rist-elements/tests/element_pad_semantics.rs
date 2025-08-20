@@ -5,8 +5,7 @@
 
 use gst::prelude::*;
 use gstreamer as gst;
-use gstristsmart::test_pipeline;
-use gstristsmart::testing::*;
+use gstristelements::testing::*;
 
 #[test]
 fn test_caps_negotiation_and_proxying() {
@@ -24,7 +23,8 @@ fn test_caps_negotiation_and_proxying() {
     let sink = create_fake_sink();
 
     // Create pipeline
-    test_pipeline!(pipeline, &source, &dispatcher, &sink);
+    let pipeline = gst::Pipeline::new();
+    pipeline.add_many([&source, &dispatcher, &sink]).expect("Failed to add elements to pipeline");
 
     // Request src pad and link
     let src_pad = dispatcher.request_pad_simple("src_%u").unwrap();
@@ -102,7 +102,8 @@ fn test_eos_event_fanout() {
     let counter2 = create_counter_sink();
 
     // Create pipeline
-    test_pipeline!(pipeline, &source, &dispatcher, &counter1, &counter2);
+    let pipeline = gst::Pipeline::new();
+    pipeline.add_many([&source, &dispatcher, &counter1, &counter2]).expect("Failed to add elements to pipeline");
 
     // Request pads and link
     let src_0 = dispatcher.request_pad_simple("src_%u").unwrap();
@@ -205,7 +206,8 @@ fn test_flush_event_handling() {
     let counter2 = create_counter_sink();
 
     // Create minimal pipeline for testing flush events
-    test_pipeline!(pipeline, &dispatcher, &counter1, &counter2);
+    let pipeline = gst::Pipeline::new();
+    pipeline.add_many([&dispatcher, &counter1, &counter2]).expect("Failed to add elements to pipeline");
 
     // Request pads and link
     let src_0 = dispatcher.request_pad_simple("src_%u").unwrap();
@@ -285,7 +287,8 @@ fn test_sticky_events_replay() {
     let dispatcher = create_dispatcher(Some(&[1.0]));
 
     // Create pipeline with just source and dispatcher first
-    test_pipeline!(pipeline, &source, &dispatcher);
+    let pipeline = gst::Pipeline::new();
+    pipeline.add_many([&source, &dispatcher]).expect("Failed to add elements to pipeline");
     source
         .link(&dispatcher)
         .expect("Failed to link source to dispatcher");

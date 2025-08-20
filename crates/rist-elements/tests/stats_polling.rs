@@ -4,8 +4,7 @@
 
 use gst::prelude::*;
 use gstreamer as gst;
-use gstristsmart::test_pipeline;
-use gstristsmart::testing::*;
+use gstristelements::testing::*;
 use std::time::Duration;
 
 #[test]
@@ -71,7 +70,8 @@ fn test_stats_driven_rebalancing() {
     dispatcher.set_property("strategy", "ewma");
     dispatcher.set_property("rebalance-interval-ms", 200u64);
 
-    test_pipeline!(pipeline, &source, &dispatcher, &counter1, &counter2);
+    let pipeline = gst::Pipeline::new();
+    pipeline.add_many([&source, &dispatcher, &counter1, &counter2]).expect("Failed to add elements to pipeline");
 
     // Link pipeline: source -> dispatcher -> [counter1, counter2]
     source.link(&dispatcher).unwrap();

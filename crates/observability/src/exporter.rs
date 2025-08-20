@@ -1,8 +1,7 @@
 //! Metrics exporters for different output formats
 
-use crate::{Result, ObservabilityError, MetricsSnapshot};
+use crate::{Result, MetricsSnapshot};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use serde_json;
 use std::path::Path;
 use tokio::fs::File;

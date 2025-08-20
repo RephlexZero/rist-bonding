@@ -5,8 +5,7 @@
 
 use gst::prelude::*;
 use gstreamer as gst;
-use gstristsmart::testing::*;
-use gstristsmart::{link_elements, test_pipeline};
+use gstristelements::testing::*;
 
 #[test]
 fn test_integrated_dispatcher_flow() {
@@ -18,8 +17,10 @@ fn test_integrated_dispatcher_flow() {
     let counter2 = create_counter_sink();
     let source = create_test_source();
 
-    // Create and set up pipeline using macro
-    test_pipeline!(pipeline, &source, &dispatcher, &counter1, &counter2);
+    // Create pipeline
+    let pipeline = gst::Pipeline::new();
+    pipeline.add_many([&source, &dispatcher, &counter1, &counter2])
+        .expect("Failed to add elements to pipeline");
 
     // Request src pads from dispatcher
     let src_0 = dispatcher.request_pad_simple("src_%u").unwrap();
@@ -105,10 +106,13 @@ fn test_dynbitrate_integration() {
     let sink = create_fake_sink();
 
     // Create pipeline
-    test_pipeline!(pipeline, &source, &encoder, &dynbitrate, &sink);
+    let pipeline = gst::Pipeline::new();
+    pipeline.add_many([&source, &encoder, &dynbitrate, &sink])
+        .expect("Failed to add elements to pipeline");
 
     // Link all elements
-    link_elements!(&source, &encoder, &dynbitrate, &sink);
+    gst::Element::link_many([&source, &encoder, &dynbitrate, &sink])
+        .expect("Failed to link elements");
 
     // Test the pipeline
     wait_for_state_change(&pipeline, gst::State::Paused, 5).expect("Failed to pause pipeline");

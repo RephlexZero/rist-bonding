@@ -1,6 +1,6 @@
 //! GStreamer bus monitoring and integration
 
-use crate::{Result, ObservabilityError};
+use crate::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use chrono::{DateTime, Utc};
@@ -41,6 +41,7 @@ impl BusMessageFilter {
 
 /// Collects and correlates GStreamer bus messages with simulation metrics
 pub struct GstBusCollector {
+    #[allow(dead_code)]
     filter: BusMessageFilter,
     collected_metrics: Vec<RistDispatcherMetrics>,
 }

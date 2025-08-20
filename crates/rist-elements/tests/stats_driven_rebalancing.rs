@@ -5,8 +5,7 @@
 
 use gst::prelude::*;
 use gstreamer as gst;
-use gstristsmart::test_pipeline;
-use gstristsmart::testing::*;
+use gstristelements::testing::*;
 use std::time::Duration;
 
 #[test]
@@ -29,7 +28,8 @@ fn test_stats_driven_dispatcher_rebalancing() {
     let counter2 = create_counter_sink();
 
     // Create pipeline
-    test_pipeline!(pipeline, &source, &dispatcher, &counter1, &counter2);
+    let pipeline = gst::Pipeline::new();
+    pipeline.add_many([&source, &dispatcher, &counter1, &counter2]).expect("Failed to add elements to pipeline");
 
     // Set up initial mock stats (session 0 performs better than session 1)
     let initial_stats = gst::Structure::builder("rist/x-sender-stats")
@@ -173,7 +173,8 @@ fn test_dynbitrate_integration() {
     let sink = create_fake_sink();
 
     // Create pipeline
-    test_pipeline!(pipeline, &source, &encoder, &dynbitrate, &sink);
+    let pipeline = gst::Pipeline::new();
+    pipeline.add_many([&source, &encoder, &dynbitrate, &sink]).expect("Failed to add elements to pipeline");
 
     // Link elements
     source
