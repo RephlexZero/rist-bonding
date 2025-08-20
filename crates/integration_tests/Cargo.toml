@@ -16,7 +16,7 @@ gstreamer = "0.24.1"
 glib = "0.21.1"
 
 # Local crates
-netlink-sim = { path = "../../netlink-sim", features = ["enhanced"] }
+netns-testbench = { path = "../netns-testbench" }
 scenarios = { path = "../scenarios" }
 observability = { path = "../observability" }
 

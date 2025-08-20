@@ -13,21 +13,14 @@ serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 
 # Optional backends
-netlink-sim = { path = "../../netlink-sim", optional = true }
 netns-testbench = { path = "../netns-testbench", optional = true }
 tracing = { version = "0.1", optional = true }
 tracing-subscriber = { version = "0.3", features = ["fmt"], optional = true }
 
 [features]
-default = ["network-sim"]
-network-sim = ["netlink-sim", "tracing", "tracing-subscriber"]
+default = ["netns-sim"]
 netns-sim = ["netns-testbench", "tracing-subscriber"]
 observability-demo = ["observability", "tracing", "tracing-subscriber"]
-
-[[bin]]
-name = "test_network_sim_demo"
-path = "src/test_network_sim_demo.rs"
-required-features = ["network-sim"]
 
 [[bin]]
 name = "test_netns_demo"
@@ -38,11 +31,6 @@ required-features = ["netns-sim"]
 name = "enhanced_scheduler"
 path = "src/enhanced_scheduler.rs"
 required-features = ["netns-sim"]
-
-[[bin]]
-name = "test_race_car_demo"
-path = "src/bin/test_race_car_demo.rs"
-required-features = ["network-sim"]
 
 [[bin]]
 name = "observability_demo"

@@ -28,9 +28,8 @@ once_cell = "1.21.3"
 
 # Test dependencies (only when test-plugin feature is enabled)
 glib = { version = "0.21.1", optional = true }
-netlink-sim = { path = "../../netlink-sim", optional = true }
-netns-testbench = { path = "../../crates/netns-testbench", optional = true }
-scenarios = { path = "../../crates/scenarios", optional = true }
+netns-testbench = { path = "../netns-testbench", optional = true }
+scenarios = { path = "../scenarios", optional = true }
 tokio = { version = "1.47.1", features = ["full"], optional = true }
 
 [dev-dependencies]
@@ -47,7 +46,6 @@ integration_tests = { path = "../integration_tests" }
 [build-dependencies]
 
 [features]
-default = ["test-plugin", "network-sim"]
+default = ["test-plugin", "netns-sim"]
 test-plugin = ["glib"]
-network-sim = ["netlink-sim", "tokio"]
 netns-sim = ["netns-testbench", "scenarios", "tokio"]

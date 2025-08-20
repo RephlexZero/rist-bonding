@@ -2,7 +2,7 @@
 //!
 //! This crate provides data models for network impairments and realistic
 //! 4G/5G behavior presets that can be used by both the netns-testbench
-//! and the legacy netlink-sim backend.
+//! and the netns-testbench backend.
 
 pub mod builder;
 pub mod direction;

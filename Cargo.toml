@@ -1,7 +1,5 @@
 [workspace]
 members = [
-    "ristsmart",
-    "netlink-sim", 
     "crates/rist-elements",
     "crates/netns-testbench",
     "crates/scenarios",

@@ -144,7 +144,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n🔧 Integration Status:");
     println!("---------------------");
     println!("  ✅ scenarios crate - Complete with enhanced models");
-    println!("  ✅ rist-elements crate - Migrated from ristsmart");
+    println!("  ✅ rist-elements crate - Main GStreamer elements");    
     println!("  ✅ bench-cli crate - Basic CLI functionality");
     println!("  🚧 netns-testbench crate - In progress (compilation fixes needed)");
     println!("  ⏳ API compatibility layer - Pending netns-testbench completion");
@@ -153,7 +153,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n🎉 New Architecture Successfully Demonstrated!");
     println!("The repository structure has been modernized according to plan.md:");
     println!("• /crates/scenarios - Pure data models with realistic 4G/5G presets");
-    println!("• /crates/rist-elements - Renamed from ristsmart, GStreamer elements");
+    println!("• /crates/rist-elements - GStreamer RIST elements");
     println!("• /crates/netns-testbench - Linux netns backend (fixing compilation)");
     println!("• /crates/bench-cli - Command-line tool for scenario management");
     

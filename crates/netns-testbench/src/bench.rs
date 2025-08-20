@@ -26,7 +26,7 @@ pub struct LinkHandle {
     pub link_id: String,
 }
 
-/// Main network orchestrator providing drop-in compatibility with netlink-sim
+/// Main network orchestrator providing network simulation capabilities
 pub struct NetworkOrchestrator {
     netns_manager: NetNsManager,
     veth_manager: VethManager,
@@ -84,7 +84,7 @@ impl NetworkOrchestrator {
         })
     }
 
-    /// Start a test scenario (drop-in replacement for netlink-sim API)
+    /// Start a test scenario
     pub async fn start_scenario(
         &mut self,
         scenario: TestScenario,
@@ -259,7 +259,7 @@ impl Drop for NetworkOrchestrator {
 }
 
 /// Convenience function to start a RIST bonding test setup
-/// (drop-in replacement for netlink-sim function)
+///
 pub async fn start_rist_bonding_test(rx_port: u16) -> Result<NetworkOrchestrator> {
     let mut orchestrator = NetworkOrchestrator::new(42).await?;
 

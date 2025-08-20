@@ -2,7 +2,7 @@
 //!
 //! This crate provides comprehensive monitoring, metrics collection, and trace recording
 //! for network simulations and RIST bonding scenarios. It's designed to integrate with
-//! both netlink-sim and netns-testbench backends while providing unified observability.
+//! the netns-testbench backend while providing unified observability.
 //!
 //! # Features
 //!

@@ -13,11 +13,11 @@ use crate::test_harness::RistStatsMock;
 use gst::prelude::*;
 use gstreamer as gst;
 
-/// Network simulation integration (requires the `network-sim` feature)
-#[cfg(feature = "network-sim")]
+/// Network simulation integration (requires the `netns-sim` feature)
+#[cfg(feature = "netns-sim")]
 pub mod network_sim {
     use gstreamer::prelude::*;
-    use netlink_sim::{start_rist_bonding_test, NetworkOrchestrator, TestScenario};
+    use netns_testbench::{NetworkOrchestrator, TestScenario};
     use std::future::Future;
     use tokio::time::{timeout, Duration};
 
@@ -26,9 +26,8 @@ pub mod network_sim {
         scenario: TestScenario,
         rx_port: u16,
     ) -> Result<NetworkOrchestrator, Box<dyn std::error::Error>> {
-        // Use rx_port-derived seed so test runs using different ports don't collide
-        let seed = rx_port as u64 + 1000;
-        let mut orchestrator = NetworkOrchestrator::new(seed);
+        // Create orchestrator and start scenario
+        let mut orchestrator = NetworkOrchestrator::new(42).await?;
         let _handle = orchestrator.start_scenario(scenario, rx_port).await?;
         Ok(orchestrator)
     }
@@ -37,8 +36,9 @@ pub mod network_sim {
     pub async fn setup_bonding_test(
         rx_port: u16,
     ) -> Result<NetworkOrchestrator, Box<dyn std::error::Error>> {
-        let orchestrator = start_rist_bonding_test(rx_port).await?;
-        Ok(orchestrator)
+        // Use bonding asymmetric scenario for bonding tests
+        let scenario = TestScenario::bonding_asymmetric();
+        setup_network_scenario(scenario, rx_port).await
     }
 
     /// Run a test with network simulation for a specific duration
@@ -68,10 +68,10 @@ pub mod network_sim {
     pub fn get_test_scenarios() -> Vec<TestScenario> {
         vec![
             TestScenario::baseline_good(),
-            TestScenario::degraded_network(),
-            TestScenario::mobile_network(),
+            TestScenario::degrading_network(),
+            TestScenario::mobile_handover(),
             TestScenario::bonding_asymmetric(),
-            TestScenario::varying_quality(),
+            TestScenario::nr_to_lte_handover(),
         ]
     }
 

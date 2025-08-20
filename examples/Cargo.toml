@@ -13,6 +13,5 @@ tokio = { version = "1.0", features = ["full"] }
 tracing-subscriber = "0.3"
 
 # Local crates with enhanced features
-netlink-sim = { path = "netlink-sim", features = ["enhanced"] }
-scenarios = { path = "crates/scenarios" }
-observability = { path = "crates/observability" }
+scenarios = { path = "../crates/scenarios" }
+observability = { path = "../crates/observability" }

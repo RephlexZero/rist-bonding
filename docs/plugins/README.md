@@ -1,7 +1,7 @@
 # Plugins
 
 This workspace ships experimental GStreamer elements focused on RIST bonding
-and adaptive control. They are exposed through the `ristsmart` crate.
+and adaptive control. They are exposed through the `rist-elements` crate.
 
 ## Provided elements
 
