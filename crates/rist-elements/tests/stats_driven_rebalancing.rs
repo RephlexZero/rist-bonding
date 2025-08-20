@@ -29,7 +29,9 @@ fn test_stats_driven_dispatcher_rebalancing() {
 
     // Create pipeline
     let pipeline = gst::Pipeline::new();
-    pipeline.add_many([&source, &dispatcher, &counter1, &counter2]).expect("Failed to add elements to pipeline");
+    pipeline
+        .add_many([&source, &dispatcher, &counter1, &counter2])
+        .expect("Failed to add elements to pipeline");
 
     // Set up initial mock stats (session 0 performs better than session 1)
     let initial_stats = gst::Structure::builder("rist/x-sender-stats")
@@ -174,7 +176,9 @@ fn test_dynbitrate_integration() {
 
     // Create pipeline
     let pipeline = gst::Pipeline::new();
-    pipeline.add_many([&source, &encoder, &dynbitrate, &sink]).expect("Failed to add elements to pipeline");
+    pipeline
+        .add_many([&source, &encoder, &dynbitrate, &sink])
+        .expect("Failed to add elements to pipeline");
 
     // Link elements
     source

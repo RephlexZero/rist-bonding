@@ -18,25 +18,25 @@ use tracing::{debug, info, warn};
 pub enum NetNsError {
     #[error("Failed to create netns directory: {0}")]
     CreateDir(std::io::Error),
-    
+
     #[error("Failed to create netns file: {0}")]
     CreateFile(std::io::Error),
-    
+
     #[error("Failed to mount namespace: {0}")]
     Mount(nix::Error),
-    
+
     #[error("Failed to enter namespace: {0}")]
     SetNs(nix::Error),
-    
+
     #[error("Failed to open namespace file: {0}")]
     OpenNs(std::io::Error),
-    
+
     #[error("Namespace '{0}' not found")]
     NotFound(String),
-    
+
     #[error("Namespace '{0}' already exists")]
     AlreadyExists(String),
-    
+
     #[error("Insufficient permissions (CAP_NET_ADMIN required)")]
     Permission,
 }
@@ -53,11 +53,10 @@ impl Manager {
     /// Create a new namespace manager
     pub fn new() -> Result<Self, NetNsError> {
         let base_dir = PathBuf::from("/var/run/netns");
-        
+
         // Ensure the base directory exists
-        std::fs::create_dir_all(&base_dir)
-            .map_err(NetNsError::CreateDir)?;
-            
+        std::fs::create_dir_all(&base_dir).map_err(NetNsError::CreateDir)?;
+
         Ok(Self {
             namespaces: HashMap::new(),
             base_dir,
@@ -82,9 +81,12 @@ impl Manager {
     }
 
     /// Force cleanup of all stale namespaces with given prefix
-    pub async fn force_cleanup_stale_namespaces(&mut self, prefix: &str) -> Result<usize, NetNsError> {
+    pub async fn force_cleanup_stale_namespaces(
+        &mut self,
+        prefix: &str,
+    ) -> Result<usize, NetNsError> {
         let mut cleaned_count = 0;
-        
+
         if let Ok(mut entries) = tokio::fs::read_dir(&self.base_dir).await {
             while let Ok(Some(entry)) = entries.next_entry().await {
                 if let Ok(name) = entry.file_name().into_string() {
@@ -97,33 +99,39 @@ impl Manager {
                 }
             }
         }
-        
+
         Ok(cleaned_count)
     }
-    
+
     /// Force delete a namespace even if not in our tracking
     pub async fn force_delete_namespace(&mut self, name: &str) -> Result<(), NetNsError> {
         let ns_path = self.base_dir.join(name);
-        
+
         debug!("Force deleting namespace: {}", name);
-        
+
         // Remove from our tracking if present
         self.namespaces.remove(name);
-        
-    // Try to unmount first (prefer MNT_DETACH to avoid EBUSY)
+
+        // Try to unmount first (prefer MNT_DETACH to avoid EBUSY)
         if ns_path.exists() {
             // Multiple unmount attempts in case of busy resources
             for attempt in 1..=3 {
-        match umount2(&ns_path, MntFlags::MNT_DETACH) {
+                match umount2(&ns_path, MntFlags::MNT_DETACH) {
                     Ok(()) => break,
                     Err(e) if attempt < 3 => {
-                        debug!("Unmount attempt {} failed for {}: {}, retrying", attempt, name, e);
+                        debug!(
+                            "Unmount attempt {} failed for {}: {}, retrying",
+                            attempt, name, e
+                        );
                         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    },
-                    Err(e) => warn!("Failed to unmount namespace {} after {} attempts: {}", name, attempt, e),
+                    }
+                    Err(e) => warn!(
+                        "Failed to unmount namespace {} after {} attempts: {}",
+                        name, attempt, e
+                    ),
                 }
             }
-            
+
             // Force remove the file
             match tokio::fs::remove_file(&ns_path).await {
                 Ok(()) => info!("Force deleted namespace: {}", name),
@@ -147,10 +155,10 @@ impl Manager {
                     } else {
                         return Err(NetNsError::CreateFile(e));
                     }
-                },
+                }
             }
         }
-        
+
         Ok(())
     }
 
@@ -161,7 +169,7 @@ impl Manager {
         }
 
         let ns_path = self.base_dir.join(name);
-        
+
         // Check if namespace file already exists and clean it up
         if ns_path.exists() {
             warn!("Cleaning up stale namespace file: {}", name);
@@ -180,7 +188,7 @@ impl Manager {
 
         // Get current process network namespace
         let current_ns_path = format!("/proc/{}/ns/net", getpid());
-        
+
         // Bind mount current netns to the new file
         mount(
             Some(current_ns_path.as_str()),
@@ -193,7 +201,7 @@ impl Manager {
 
         // Create a new network namespace by unsharing
         let clone_flags = CloneFlags::CLONE_NEWNET;
-        
+
         // Fork and unshare in child, then bind mount the new namespace
         let result = tokio::task::spawn_blocking({
             let ns_path = ns_path.clone();
@@ -218,7 +226,9 @@ impl Manager {
                 debug!("Successfully created namespace: {}", name);
                 Ok(())
             }
-        }).await.map_err(|e| NetNsError::CreateFile(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+        })
+        .await
+        .map_err(|e| NetNsError::CreateFile(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
 
         result?;
 
@@ -227,17 +237,17 @@ impl Manager {
             .read(true)
             .open(&ns_path)
             .map_err(NetNsError::OpenNs)?;
-            
+
         self.namespaces.insert(name.to_string(), file);
         info!("Created namespace: {}", name);
-        
+
         Ok(())
     }
 
     /// Delete a network namespace
     pub async fn delete_namespace(&mut self, name: &str) -> Result<(), NetNsError> {
         let ns_path = self.base_dir.join(name);
-        
+
         if !ns_path.exists() {
             // Remove from tracking even if file doesn't exist
             self.namespaces.remove(name);
@@ -254,14 +264,17 @@ impl Manager {
             Ok(()) => {
                 info!("Deleted namespace: {}", name);
                 Ok(())
-            },
+            }
             Err(_) => {
-                warn!("Graceful delete failed for {}, attempting force delete", name);
+                warn!(
+                    "Graceful delete failed for {}, attempting force delete",
+                    name
+                );
                 self.force_delete_namespace(name).await
             }
         }
     }
-    
+
     /// Try graceful namespace deletion
     async fn try_graceful_delete(&self, ns_path: &std::path::Path) -> Result<(), NetNsError> {
         // Unmount the namespace (lazy unmount to avoid EBUSY)
@@ -271,13 +284,15 @@ impl Manager {
         fs::remove_file(ns_path)
             .await
             .map_err(NetNsError::CreateFile)?;
-            
+
         Ok(())
     }
 
     /// Enter a network namespace for the current thread
     pub fn enter_namespace(&self, name: &str) -> Result<NamespaceGuard, NetNsError> {
-        let file = self.namespaces.get(name)
+        let file = self
+            .namespaces
+            .get(name)
             .ok_or_else(|| NetNsError::NotFound(name.to_string()))?;
 
         // Save current namespace
@@ -287,8 +302,7 @@ impl Manager {
             .map_err(NetNsError::OpenNs)?;
 
         // Enter the target namespace
-        setns(&file, CloneFlags::CLONE_NEWNET)
-            .map_err(NetNsError::SetNs)?;
+        setns(&file, CloneFlags::CLONE_NEWNET).map_err(NetNsError::SetNs)?;
 
         debug!("Entered namespace: {}", name);
 
@@ -300,7 +314,9 @@ impl Manager {
 
     /// Get the file descriptor for a namespace
     pub fn get_namespace_fd(&self, name: &str) -> Result<RawFd, NetNsError> {
-        let file = self.namespaces.get(name)
+        let file = self
+            .namespaces
+            .get(name)
             .ok_or_else(|| NetNsError::NotFound(name.to_string()))?;
         Ok(file.as_raw_fd())
     }
@@ -325,7 +341,11 @@ impl Manager {
     }
 
     /// Execute an async closure in a specific namespace
-    pub async fn exec_in_namespace_async<F, Fut, T>(&self, name: &str, f: F) -> Result<T, NetNsError>
+    pub async fn exec_in_namespace_async<F, Fut, T>(
+        &self,
+        name: &str,
+        f: F,
+    ) -> Result<T, NetNsError>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = T>,
@@ -346,8 +366,12 @@ impl Drop for Manager {
             // Try std::fs remove; if it fails, try shell fallbacks
             if let Err(e) = std::fs::remove_file(&ns_path) {
                 // Try `ip netns del <name>` then rm -f
-                let _ = std::process::Command::new("ip").args(["netns", "del", &name]).status();
-                let _ = std::process::Command::new("rm").args(["-f", ns_path.to_string_lossy().as_ref()]).status();
+                let _ = std::process::Command::new("ip")
+                    .args(["netns", "del", &name])
+                    .status();
+                let _ = std::process::Command::new("rm")
+                    .args(["-f", ns_path.to_string_lossy().as_ref()])
+                    .status();
                 // As last resort, just warn
                 let _ = e; // suppress unused if success
             }
@@ -366,7 +390,10 @@ impl Drop for NamespaceGuard {
     fn drop(&mut self) {
         // Restore original namespace
         if let Err(e) = setns(&self.original_ns, CloneFlags::CLONE_NEWNET) {
-            warn!("Failed to restore original namespace from {}: {}", self.current_name, e);
+            warn!(
+                "Failed to restore original namespace from {}: {}",
+                self.current_name, e
+            );
         } else {
             debug!("Restored original namespace from {}", self.current_name);
         }
@@ -381,18 +408,18 @@ mod tests {
     #[cfg(feature = "sudo-tests")]
     async fn test_namespace_creation() -> Result<(), NetNsError> {
         let mut manager = Manager::new()?;
-        
+
         // Create a test namespace
         manager.create_namespace("test-ns").await?;
         assert!(manager.namespace_exists("test-ns"));
-        
+
         // Try to create duplicate - should fail
         assert!(manager.create_namespace("test-ns").await.is_err());
-        
+
         // Delete the namespace
         manager.delete_namespace("test-ns").await?;
         assert!(!manager.namespace_exists("test-ns"));
-        
+
         Ok(())
     }
 
@@ -400,17 +427,17 @@ mod tests {
     #[cfg(feature = "sudo-tests")]
     async fn test_namespace_entry() -> Result<(), NetNsError> {
         let mut manager = Manager::new()?;
-        
+
         manager.create_namespace("test-entry").await?;
-        
+
         // Execute something in the namespace
         let result = manager.exec_in_namespace("test-entry", || {
             // In here we're in the test namespace
             42
         })?;
-        
+
         assert_eq!(result, 42);
-        
+
         manager.delete_namespace("test-entry").await?;
         Ok(())
     }

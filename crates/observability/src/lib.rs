@@ -5,7 +5,7 @@
 //! both netlink-sim and netns-testbench backends while providing unified observability.
 //!
 //! # Features
-//! 
+//!
 //! - **Metrics Collection**: Prometheus-compatible metrics for link performance, queue depths, and throughput
 //! - **Trace Recording**: Time-series data export to CSV/JSON for replay and analysis
 //! - **GStreamer Integration**: Bus message correlation with simulation metrics
@@ -19,11 +19,11 @@ pub mod metrics;
 pub mod recorder;
 pub mod server;
 
-pub use collector::{LinkMetricsCollector, MetricsCollector, QueueMetrics, LinkPerformance};
-pub use exporter::{MetricsExporter, PrometheusExporter, JsonExporter, CsvExporter};
-pub use gstreamer::{GstBusCollector, RistDispatcherMetrics, BusMessageFilter};
-pub use metrics::{LinkStats, QdiscParams, SimulationMetrics, MetricsSnapshot};
-pub use recorder::{TraceRecorder, TraceReplay, TraceEntry, ReplaySchedule};
+pub use collector::{LinkMetricsCollector, LinkPerformance, MetricsCollector, QueueMetrics};
+pub use exporter::{CsvExporter, JsonExporter, MetricsExporter, PrometheusExporter};
+pub use gstreamer::{BusMessageFilter, GstBusCollector, RistDispatcherMetrics};
+pub use metrics::{LinkStats, MetricsSnapshot, QdiscParams, SimulationMetrics};
+pub use recorder::{ReplaySchedule, TraceEntry, TraceRecorder, TraceReplay};
 pub use server::{MetricsServer, ObservabilityConfig};
 
 /// Errors that can occur in the observability system
@@ -31,22 +31,22 @@ pub use server::{MetricsServer, ObservabilityConfig};
 pub enum ObservabilityError {
     #[error("Metrics collection failed: {0}")]
     Collection(String),
-    
+
     #[error("Export failed: {0}")]
     Export(#[from] anyhow::Error),
-    
+
     #[error("Server error: {0}")]
     Server(String),
-    
+
     #[error("Trace recording error: {0}")]
     Trace(String),
-    
+
     #[error("GStreamer bus error: {0}")]
     GStreamer(String),
-    
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    
+
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 }
@@ -68,7 +68,7 @@ impl ObservabilityOrchestrator {
     pub fn new() -> Result<Self> {
         let collector = MetricsCollector::new();
         let exporter = Box::new(PrometheusExporter::new()?);
-        
+
         Ok(Self {
             collector,
             exporter,

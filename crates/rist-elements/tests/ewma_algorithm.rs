@@ -46,7 +46,9 @@ fn test_ewma_with_mock_statistics() {
     dispatcher.set_property("auto-balance", true);
 
     let pipeline = gst::Pipeline::new();
-    pipeline.add_many([&source, &dispatcher, &counter1, &counter2]).expect("Failed to add elements to pipeline");
+    pipeline
+        .add_many([&source, &dispatcher, &counter1, &counter2])
+        .expect("Failed to add elements to pipeline");
 
     // Create the pipeline: source -> dispatcher -> [counter1, counter2]
     let src_0 = dispatcher.request_pad_simple("src_%u").unwrap();
@@ -119,7 +121,9 @@ fn test_ewma_adaptation_over_time() {
     dispatcher.set_property("auto-balance", true);
 
     let pipeline = gst::Pipeline::new();
-    pipeline.add_many([&source, &dispatcher, &counter1, &counter2]).expect("Failed to add elements to pipeline");
+    pipeline
+        .add_many([&source, &dispatcher, &counter1, &counter2])
+        .expect("Failed to add elements to pipeline");
 
     // Set up pipeline: source -> dispatcher -> [counter1, counter2]
     let src_0 = dispatcher.request_pad_simple("src_%u").unwrap();

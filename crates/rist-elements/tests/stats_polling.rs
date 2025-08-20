@@ -71,7 +71,9 @@ fn test_stats_driven_rebalancing() {
     dispatcher.set_property("rebalance-interval-ms", 200u64);
 
     let pipeline = gst::Pipeline::new();
-    pipeline.add_many([&source, &dispatcher, &counter1, &counter2]).expect("Failed to add elements to pipeline");
+    pipeline
+        .add_many([&source, &dispatcher, &counter1, &counter2])
+        .expect("Failed to add elements to pipeline");
 
     // Link pipeline: source -> dispatcher -> [counter1, counter2]
     source.link(&dispatcher).unwrap();

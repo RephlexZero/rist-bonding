@@ -1,6 +1,6 @@
 //! HTTP server for metrics endpoints and observability dashboard
 
-use crate::{Result, MetricsSnapshot};
+use crate::{MetricsSnapshot, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -47,7 +47,7 @@ impl MetricsServer {
             self.config.port
         );
         tracing::info!("Dashboard enabled: {}", self.config.dashboard_enabled);
-        
+
         // TODO: Implement actual HTTP server
         // For now, just return success to allow the crate to compile
         Ok(())

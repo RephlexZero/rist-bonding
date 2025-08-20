@@ -24,7 +24,9 @@ fn test_caps_negotiation_and_proxying() {
 
     // Create pipeline
     let pipeline = gst::Pipeline::new();
-    pipeline.add_many([&source, &dispatcher, &sink]).expect("Failed to add elements to pipeline");
+    pipeline
+        .add_many([&source, &dispatcher, &sink])
+        .expect("Failed to add elements to pipeline");
 
     // Request src pad and link
     let src_pad = dispatcher.request_pad_simple("src_%u").unwrap();
@@ -103,7 +105,9 @@ fn test_eos_event_fanout() {
 
     // Create pipeline
     let pipeline = gst::Pipeline::new();
-    pipeline.add_many([&source, &dispatcher, &counter1, &counter2]).expect("Failed to add elements to pipeline");
+    pipeline
+        .add_many([&source, &dispatcher, &counter1, &counter2])
+        .expect("Failed to add elements to pipeline");
 
     // Request pads and link
     let src_0 = dispatcher.request_pad_simple("src_%u").unwrap();
@@ -207,7 +211,9 @@ fn test_flush_event_handling() {
 
     // Create minimal pipeline for testing flush events
     let pipeline = gst::Pipeline::new();
-    pipeline.add_many([&dispatcher, &counter1, &counter2]).expect("Failed to add elements to pipeline");
+    pipeline
+        .add_many([&dispatcher, &counter1, &counter2])
+        .expect("Failed to add elements to pipeline");
 
     // Request pads and link
     let src_0 = dispatcher.request_pad_simple("src_%u").unwrap();
@@ -288,7 +294,9 @@ fn test_sticky_events_replay() {
 
     // Create pipeline with just source and dispatcher first
     let pipeline = gst::Pipeline::new();
-    pipeline.add_many([&source, &dispatcher]).expect("Failed to add elements to pipeline");
+    pipeline
+        .add_many([&source, &dispatcher])
+        .expect("Failed to add elements to pipeline");
     source
         .link(&dispatcher)
         .expect("Failed to link source to dispatcher");

@@ -177,7 +177,9 @@ fn test_weighted_distribution_pipeline() {
 
     // Create pipeline
     let pipeline = gst::Pipeline::new();
-    pipeline.add_many([&source, &dispatcher, &counter1, &counter2]).expect("Failed to add elements to pipeline");
+    pipeline
+        .add_many([&source, &dispatcher, &counter1, &counter2])
+        .expect("Failed to add elements to pipeline");
 
     // Request src pads from dispatcher
     let src_0 = dispatcher.request_pad_simple("src_%u").unwrap();

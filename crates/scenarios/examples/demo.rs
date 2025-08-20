@@ -38,25 +38,42 @@ fn main() {
         ("5G eMBB", DirectionSpec::nr_embb()),
         ("5G mMTC", DirectionSpec::nr_mmtc()),
     ];
-    
+
     for (name, spec) in presets.iter() {
-        println!("  {:<15} - Rate: {:7}kbps, Delay: {:3}ms, Loss: {:.3}%", 
-                 name, spec.rate_kbps, spec.base_delay_ms, spec.loss_pct * 100.0);
+        println!(
+            "  {:<15} - Rate: {:7}kbps, Delay: {:3}ms, Loss: {:.3}%",
+            name,
+            spec.rate_kbps,
+            spec.base_delay_ms,
+            spec.loss_pct * 100.0
+        );
     }
 
     // Show 5G effects
     println!("\n⚡ 5G Special Effects:");
     let base_5g = DirectionSpec::nr_sub6ghz();
-    println!("  Base 5G Sub-6:     Rate: {:7}kbps, Delay: {:3}ms, Loss: {:.3}%", 
-             base_5g.rate_kbps, base_5g.base_delay_ms, base_5g.loss_pct * 100.0);
-    
+    println!(
+        "  Base 5G Sub-6:     Rate: {:7}kbps, Delay: {:3}ms, Loss: {:.3}%",
+        base_5g.rate_kbps,
+        base_5g.base_delay_ms,
+        base_5g.loss_pct * 100.0
+    );
+
     let with_ca = base_5g.clone().with_carrier_aggregation(3);
-    println!("  With 3x CA:        Rate: {:7}kbps, Delay: {:3}ms, Loss: {:.3}%", 
-             with_ca.rate_kbps, with_ca.base_delay_ms, with_ca.loss_pct * 100.0);
-    
+    println!(
+        "  With 3x CA:        Rate: {:7}kbps, Delay: {:3}ms, Loss: {:.3}%",
+        with_ca.rate_kbps,
+        with_ca.base_delay_ms,
+        with_ca.loss_pct * 100.0
+    );
+
     let with_blockage = DirectionSpec::nr_mmwave().with_mmwave_blockage(0.8);
-    println!("  mmWave Blocked:    Rate: {:7}kbps, Delay: {:3}ms, Loss: {:.3}%", 
-             with_blockage.rate_kbps, with_blockage.base_delay_ms, with_blockage.loss_pct * 100.0);
+    println!(
+        "  mmWave Blocked:    Rate: {:7}kbps, Delay: {:3}ms, Loss: {:.3}%",
+        with_blockage.rate_kbps,
+        with_blockage.base_delay_ms,
+        with_blockage.loss_pct * 100.0
+    );
 
     // Show custom scenario
     println!("\n🏗️ Custom Scenario:");
@@ -65,13 +82,13 @@ fn main() {
         .duration(Duration::from_secs(60))
         .add_link(LinkSpec::symmetric(
             "5g_link".to_string(),
-            "tx0".to_string(), 
+            "tx0".to_string(),
             "rx0".to_string(),
-            Schedule::Constant(DirectionSpec::nr_embb())
+            Schedule::Constant(DirectionSpec::nr_embb()),
         ))
         .metadata("test_type", "5g_demo")
         .build();
-    
+
     println!("  Name: {}", custom.name);
     println!("  Duration: {:?}s", custom.duration_seconds);
     println!("  Links: {}", custom.links.len());

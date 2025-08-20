@@ -13,25 +13,25 @@ use uuid::Uuid;
 pub struct LinkStats {
     pub link_id: String,
     pub interface_name: Option<String>,
-    
+
     // Traffic counters
     pub bytes_sent: u64,
     pub bytes_received: u64,
     pub packets_sent: u64,
     pub packets_received: u64,
     pub packets_dropped: u64,
-    
+
     // Quality metrics
     pub rtt_ms: f64,
     pub jitter_ms: f64,
     pub loss_rate: f64,
     pub throughput_bps: u64,
-    
+
     // Queue metrics
     pub queue_depth: usize,
     pub queue_max: usize,
     pub queue_drops: u64,
-    
+
     // Timestamps
     pub last_updated: DateTime<Utc>,
     pub collection_interval_ms: u64,
@@ -63,7 +63,7 @@ impl LinkStats {
 /// Current qdisc parameters applied to a link
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QdiscParams {
-    pub qdisc_type: String,  // "netem", "tbf", "htb", etc.
+    pub qdisc_type: String, // "netem", "tbf", "htb", etc.
     pub delay_ms: Option<u64>,
     pub jitter_ms: Option<u64>,
     pub loss_pct: Option<f32>,
@@ -128,20 +128,20 @@ pub struct SimulationMetrics {
     pub simulation_id: Uuid,
     pub start_time: DateTime<Utc>,
     pub duration_ms: u64,
-    
+
     // Aggregate counters
     pub total_bytes_sent: u64,
     pub total_bytes_received: u64,
     pub total_packets_sent: u64,
     pub total_packets_received: u64,
     pub total_drops: u64,
-    
+
     // Quality aggregates
     pub avg_rtt_ms: f64,
     pub avg_jitter_ms: f64,
     pub avg_loss_rate: f64,
     pub total_throughput_bps: u64,
-    
+
     // Active links
     pub active_links: usize,
     pub link_ids: Vec<String>,
@@ -163,7 +163,7 @@ pub struct LinkMetricsCollector {
     stats: Arc<parking_lot::RwLock<LinkStats>>,
     qdisc_params: Arc<parking_lot::RwLock<QdiscParams>>,
     queue_metrics: Arc<parking_lot::RwLock<QueueMetrics>>,
-    
+
     // Atomic counters for thread-safe updates
     bytes_sent: AtomicU64,
     bytes_received: AtomicU64,
@@ -176,7 +176,9 @@ impl LinkMetricsCollector {
     pub fn new(link_id: String) -> Self {
         Self {
             stats: Arc::new(parking_lot::RwLock::new(LinkStats::new(link_id.clone()))),
-            qdisc_params: Arc::new(parking_lot::RwLock::new(QdiscParams::new("unknown".to_string()))),
+            qdisc_params: Arc::new(parking_lot::RwLock::new(QdiscParams::new(
+                "unknown".to_string(),
+            ))),
             queue_metrics: Arc::new(parking_lot::RwLock::new(QueueMetrics::new())),
             link_id,
             bytes_sent: AtomicU64::new(0),
@@ -188,12 +190,22 @@ impl LinkMetricsCollector {
     }
 
     /// Record traffic statistics
-    pub fn record_traffic(&self, bytes_sent: u64, bytes_received: u64, packets_sent: u64, packets_received: u64, packets_dropped: u64) {
+    pub fn record_traffic(
+        &self,
+        bytes_sent: u64,
+        bytes_received: u64,
+        packets_sent: u64,
+        packets_received: u64,
+        packets_dropped: u64,
+    ) {
         self.bytes_sent.fetch_add(bytes_sent, Ordering::Relaxed);
-        self.bytes_received.fetch_add(bytes_received, Ordering::Relaxed);
+        self.bytes_received
+            .fetch_add(bytes_received, Ordering::Relaxed);
         self.packets_sent.fetch_add(packets_sent, Ordering::Relaxed);
-        self.packets_received.fetch_add(packets_received, Ordering::Relaxed);
-        self.packets_dropped.fetch_add(packets_dropped, Ordering::Relaxed);
+        self.packets_received
+            .fetch_add(packets_received, Ordering::Relaxed);
+        self.packets_dropped
+            .fetch_add(packets_dropped, Ordering::Relaxed);
     }
 
     /// Update quality metrics (RTT, jitter, loss rate, throughput)
@@ -289,26 +301,38 @@ impl MetricsCollector {
 
         for link_ref in self.link_collectors.iter() {
             let performance = link_ref.value().get_performance();
-            
+
             total_bytes_sent += performance.link_stats.bytes_sent;
             total_bytes_received += performance.link_stats.bytes_received;
             total_packets_sent += performance.link_stats.packets_sent;
             total_packets_received += performance.link_stats.packets_received;
             total_drops += performance.link_stats.packets_dropped;
             total_throughput_bps += performance.link_stats.throughput_bps;
-            
+
             sum_rtt += performance.link_stats.rtt_ms;
             sum_jitter += performance.link_stats.jitter_ms;
             sum_loss += performance.link_stats.loss_rate;
-            
+
             link_ids.push(performance.link_stats.link_id.clone());
             link_performance.push(performance);
         }
 
         let active_links = link_performance.len();
-        let avg_rtt_ms = if active_links > 0 { sum_rtt / active_links as f64 } else { 0.0 };
-        let avg_jitter_ms = if active_links > 0 { sum_jitter / active_links as f64 } else { 0.0 };
-        let avg_loss_rate = if active_links > 0 { sum_loss / active_links as f64 } else { 0.0 };
+        let avg_rtt_ms = if active_links > 0 {
+            sum_rtt / active_links as f64
+        } else {
+            0.0
+        };
+        let avg_jitter_ms = if active_links > 0 {
+            sum_jitter / active_links as f64
+        } else {
+            0.0
+        };
+        let avg_loss_rate = if active_links > 0 {
+            sum_loss / active_links as f64
+        } else {
+            0.0
+        };
 
         let simulation_metrics = SimulationMetrics {
             simulation_id: self.simulation_id,

@@ -4,15 +4,15 @@
 //! and managing network namespaces, veth pairs, and impairment schedules.
 //! It provides a drop-in replacement for the current NetworkOrchestrator API.
 
+use crate::addr::{AddressConfig, Configurer as AddrConfigurer};
 use crate::netns::Manager as NetNsManager;
-use crate::veth::PairManager as VethManager;
-use crate::addr::{Configurer as AddrConfigurer, AddressConfig};
 use crate::qdisc::QdiscManager;
 use crate::runtime::Scheduler;
+use crate::veth::PairManager as VethManager;
 use crate::TestbenchError;
-use scenarios::{TestScenario, LinkSpec};
 use anyhow::Result;
 use ipnetwork::IpNetwork;
+use scenarios::{LinkSpec, TestScenario};
 use std::sync::Arc;
 use tracing::{debug, info};
 
@@ -46,12 +46,17 @@ impl NetworkOrchestrator {
         info!("Initializing network orchestrator with seed: {}", seed);
 
         let mut netns_manager = NetNsManager::new()?;
-        
+
         // Clean up any stale namespaces from previous runs
-        let cleaned = netns_manager.force_cleanup_stale_namespaces("tx0_link_").await
-            .unwrap_or(0) + netns_manager.force_cleanup_stale_namespaces("rx0_link_").await
-            .unwrap_or(0);
-        
+        let cleaned = netns_manager
+            .force_cleanup_stale_namespaces("tx0_link_")
+            .await
+            .unwrap_or(0)
+            + netns_manager
+                .force_cleanup_stale_namespaces("rx0_link_")
+                .await
+                .unwrap_or(0);
+
         if cleaned > 0 {
             info!("Cleaned up {} stale namespaces", cleaned);
         }
@@ -80,14 +85,23 @@ impl NetworkOrchestrator {
     }
 
     /// Start a test scenario (drop-in replacement for netlink-sim API)
-    pub async fn start_scenario(&mut self, scenario: TestScenario, rx_port: u16) -> Result<LinkHandle, TestbenchError> {
-        info!("Starting scenario: {} with rx_port: {}", scenario.name, rx_port);
+    pub async fn start_scenario(
+        &mut self,
+        scenario: TestScenario,
+        rx_port: u16,
+    ) -> Result<LinkHandle, TestbenchError> {
+        info!(
+            "Starting scenario: {} with rx_port: {}",
+            scenario.name, rx_port
+        );
 
         let link_id = format!("link_{}", self.next_link_id);
         self.next_link_id += 1;
 
         // For compatibility, we'll use the first link in the scenario
-        let link_spec = scenario.links.first()
+        let link_spec = scenario
+            .links
+            .first()
             .ok_or_else(|| TestbenchError::InvalidConfig("Scenario has no links".to_string()))?;
 
         // Set up the link
@@ -113,7 +127,11 @@ impl NetworkOrchestrator {
     }
 
     /// Start multiple scenarios for bonding tests
-    pub async fn start_bonding_scenarios(&mut self, scenarios: Vec<TestScenario>, rx_port: u16) -> Result<Vec<LinkHandle>, TestbenchError> {
+    pub async fn start_bonding_scenarios(
+        &mut self,
+        scenarios: Vec<TestScenario>,
+        rx_port: u16,
+    ) -> Result<Vec<LinkHandle>, TestbenchError> {
         let mut handles = Vec::new();
         for scenario in scenarios {
             let handle = self.start_scenario(scenario, rx_port).await?;
@@ -128,56 +146,85 @@ impl NetworkOrchestrator {
     }
 
     /// Set up a single link from a LinkSpec
-    async fn setup_link(&mut self, link_spec: &LinkSpec, link_id: &str) -> Result<(), TestbenchError> {
-        debug!("Setting up link: {} ({} <-> {})", link_spec.name, link_spec.a_ns, link_spec.b_ns);
+    async fn setup_link(
+        &mut self,
+        link_spec: &LinkSpec,
+        link_id: &str,
+    ) -> Result<(), TestbenchError> {
+        debug!(
+            "Setting up link: {} ({} <-> {})",
+            link_spec.name, link_spec.a_ns, link_spec.b_ns
+        );
 
         // Create namespaces
         let ns_a = format!("{}_{}", link_spec.a_ns, link_id);
         let ns_b = format!("{}_{}", link_spec.b_ns, link_id);
-        
+
         self.netns_manager.create_namespace(&ns_a).await?;
         self.netns_manager.create_namespace(&ns_b).await?;
 
         // Configure loopback in each namespace
-        self.addr_configurer.configure_loopback(&ns_a, &self.netns_manager).await?;
-        self.addr_configurer.configure_loopback(&ns_b, &self.netns_manager).await?;
+        self.addr_configurer
+            .configure_loopback(&ns_a, &self.netns_manager)
+            .await?;
+        self.addr_configurer
+            .configure_loopback(&ns_b, &self.netns_manager)
+            .await?;
 
-    // Create veth pair (ensure no leftovers from previous runs)
-    let veth_a = format!("veth-{}-a", link_id);
-    let veth_b = format!("veth-{}-b", link_id);
+        // Create veth pair (ensure no leftovers from previous runs)
+        let veth_a = format!("veth-{}-a", link_id);
+        let veth_b = format!("veth-{}-b", link_id);
 
-    // Best-effort cleanup in default namespace if stale
-    let _ = self.veth_manager.delete_if_exists(&veth_a).await;
-    let _ = self.veth_manager.delete_if_exists(&veth_b).await;
+        // Best-effort cleanup in default namespace if stale
+        let _ = self.veth_manager.delete_if_exists(&veth_a).await;
+        let _ = self.veth_manager.delete_if_exists(&veth_b).await;
 
-    let _veth_pair = self.veth_manager.create_pair(&veth_a, &veth_b).await?;
+        let _veth_pair = self.veth_manager.create_pair(&veth_a, &veth_b).await?;
 
         // Move veth ends to namespaces
-        self.veth_manager.move_to_namespace(&veth_a, &ns_a, &self.netns_manager).await?;
-        self.veth_manager.move_to_namespace(&veth_b, &ns_b, &self.netns_manager).await?;
+        self.veth_manager
+            .move_to_namespace(&veth_a, &ns_a, &self.netns_manager)
+            .await?;
+        self.veth_manager
+            .move_to_namespace(&veth_b, &ns_b, &self.netns_manager)
+            .await?;
 
-    // Configure IP addresses (use /30 subnets)
-    // Use the numeric part of the current link id (prior to increment) for deterministic addressing.
-    // At this point, self.next_link_id has already been incremented by start_scenario(),
-    // so subtract 1 to get the actual link number used in names (e.g., link_1 -> id 1).
-    let link_num = (self.next_link_id - 1) as u8;
-    let (addr_a, addr_b) = AddrConfigurer::generate_p2p_subnet(link_num)?;
+        // Configure IP addresses (use /30 subnets)
+        // Use the numeric part of the current link id (prior to increment) for deterministic addressing.
+        // At this point, self.next_link_id has already been incremented by start_scenario(),
+        // so subtract 1 to get the actual link number used in names (e.g., link_1 -> id 1).
+        let link_num = (self.next_link_id - 1) as u8;
+        let (addr_a, addr_b) = AddrConfigurer::generate_p2p_subnet(link_num)?;
 
-        self.addr_configurer.add_address(AddressConfig {
-            interface: veth_a.clone(),
-            address: IpNetwork::V4(addr_a),
-            namespace: Some(ns_a.clone()),
-        }, Some(&self.netns_manager)).await?;
+        self.addr_configurer
+            .add_address(
+                AddressConfig {
+                    interface: veth_a.clone(),
+                    address: IpNetwork::V4(addr_a),
+                    namespace: Some(ns_a.clone()),
+                },
+                Some(&self.netns_manager),
+            )
+            .await?;
 
-        self.addr_configurer.add_address(AddressConfig {
-            interface: veth_b.clone(),
-            address: IpNetwork::V4(addr_b),
-            namespace: Some(ns_b.clone()),
-        }, Some(&self.netns_manager)).await?;
+        self.addr_configurer
+            .add_address(
+                AddressConfig {
+                    interface: veth_b.clone(),
+                    address: IpNetwork::V4(addr_b),
+                    namespace: Some(ns_b.clone()),
+                },
+                Some(&self.netns_manager),
+            )
+            .await?;
 
         // Bring interfaces up
-        self.veth_manager.set_up(&veth_a, Some(&self.netns_manager)).await?;
-        self.veth_manager.set_up(&veth_b, Some(&self.netns_manager)).await?;
+        self.veth_manager
+            .set_up(&veth_a, Some(&self.netns_manager))
+            .await?;
+        self.veth_manager
+            .set_up(&veth_b, Some(&self.netns_manager))
+            .await?;
 
         // Set up runtime schedulers for both directions
         // TODO: Get actual interface indices and create proper runtime configs
@@ -196,9 +243,9 @@ impl NetworkOrchestrator {
     /// Shutdown the orchestrator and clean up resources
     pub async fn shutdown(self) -> Result<(), TestbenchError> {
         info!("Shutting down orchestrator");
-        
+
         self.scheduler.shutdown().await;
-        
+
         // NetworkOrchestrator cleanup happens in Drop trait
         Ok(())
     }
@@ -243,11 +290,11 @@ mod tests {
     async fn test_scenario_start() -> Result<(), TestbenchError> {
         let mut orchestrator = NetworkOrchestrator::new(456).await?;
         let scenario = TestScenario::baseline_good();
-        
+
         let handle = orchestrator.start_scenario(scenario, 7000).await?;
         assert_eq!(handle.rx_port, 7000);
         assert_eq!(orchestrator.get_active_links().len(), 1);
-        
+
         Ok(())
     }
 }

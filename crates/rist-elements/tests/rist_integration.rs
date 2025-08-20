@@ -59,7 +59,9 @@ fn test_basic_data_flow_without_rist() {
     let counter2 = create_counter_sink();
 
     let pipeline = gst::Pipeline::new();
-    pipeline.add_many([&source, &dispatcher, &counter1, &counter2]).expect("Failed to add elements to pipeline");
+    pipeline
+        .add_many([&source, &dispatcher, &counter1, &counter2])
+        .expect("Failed to add elements to pipeline");
 
     // Link elements
     let src_0 = dispatcher.request_pad_simple("src_%u").unwrap();
@@ -179,7 +181,9 @@ fn test_rist_pipeline_with_transport() {
     let counter = create_counter_sink();
 
     let pipeline = gst::Pipeline::new();
-    pipeline.add_many([&source, &dispatcher, &ristsink, &ristsrc, &counter]).expect("Failed to add elements to pipeline");
+    pipeline
+        .add_many([&source, &dispatcher, &ristsink, &ristsrc, &counter])
+        .expect("Failed to add elements to pipeline");
 
     // Link: source -> dispatcher -> ristsink
     // And: ristsrc -> counter
@@ -226,7 +230,16 @@ fn test_audio_pipeline_without_rist_transport() {
     let counter2 = create_counter_sink();
 
     let pipeline = gst::Pipeline::new();
-    pipeline.add_many([&source, &encoder, &dynbitrate, &dispatcher, &counter1, &counter2]).expect("Failed to add elements to pipeline");
+    pipeline
+        .add_many([
+            &source,
+            &encoder,
+            &dynbitrate,
+            &dispatcher,
+            &counter1,
+            &counter2,
+        ])
+        .expect("Failed to add elements to pipeline");
 
     // Link the pipeline
     source

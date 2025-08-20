@@ -1,9 +1,9 @@
 //! GStreamer bus monitoring and integration
 
 use crate::Result;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use chrono::{DateTime, Utc};
 
 /// RIST dispatcher metrics from GStreamer bus messages
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,7 +62,10 @@ impl GstBusCollector {
     }
 
     /// Process a GStreamer bus message and extract RIST metrics
-    pub async fn process_message(&mut self, _message: &str) -> Result<Option<RistDispatcherMetrics>> {
+    pub async fn process_message(
+        &mut self,
+        _message: &str,
+    ) -> Result<Option<RistDispatcherMetrics>> {
         // TODO: Implement actual GStreamer bus message parsing
         // For now, return None since this is a stub implementation
         Ok(None)

@@ -7,9 +7,9 @@
 //!
 //! Run with: cargo run --bin enhanced-scheduler
 
-use netns_testbench::runtime::{Scheduler, LinkRuntime};
 use netns_testbench::qdisc::QdiscManager;
-use scenarios::{Schedule, DirectionSpec};
+use netns_testbench::runtime::{LinkRuntime, Scheduler};
+use scenarios::{DirectionSpec, Schedule};
 use std::{sync::Arc, time::Duration};
 
 #[tokio::main]
@@ -24,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let markov_schedule = Schedule::Markov {
         states: vec![
             nr_excellent.clone(),
-            nr_degraded.clone(), 
+            nr_degraded.clone(),
             nr_handover.clone(),
         ],
         // Transition matrix: excellent -> degraded (5%), degraded -> excellent (30%), etc.
@@ -33,7 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             vec![0.40, 0.50, 0.10], // degraded: recover or worsen
             vec![0.60, 0.10, 0.30], // handover: mostly recover
         ],
-        initial_state: 0, // Start in excellent state
+        initial_state: 0,                         // Start in excellent state
         mean_dwell_time: Duration::from_secs(15), // 15s average dwell time
     };
 
@@ -49,11 +49,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create and start scheduler
     let scheduler = Scheduler::new();
     scheduler.add_link_runtime(link_runtime).await;
-    
+
     println!("5G Link Runtime added to scheduler");
     println!("Schedule: Markov chain with 3 states (excellent, degraded, handover)");
     println!("- Excellent: {} kbps (mmWave)", nr_excellent.rate_kbps);
-    println!("- Degraded: {} kbps (mmWave with blockage)", nr_degraded.rate_kbps);  
+    println!(
+        "- Degraded: {} kbps (mmWave with blockage)",
+        nr_degraded.rate_kbps
+    );
     println!("- Handover: {} kbps (Sub-6 with CA)", nr_handover.rate_kbps);
     println!("Mean dwell time: 15 seconds");
 
@@ -66,11 +69,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 2. Evaluate Markov state transitions using random number generation
     // 3. Apply new network conditions via netlink/qdisc when state changes
     // 4. Set up next transition using exponential distribution
-    
+
     println!("Enhanced scheduler demo completed!");
     println!("The scheduler now supports:");
     println!("✓ Markov chain transitions with configurable probability matrices");
-    println!("✓ Exponential dwell time distributions"); 
+    println!("✓ Exponential dwell time distributions");
     println!("✓ JSON trace replay capability");
     println!("✓ Integration with comprehensive 5G scenarios");
 

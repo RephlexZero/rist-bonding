@@ -3,13 +3,13 @@
 //! This test runs the full system:
 //! - Race car cellular modeling
 //! - RIST dispatcher with bonding
-//! - Real-time observability 
+//! - Real-time observability
 //! - Comprehensive validation
 
 use anyhow::Result;
-use tracing_subscriber::fmt;
 use integration_tests::{RistIntegrationTest, TestResults, ValidationReport};
 use std::time::Instant;
+use tracing_subscriber::fmt;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -21,7 +21,7 @@ async fn main() -> Result<()> {
 
     let test_start = Instant::now();
     let test_id = format!("race_car_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S"));
-    
+
     // Create integration test
     let mut test = RistIntegrationTest::new(test_id.clone(), 5007).await?;
     println!("✓ Integration test framework initialized\n");
@@ -43,8 +43,11 @@ async fn main() -> Result<()> {
     generate_test_report(&test_id, &results, &validation).await?;
 
     let total_time = test_start.elapsed();
-    println!("🏆 End-to-end test completed in {:.1}s", total_time.as_secs_f64());
-    
+    println!(
+        "🏆 End-to-end test completed in {:.1}s",
+        total_time.as_secs_f64()
+    );
+
     if validation.all_passed() {
         println!("✅ ALL TESTS PASSED - RIST bonding system is working correctly!");
     } else {
@@ -61,7 +64,7 @@ async fn main() -> Result<()> {
 async fn generate_test_report(
     test_id: &str,
     results: &TestResults,
-    validation: &ValidationReport
+    validation: &ValidationReport,
 ) -> Result<()> {
     println!("📊 Generating comprehensive test report...");
 
@@ -103,16 +106,39 @@ async fn generate_test_report(
     println!("  Test ID: {}", test_id);
     println!("  Duration: {:.1}s", results.total_duration.as_secs_f64());
     println!("  Phases tested: {}", results.phases.len());
-    
+
     for (phase, metrics) in &results.phases {
-        println!("    {}: {:.0} kbps avg, {:.1}% loss, {:.1}ms RTT", 
-                phase, metrics.avg_bitrate, metrics.packet_loss, metrics.avg_rtt);
+        println!(
+            "    {}: {:.0} kbps avg, {:.1}% loss, {:.1}ms RTT",
+            phase, metrics.avg_bitrate, metrics.packet_loss, metrics.avg_rtt
+        );
     }
 
     println!("\n🔍 Validation Results:");
-    println!("  Adaptive bitrate: {}", if validation.adaptive_bitrate_working { "✅ PASS" } else { "❌ FAIL" });
-    println!("  Bonding effectiveness: {}", if validation.bonding_effective { "✅ PASS" } else { "❌ FAIL" });  
-    println!("  Load balancing: {}", if validation.load_balancing_working { "✅ PASS" } else { "❌ FAIL" });
+    println!(
+        "  Adaptive bitrate: {}",
+        if validation.adaptive_bitrate_working {
+            "✅ PASS"
+        } else {
+            "❌ FAIL"
+        }
+    );
+    println!(
+        "  Bonding effectiveness: {}",
+        if validation.bonding_effective {
+            "✅ PASS"
+        } else {
+            "❌ FAIL"
+        }
+    );
+    println!(
+        "  Load balancing: {}",
+        if validation.load_balancing_working {
+            "✅ PASS"
+        } else {
+            "❌ FAIL"
+        }
+    );
 
     Ok(())
 }

@@ -3,26 +3,26 @@
 //! This module provides functionality to apply schedule-driven changes
 //! to network impairments at runtime using Tokio tasks.
 
-use crate::qdisc::{QdiscManager, NetemConfig};
-use scenarios::{Schedule, DirectionSpec};
+use crate::qdisc::{NetemConfig, QdiscManager};
+use rand::{rngs::StdRng, Rng, SeedableRng};
+use scenarios::{DirectionSpec, Schedule};
+use serde_json;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Instant};
 use tracing::{debug, info, warn};
-use rand::{rngs::StdRng, Rng, SeedableRng};
-use serde_json;
-use std::path::Path;
 
 #[derive(Error, Debug)]
 pub enum RuntimeError {
     #[error("Scheduler task error: {0}")]
     Task(String),
-    
+
     #[error("Qdisc error: {0}")]
     Qdisc(#[from] crate::qdisc::QdiscError),
-    
+
     #[error("Invalid schedule: {0}")]
     InvalidSchedule(String),
 }
@@ -80,16 +80,19 @@ impl LinkRuntime {
     /// Load trace data from CSV or JSON file
     fn load_trace_file(path: &Path) -> Result<Vec<(Duration, DirectionSpec)>, RuntimeError> {
         use std::fs;
-        
+
         let content = fs::read_to_string(path)
             .map_err(|e| RuntimeError::InvalidSchedule(format!("Cannot read trace file: {}", e)))?;
-            
+
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            serde_json::from_str(&content)
-                .map_err(|e| RuntimeError::InvalidSchedule(format!("Invalid JSON trace file: {}", e)))
+            serde_json::from_str(&content).map_err(|e| {
+                RuntimeError::InvalidSchedule(format!("Invalid JSON trace file: {}", e))
+            })
         } else {
             // TODO: Implement CSV parsing
-            Err(RuntimeError::InvalidSchedule("CSV trace files not yet implemented".to_string()))
+            Err(RuntimeError::InvalidSchedule(
+                "CSV trace files not yet implemented".to_string(),
+            ))
         }
     }
 }
@@ -131,17 +134,17 @@ impl Scheduler {
     pub async fn start(&self) -> Result<(), RuntimeError> {
         let runtimes = self.runtimes.lock().await.clone();
         let num_runtimes = runtimes.len();
-        
+
         for runtime in runtimes {
             let shutdown = self.shutdown.clone();
-            
+
             tokio::spawn(async move {
                 if let Err(e) = Self::run_schedule_task(runtime, shutdown).await {
                     warn!("Schedule task failed: {}", e);
                 }
             });
         }
-        
+
         info!("Started scheduler for {} link runtimes", num_runtimes);
         Ok(())
     }
@@ -155,11 +158,11 @@ impl Scheduler {
 
     /// Run a schedule task for a single link runtime
     async fn run_schedule_task(
-        runtime: Arc<Mutex<LinkRuntime>>, 
-        shutdown: Arc<Mutex<bool>>
+        runtime: Arc<Mutex<LinkRuntime>>,
+        shutdown: Arc<Mutex<bool>>,
     ) -> Result<(), RuntimeError> {
         let start_time = Instant::now();
-        
+
         loop {
             // Check for shutdown
             if *shutdown.lock().await {
@@ -170,7 +173,7 @@ impl Scheduler {
             let (next_spec, delay) = {
                 let mut rt = runtime.lock().await;
                 let elapsed = start_time.elapsed();
-                
+
                 match Self::get_next_spec(&mut rt, elapsed)? {
                     Some((spec, delay)) => (spec, delay),
                     None => {
@@ -199,14 +202,14 @@ impl Scheduler {
                 rt.current_spec = next_spec;
             }
         }
-        
+
         Ok(())
     }
 
     /// Get the next specification and delay from a schedule
     fn get_next_spec(
-        runtime: &mut LinkRuntime, 
-        elapsed: Duration
+        runtime: &mut LinkRuntime,
+        elapsed: Duration,
     ) -> Result<Option<(DirectionSpec, Duration)>, RuntimeError> {
         match &runtime.schedule {
             Schedule::Constant(spec) => {
@@ -231,7 +234,12 @@ impl Scheduler {
                 }
                 Ok(None)
             }
-            Schedule::Markov { states, transition_matrix, mean_dwell_time, initial_state } => {
+            Schedule::Markov {
+                states,
+                transition_matrix,
+                mean_dwell_time,
+                initial_state,
+            } => {
                 // Initialize Markov state if needed
                 if runtime.markov_state.is_none() {
                     runtime.markov_state = Some(MarkovState {
@@ -240,16 +248,16 @@ impl Scheduler {
                         rng: StdRng::from_entropy(),
                     });
                 }
-                
+
                 let now = Instant::now();
                 let should_transition;
                 let delay;
                 let current_state;
-                
+
                 {
                     let markov_state = runtime.markov_state.as_ref().unwrap();
                     current_state = markov_state.current_state;
-                    
+
                     if now >= markov_state.next_transition_time {
                         should_transition = true;
                         delay = Duration::ZERO;
@@ -258,14 +266,14 @@ impl Scheduler {
                         delay = markov_state.next_transition_time.duration_since(now);
                     }
                 }
-                
+
                 if should_transition {
                     let markov_state = runtime.markov_state.as_mut().unwrap();
-                    
+
                     // Determine next state using transition matrix
                     let transition_probs = &transition_matrix[current_state];
                     let rand_val: f32 = markov_state.rng.gen();
-                    
+
                     let mut cumulative_prob = 0.0;
                     for (next_state, &prob) in transition_probs.iter().enumerate() {
                         cumulative_prob += prob;
@@ -274,7 +282,7 @@ impl Scheduler {
                             break;
                         }
                     }
-                    
+
                     // Set next transition time using exponential distribution
                     let exponential_delay = {
                         let u: f32 = markov_state.rng.gen();
@@ -282,7 +290,7 @@ impl Scheduler {
                         Duration::from_secs_f32(-u.ln() / lambda)
                     };
                     markov_state.next_transition_time = now + exponential_delay;
-                    
+
                     let spec = states[markov_state.current_state].clone();
                     Ok(Some((spec, Duration::ZERO)))
                 } else {
@@ -295,13 +303,13 @@ impl Scheduler {
                 if runtime.replay_state.is_none() {
                     runtime.init_replay_state()?;
                 }
-                
+
                 let replay_state = runtime.replay_state.as_mut().unwrap();
-                
+
                 // Find the next trace entry
                 while replay_state.current_index < replay_state.trace_data.len() {
                     let (trace_time, spec) = &replay_state.trace_data[replay_state.current_index];
-                    
+
                     if *trace_time > elapsed {
                         let delay = *trace_time - elapsed;
                         return Ok(Some((spec.clone(), delay)));
@@ -313,7 +321,7 @@ impl Scheduler {
                         replay_state.current_index += 1;
                     }
                 }
-                
+
                 // End of trace
                 Ok(None)
             }
@@ -324,7 +332,7 @@ impl Scheduler {
     async fn apply_spec(runtime: &LinkRuntime, spec: &DirectionSpec) -> Result<(), RuntimeError> {
         // TODO: Get handle for the specific namespace
         // For now, this is a placeholder implementation
-        
+
         let netem_config = NetemConfig {
             delay_us: spec.base_delay_ms * 1000, // Convert to microseconds
             jitter_us: spec.jitter_ms * 1000,
@@ -335,8 +343,10 @@ impl Scheduler {
             rate_bps: spec.rate_kbps as u64 * 1000, // Convert to bps
         };
 
-        debug!("Would apply netem config: {:?} to interface {} in namespace {}", 
-               netem_config, runtime.interface_index, runtime.namespace);
+        debug!(
+            "Would apply netem config: {:?} to interface {} in namespace {}",
+            netem_config, runtime.interface_index, runtime.namespace
+        );
 
         // TODO: Actually apply the configuration using qdisc manager
         // runtime.qdisc_manager.update_netem(handle, runtime.interface_index, netem_config).await?;
@@ -449,12 +459,12 @@ mod tests {
         let (spec, _delay) = result.unwrap();
         // Should be in initial state (good)
         assert_eq!(spec.rate_kbps, good.rate_kbps);
-        
+
         // Markov state should be initialized
         assert!(runtime.markov_state.is_some());
     }
 
-    #[test] 
+    #[test]
     fn test_replay_schedule_missing_file() {
         let schedule = Schedule::Replay {
             path: "/nonexistent/file.json".into(),

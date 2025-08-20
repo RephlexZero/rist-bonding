@@ -1,5 +1,5 @@
 //! Enhanced Network Orchestrator providing drop-in replacement for network-sim
-//! 
+//!
 //! This module provides a complete NetworkOrchestrator API that integrates with:
 //! - scenarios crate for realistic network conditions  
 //! - observability crate for comprehensive metrics
@@ -13,12 +13,12 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 
 #[cfg(feature = "enhanced")]
-use scenarios;
-#[cfg(feature = "enhanced")]  
 use observability;
+#[cfg(feature = "enhanced")]
+use scenarios;
 
 /// Re-export core types from netlink-sim
-pub use crate::{NetworkOrchestrator as BaseOrchestrator, LinkHandle, TestScenario, LinkParams};
+pub use crate::{LinkHandle, LinkParams, NetworkOrchestrator as BaseOrchestrator, TestScenario};
 
 /// Enhanced NetworkOrchestrator with scenarios and observability integration
 #[cfg(feature = "enhanced")]
@@ -36,9 +36,11 @@ impl EnhancedNetworkOrchestrator {
     pub async fn new_with_observability(seed: u64, trace_path: Option<&str>) -> Result<Self> {
         let base = BaseOrchestrator::new(seed);
         let metrics_collector = Some(Arc::new(observability::MetricsCollector::new()));
-        
+
         let trace_recorder = if let Some(path) = trace_path {
-            Some(Arc::new(RwLock::new(observability::TraceRecorder::new(path)?)))
+            Some(Arc::new(RwLock::new(observability::TraceRecorder::new(
+                path,
+            )?)))
         } else {
             None
         };
@@ -75,8 +77,10 @@ impl EnhancedNetworkOrchestrator {
 
         let scenario = TestScenario {
             name: name.clone(),
-            description: format!("Scenario with forward: {}kbps, reverse: {}kbps", 
-                                forward_spec.rate_kbps, reverse_spec.rate_kbps),
+            description: format!(
+                "Scenario with forward: {}kbps, reverse: {}kbps",
+                forward_spec.rate_kbps, reverse_spec.rate_kbps
+            ),
             forward_params,
             reverse_params,
             duration_seconds: None,
@@ -94,28 +98,35 @@ impl EnhancedNetworkOrchestrator {
     }
 
     /// Start race car bonding test with realistic cellular conditions
-    pub async fn start_race_car_bonding(
-        &mut self, 
-        rx_port: u16
-    ) -> Result<Vec<LinkHandle>> {
+    pub async fn start_race_car_bonding(&mut self, rx_port: u16) -> Result<Vec<LinkHandle>> {
         let scenarios = vec![
-            ("race_4g_primary".to_string(), 
-             scenarios::DirectionSpec::race_4g_strong(),
-             scenarios::DirectionSpec::race_4g_moderate()),
-            ("race_4g_backup".to_string(),
-             scenarios::DirectionSpec::race_4g_moderate(), 
-             scenarios::DirectionSpec::race_4g_moderate()),
-            ("race_5g_primary".to_string(),
-             scenarios::DirectionSpec::race_5g_strong(),
-             scenarios::DirectionSpec::race_5g_moderate()),
-            ("race_5g_backup".to_string(),
-             scenarios::DirectionSpec::race_5g_moderate(),
-             scenarios::DirectionSpec::race_5g_weak()),
+            (
+                "race_4g_primary".to_string(),
+                scenarios::DirectionSpec::race_4g_strong(),
+                scenarios::DirectionSpec::race_4g_moderate(),
+            ),
+            (
+                "race_4g_backup".to_string(),
+                scenarios::DirectionSpec::race_4g_moderate(),
+                scenarios::DirectionSpec::race_4g_moderate(),
+            ),
+            (
+                "race_5g_primary".to_string(),
+                scenarios::DirectionSpec::race_5g_strong(),
+                scenarios::DirectionSpec::race_5g_moderate(),
+            ),
+            (
+                "race_5g_backup".to_string(),
+                scenarios::DirectionSpec::race_5g_moderate(),
+                scenarios::DirectionSpec::race_5g_weak(),
+            ),
         ];
 
         let mut handles = Vec::new();
         for (name, forward, reverse) in scenarios {
-            let handle = self.start_scenario_with_spec(name, forward, reverse, rx_port).await?;
+            let handle = self
+                .start_scenario_with_spec(name, forward, reverse, rx_port)
+                .await?;
             handles.push(handle);
         }
 
@@ -135,8 +146,9 @@ impl EnhancedNetworkOrchestrator {
                 serde_json::json!({
                     "link_name": link_name,
                     "schedule": format!("{:?}", schedule)
-                })
-            ).with_link_id(link_name.to_string());
+                }),
+            )
+            .with_link_id(link_name.to_string());
 
             recorder.write().await.record(entry).await?;
         }
@@ -180,20 +192,28 @@ impl EnhancedNetworkOrchestrator {
     /// Convenience method: Start enhanced 5G scenario with observability
     pub async fn start_enhanced_5g_scenario(&mut self, rx_port: u16) -> Result<Vec<LinkHandle>> {
         let scenarios = vec![
-            ("5g_strong_primary".to_string(),
-             scenarios::DirectionSpec::race_5g_strong(),
-             scenarios::DirectionSpec::race_5g_moderate()),
-            ("5g_moderate_secondary".to_string(), 
-             scenarios::DirectionSpec::race_5g_moderate(),
-             scenarios::DirectionSpec::race_5g_weak()),
-            ("4g_backup".to_string(),
-             scenarios::DirectionSpec::race_4g_strong(),
-             scenarios::DirectionSpec::race_4g_moderate()),
+            (
+                "5g_strong_primary".to_string(),
+                scenarios::DirectionSpec::race_5g_strong(),
+                scenarios::DirectionSpec::race_5g_moderate(),
+            ),
+            (
+                "5g_moderate_secondary".to_string(),
+                scenarios::DirectionSpec::race_5g_moderate(),
+                scenarios::DirectionSpec::race_5g_weak(),
+            ),
+            (
+                "4g_backup".to_string(),
+                scenarios::DirectionSpec::race_4g_strong(),
+                scenarios::DirectionSpec::race_4g_moderate(),
+            ),
         ];
 
         let mut handles = Vec::new();
         for (name, forward, reverse) in scenarios {
-            let handle = self.start_scenario_with_spec(name, forward, reverse, rx_port).await?;
+            let handle = self
+                .start_scenario_with_spec(name, forward, reverse, rx_port)
+                .await?;
             handles.push(handle);
         }
 
@@ -221,7 +241,7 @@ impl EnhancedNetworkOrchestrator {
         Self::new_with_observability(42, Some(trace_path)).await
     }
 
-    /// Create 5G research orchestrator 
+    /// Create 5G research orchestrator
     pub async fn for_5g_research(trace_path: &str) -> Result<Self> {
         Self::new_with_observability(123, Some(trace_path)).await
     }

@@ -19,7 +19,8 @@ fn test_integrated_dispatcher_flow() {
 
     // Create pipeline
     let pipeline = gst::Pipeline::new();
-    pipeline.add_many([&source, &dispatcher, &counter1, &counter2])
+    pipeline
+        .add_many([&source, &dispatcher, &counter1, &counter2])
         .expect("Failed to add elements to pipeline");
 
     // Request src pads from dispatcher
@@ -107,7 +108,8 @@ fn test_dynbitrate_integration() {
 
     // Create pipeline
     let pipeline = gst::Pipeline::new();
-    pipeline.add_many([&source, &encoder, &dynbitrate, &sink])
+    pipeline
+        .add_many([&source, &encoder, &dynbitrate, &sink])
         .expect("Failed to add elements to pipeline");
 
     // Link all elements

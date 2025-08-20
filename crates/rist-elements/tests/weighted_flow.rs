@@ -20,7 +20,9 @@ fn test_weighted_distribution_basic() {
     let counter2 = create_counter_sink();
 
     let pipeline = gst::Pipeline::new();
-    pipeline.add_many([&source, &dispatcher, &counter1, &counter2]).expect("Failed to add elements to pipeline");
+    pipeline
+        .add_many([&source, &dispatcher, &counter1, &counter2])
+        .expect("Failed to add elements to pipeline");
 
     // Link elements
     source.link(&dispatcher).unwrap();
@@ -48,18 +50,24 @@ fn test_weighted_distribution_basic() {
     if total > 0 {
         let ratio1 = count1 as f64 / total as f64;
         let ratio2 = count2 as f64 / total as f64;
-        
+
         println!("Actual ratios: {:.2} vs {:.2}", ratio1, ratio2);
-        
+
         // Allow 10% variance from expected ratios
-        assert!((ratio1 - 0.8).abs() < 0.1, "First output should get ~80% of traffic");
-        assert!((ratio2 - 0.2).abs() < 0.1, "Second output should get ~20% of traffic");
+        assert!(
+            (ratio1 - 0.8).abs() < 0.1,
+            "First output should get ~80% of traffic"
+        );
+        assert!(
+            (ratio2 - 0.2).abs() < 0.1,
+            "Second output should get ~20% of traffic"
+        );
     }
 
     println!("✅ Weighted distribution test completed");
 }
 
-#[test] 
+#[test]
 fn test_equal_weights() {
     init_for_tests();
 
@@ -71,7 +79,9 @@ fn test_equal_weights() {
     let counter2 = create_counter_sink();
 
     let pipeline = gst::Pipeline::new();
-    pipeline.add_many([&source, &dispatcher, &counter1, &counter2]).expect("Failed to add elements to pipeline");
+    pipeline
+        .add_many([&source, &dispatcher, &counter1, &counter2])
+        .expect("Failed to add elements to pipeline");
 
     // Link elements
     source.link(&dispatcher).unwrap();
@@ -98,7 +108,10 @@ fn test_equal_weights() {
     let total = count1 + count2;
     if total > 0 {
         let ratio1 = count1 as f64 / total as f64;
-        assert!((ratio1 - 0.5).abs() < 0.15, "Equal weights should distribute roughly equally");
+        assert!(
+            (ratio1 - 0.5).abs() < 0.15,
+            "Equal weights should distribute roughly equally"
+        );
     }
 
     println!("✅ Equal weights test completed");

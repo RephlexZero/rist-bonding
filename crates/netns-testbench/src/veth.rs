@@ -4,8 +4,8 @@
 //! between namespaces, configure MTU, and bring interfaces up/down.
 
 use crate::netns::{Manager as NetNsManager, NetNsError};
-use rtnetlink::{Handle, new_connection};
 use futures::TryStreamExt;
+use rtnetlink::{new_connection, Handle};
 use std::collections::HashMap;
 use thiserror::Error;
 use tokio::time::{sleep, Duration};
@@ -15,31 +15,31 @@ use tracing::{debug, info, warn};
 pub enum VethError {
     #[error("I/O error: {0}")]
     Io(std::io::Error),
-    
+
     #[error("Netlink connection failed: {0}")]
     Connection(rtnetlink::Error),
-    
+
     #[error("Interface '{0}' not found")]
     NotFound(String),
-    
+
     #[error("Interface '{0}' already exists")]
     AlreadyExists(String),
-    
+
     #[error("Failed to create veth pair: {0}")]
     CreateFailed(rtnetlink::Error),
-    
+
     #[error("Failed to move interface to namespace: {0}")]
     MoveFailed(rtnetlink::Error),
-    
+
     #[error("Failed to bring interface up: {0}")]
     SetUpFailed(rtnetlink::Error),
-    
+
     #[error("Failed to set MTU: {0}")]
     SetMtuFailed(rtnetlink::Error),
-    
+
     #[error("Namespace error: {0}")]
     NetNs(#[from] NetNsError),
-    
+
     #[error("Invalid interface name: {0}")]
     InvalidName(String),
 }
@@ -73,12 +73,11 @@ pub struct VethPair {
 impl PairManager {
     /// Create a new veth pair manager
     pub async fn new() -> Result<Self, VethError> {
-        let (connection, handle, _) = new_connection()
-            .map_err(VethError::Io)?;
-            
+        let (connection, handle, _) = new_connection().map_err(VethError::Io)?;
+
         // Spawn the netlink connection
         tokio::spawn(connection);
-        
+
         Ok(Self {
             handle,
             pairs: HashMap::new(),
@@ -86,9 +85,16 @@ impl PairManager {
     }
 
     /// Create a veth pair with the given names
-    pub async fn create_pair(&mut self, left_name: &str, right_name: &str) -> Result<VethPair, VethError> {
+    pub async fn create_pair(
+        &mut self,
+        left_name: &str,
+        right_name: &str,
+    ) -> Result<VethPair, VethError> {
         if self.pairs.contains_key(left_name) || self.pairs.contains_key(right_name) {
-            return Err(VethError::AlreadyExists(format!("{}/{}", left_name, right_name)));
+            return Err(VethError::AlreadyExists(format!(
+                "{}/{}",
+                left_name, right_name
+            )));
         }
 
         // Validate interface names
@@ -167,8 +173,16 @@ impl PairManager {
     }
 
     /// Move an interface to a network namespace
-    pub async fn move_to_namespace(&mut self, interface_name: &str, target_ns: &str, ns_manager: &NetNsManager) -> Result<(), VethError> {
-        debug!("Moving interface {} to namespace {}", interface_name, target_ns);
+    pub async fn move_to_namespace(
+        &mut self,
+        interface_name: &str,
+        target_ns: &str,
+        ns_manager: &NetNsManager,
+    ) -> Result<(), VethError> {
+        debug!(
+            "Moving interface {} to namespace {}",
+            interface_name, target_ns
+        );
 
         let interface_index = self.get_interface_info(interface_name).await?.index;
         let ns_fd = ns_manager.get_namespace_fd(target_ns)?;
@@ -191,12 +205,20 @@ impl PairManager {
             }
         }
 
-        info!("Moved interface {} to namespace {}", interface_name, target_ns);
+        info!(
+            "Moved interface {} to namespace {}",
+            interface_name, target_ns
+        );
         Ok(())
     }
 
     /// Set MTU for an interface (in its current namespace)
-    pub async fn set_mtu(&mut self, interface_name: &str, mtu: u32, ns_manager: Option<&NetNsManager>) -> Result<(), VethError> {
+    pub async fn set_mtu(
+        &mut self,
+        interface_name: &str,
+        mtu: u32,
+        ns_manager: Option<&NetNsManager>,
+    ) -> Result<(), VethError> {
         debug!("Setting MTU {} for interface {}", mtu, interface_name);
 
         // Determine which handle to use based on interface location
@@ -213,8 +235,8 @@ impl PairManager {
                     let handle = ns_mgr.exec_in_namespace(ns, || {
                         tokio::task::block_in_place(|| {
                             tokio::runtime::Handle::current().block_on(async {
-                                let (connection, handle, _) = new_connection()
-                                    .map_err(VethError::Io)?;
+                                let (connection, handle, _) =
+                                    new_connection().map_err(VethError::Io)?;
                                 tokio::spawn(connection);
                                 Ok::<Handle, VethError>(handle)
                             })
@@ -231,7 +253,10 @@ impl PairManager {
             self.handle.clone()
         };
 
-        let interface_index = self.get_interface_info_with_handle(&handle, interface_name).await?.index;
+        let interface_index = self
+            .get_interface_info_with_handle(&handle, interface_name)
+            .await?
+            .index;
 
         // Set MTU
         handle
@@ -256,7 +281,11 @@ impl PairManager {
     }
 
     /// Bring an interface up
-    pub async fn set_up(&self, interface_name: &str, ns_manager: Option<&NetNsManager>) -> Result<(), VethError> {
+    pub async fn set_up(
+        &self,
+        interface_name: &str,
+        ns_manager: Option<&NetNsManager>,
+    ) -> Result<(), VethError> {
         debug!("Bringing interface {} up", interface_name);
 
         // Determine which handle to use
@@ -272,8 +301,8 @@ impl PairManager {
                     let handle = ns_mgr.exec_in_namespace(ns, || {
                         tokio::task::block_in_place(|| {
                             tokio::runtime::Handle::current().block_on(async {
-                                let (connection, handle, _) = new_connection()
-                                    .map_err(VethError::Io)?;
+                                let (connection, handle, _) =
+                                    new_connection().map_err(VethError::Io)?;
                                 tokio::spawn(connection);
                                 Ok::<Handle, VethError>(handle)
                             })
@@ -290,7 +319,10 @@ impl PairManager {
             self.handle.clone()
         };
 
-        let interface_index = self.get_interface_info_with_handle(&handle, interface_name).await?.index;
+        let interface_index = self
+            .get_interface_info_with_handle(&handle, interface_name)
+            .await?
+            .index;
 
         // Bring interface up
         handle
@@ -307,10 +339,15 @@ impl PairManager {
 
     /// Delete a veth pair
     pub async fn delete_pair(&mut self, interface_name: &str) -> Result<(), VethError> {
-        let pair = self.pairs.remove(interface_name)
+        let pair = self
+            .pairs
+            .remove(interface_name)
             .ok_or_else(|| VethError::NotFound(interface_name.to_string()))?;
 
-        debug!("Deleting veth pair: {} <-> {}", pair.left.name, pair.right.name);
+        debug!(
+            "Deleting veth pair: {} <-> {}",
+            pair.left.name, pair.right.name
+        );
 
         // Remove the other end from tracking too
         let other_name = if pair.left.name == interface_name {
@@ -329,22 +366,26 @@ impl PairManager {
             .await
             .map_err(VethError::CreateFailed)?;
 
-        info!("Deleted veth pair: {} <-> {}", pair.left.name, pair.right.name);
+        info!(
+            "Deleted veth pair: {} <-> {}",
+            pair.left.name, pair.right.name
+        );
         Ok(())
     }
 
     /// Get information about an interface
     async fn get_interface_info(&self, name: &str) -> Result<InterfaceInfo, VethError> {
-        self.get_interface_info_with_handle(&self.handle, name).await
+        self.get_interface_info_with_handle(&self.handle, name)
+            .await
     }
 
     /// Get information about an interface using a specific handle
-    async fn get_interface_info_with_handle(&self, handle: &Handle, name: &str) -> Result<InterfaceInfo, VethError> {
-        let mut links = handle
-            .link()
-            .get()
-            .match_name(name.to_string())
-            .execute();
+    async fn get_interface_info_with_handle(
+        &self,
+        handle: &Handle,
+        name: &str,
+    ) -> Result<InterfaceInfo, VethError> {
+        let mut links = handle.link().get().match_name(name.to_string()).execute();
 
         if let Some(link) = links.try_next().await.map_err(VethError::Connection)? {
             Ok(InterfaceInfo {
@@ -376,9 +417,11 @@ struct InterfaceInfo {
 
 /// Validate interface name according to Linux rules
 fn is_valid_interface_name(name: &str) -> bool {
-    !name.is_empty() 
-        && name.len() <= 15 
-        && name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+    !name.is_empty()
+        && name.len() <= 15
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
         && !name.starts_with('-')
 }
 
@@ -405,9 +448,11 @@ mod tests {
         assert!(is_valid_interface_name("eth0"));
         assert!(is_valid_interface_name("veth-test"));
         assert!(is_valid_interface_name("test_123"));
-        
+
         assert!(!is_valid_interface_name(""));
-        assert!(!is_valid_interface_name("this-name-is-way-too-long-for-linux"));
+        assert!(!is_valid_interface_name(
+            "this-name-is-way-too-long-for-linux"
+        ));
         assert!(!is_valid_interface_name("-invalid"));
         assert!(!is_valid_interface_name("invalid@name"));
     }
@@ -416,11 +461,11 @@ mod tests {
     #[cfg(feature = "sudo-tests")]
     async fn test_veth_creation() -> Result<(), VethError> {
         let mut manager = PairManager::new().await?;
-        
+
         let pair = manager.create_pair("test-left", "test-right").await?;
         assert_eq!(pair.left.name, "test-left");
         assert_eq!(pair.right.name, "test-right");
-        
+
         manager.delete_pair("test-left").await?;
         Ok(())
     }

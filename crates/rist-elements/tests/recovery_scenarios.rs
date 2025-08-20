@@ -29,7 +29,9 @@ fn test_single_link_degradation_recovery() {
         .build()
         .expect("Failed to create audiotestsrc");
     let pipeline = gst::Pipeline::new();
-    pipeline.add_many([&source, &dispatcher, &counter1, &counter2]).expect("Failed to add elements to pipeline");
+    pipeline
+        .add_many([&source, &dispatcher, &counter1, &counter2])
+        .expect("Failed to add elements to pipeline");
 
     // Link elements
     let src_0 = dispatcher.request_pad_simple("src_%u").unwrap();
@@ -207,7 +209,9 @@ fn test_dispatcher_recovery_integration() {
     let counter3 = create_counter_sink();
 
     let pipeline = gst::Pipeline::new();
-    pipeline.add_many([&source, &dispatcher, &counter1, &counter2, &counter3]).expect("Failed to add elements to pipeline");
+    pipeline
+        .add_many([&source, &dispatcher, &counter1, &counter2, &counter3])
+        .expect("Failed to add elements to pipeline");
 
     // Set up three output paths
     let src_0 = dispatcher.request_pad_simple("src_%u").unwrap();

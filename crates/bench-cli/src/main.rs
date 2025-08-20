@@ -10,7 +10,7 @@ use scenarios::Presets;
 use std::time::Duration;
 use tokio::signal;
 use tokio::time::sleep;
-use tracing::{info, error, Level};
+use tracing::{error, info, Level};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -30,33 +30,33 @@ enum Commands {
         /// Number of links to create
         #[arg(long, default_value_t = 1)]
         links: u8,
-        
+
         /// Preset name (good, poor, lte, etc.)
         #[arg(long)]
         preset: Option<String>,
-        
+
         /// Duration to run (seconds)
         #[arg(long, default_value_t = 60)]
         duration: u64,
-        
+
         /// RX port for scenarios
         #[arg(long, default_value_t = 7000)]
         rx_port: u16,
     },
-    
+
     /// Run a specific scenario from file or preset
     Run {
         /// Scenario file path (JSON) or preset name
         scenario: String,
-        
+
         /// RX port for scenarios
         #[arg(long, default_value_t = 7000)]
         rx_port: u16,
     },
-    
+
     /// List available scenarios and presets
     List,
-    
+
     /// Show live statistics
     Stats {
         /// Update interval in seconds
@@ -70,14 +70,23 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Initialize tracing
-    let level = if cli.verbose { Level::DEBUG } else { Level::INFO };
+    let level = if cli.verbose {
+        Level::DEBUG
+    } else {
+        Level::INFO
+    };
     tracing_subscriber::fmt()
         .with_max_level(level)
         .with_target(false)
         .init();
 
     match cli.command {
-        Commands::Up { links, preset, duration, rx_port } => {
+        Commands::Up {
+            links,
+            preset,
+            duration,
+            rx_port,
+        } => {
             cmd_up(links, preset, duration, rx_port).await?;
         }
         Commands::Run { scenario, rx_port } => {
@@ -98,7 +107,7 @@ async fn cmd_up(links: u8, preset: Option<String>, duration: u64, rx_port: u16) 
     info!("Bringing up {} links for {} seconds", links, duration);
 
     let mut orchestrator = NetworkOrchestrator::new(42).await?;
-    
+
     // Determine which scenario to use
     let scenario = match preset.as_deref() {
         Some("good") => TestScenario::baseline_good(),
@@ -114,7 +123,7 @@ async fn cmd_up(links: u8, preset: Option<String>, duration: u64, rx_port: u16) 
 
     // Start the scenario
     let handle = orchestrator.start_scenario(scenario, rx_port).await?;
-    
+
     info!("Started scenario: {}", handle.scenario.name);
     info!("  Ingress Port: {}", handle.ingress_port);
     info!("  Egress Port:  {}", handle.egress_port);
@@ -135,7 +144,7 @@ async fn cmd_up(links: u8, preset: Option<String>, duration: u64, rx_port: u16) 
 
     orchestrator.shutdown().await?;
     info!("Testbench shut down successfully");
-    
+
     Ok(())
 }
 
@@ -162,16 +171,16 @@ async fn cmd_run(scenario: String, rx_port: u16) -> Result<()> {
 
     let mut orchestrator = NetworkOrchestrator::new(42).await?;
     let handle = orchestrator.start_scenario(test_scenario, rx_port).await?;
-    
+
     info!("Running scenario: {}", handle.scenario.name);
     info!("Description: {}", handle.scenario.description);
-    
+
     // Start scheduler
     orchestrator.start_scheduler().await?;
-    
+
     // Run for scenario duration or until interrupted
     let duration = handle.scenario.duration_seconds.unwrap_or(60);
-    
+
     tokio::select! {
         _ = sleep(Duration::from_secs(duration)) => {
             info!("Scenario completed");
@@ -188,28 +197,28 @@ async fn cmd_run(scenario: String, rx_port: u16) -> Result<()> {
 async fn cmd_list() -> Result<()> {
     println!("Available scenarios:");
     println!("==================");
-    
+
     println!("\nBasic scenarios:");
     for scenario in Presets::basic_scenarios() {
         println!("  {:<20} - {}", scenario.name, scenario.description);
     }
-    
+
     println!("\nCellular scenarios:");
     for scenario in Presets::cellular_scenarios() {
         println!("  {:<20} - {}", scenario.name, scenario.description);
     }
-    
+
     println!("\nMulti-link scenarios:");
     for scenario in Presets::multi_link_scenarios() {
         println!("  {:<20} - {}", scenario.name, scenario.description);
     }
-    
+
     println!("\nBuilt-in presets:");
     println!("  good              - High quality baseline");
     println!("  poor              - Degraded network conditions");
     println!("  lte               - Mobile/cellular characteristics");
     println!("  bonding           - Dual-link bonding test");
-    
+
     Ok(())
 }
 
@@ -221,6 +230,6 @@ async fn cmd_stats(_interval: u64) -> Result<()> {
     println!("  - Packet counts and rates");
     println!("  - Current impairment settings");
     println!("  - Schedule progress");
-    
+
     Ok(())
 }

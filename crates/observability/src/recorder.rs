@@ -1,6 +1,6 @@
 //! Trace recording and replay functionality
 
-use crate::{Result, ObservabilityError, MetricsSnapshot};
+use crate::{MetricsSnapshot, ObservabilityError, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -43,7 +43,10 @@ pub struct ReplaySchedule {
 impl ReplaySchedule {
     pub fn new(entries: Vec<TraceEntry>) -> Self {
         Self {
-            start_time: entries.first().map(|e| e.timestamp).unwrap_or_else(Utc::now),
+            start_time: entries
+                .first()
+                .map(|e| e.timestamp)
+                .unwrap_or_else(Utc::now),
             entries,
             time_scale_factor: 1.0,
         }
@@ -99,7 +102,7 @@ impl TraceRecorder {
     pub async fn record_snapshot(&mut self, snapshot: &MetricsSnapshot) -> Result<()> {
         let entry = TraceEntry::new(
             "metrics_snapshot".to_string(),
-            serde_json::to_value(snapshot)?
+            serde_json::to_value(snapshot)?,
         );
         self.record(entry).await
     }
@@ -159,15 +162,18 @@ impl TraceReplay {
     where
         F: FnMut(&TraceEntry) -> Result<()>,
     {
-        let schedule = self.schedule.as_ref()
+        let schedule = self
+            .schedule
+            .as_ref()
             .ok_or_else(|| ObservabilityError::Trace("Schedule not loaded".to_string()))?;
 
         let start = tokio::time::Instant::now();
 
         for entry in &schedule.entries {
-            let elapsed = (entry.timestamp - schedule.start_time).num_milliseconds() as f64 / 1000.0;
+            let elapsed =
+                (entry.timestamp - schedule.start_time).num_milliseconds() as f64 / 1000.0;
             let scaled_elapsed = elapsed / schedule.time_scale_factor;
-            
+
             let target = start + tokio::time::Duration::from_secs_f64(scaled_elapsed);
             tokio::time::sleep_until(target).await;
 

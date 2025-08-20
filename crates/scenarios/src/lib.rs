@@ -1,5 +1,5 @@
 //! Network scenario definitions and presets for RIST testbench
-//! 
+//!
 //! This crate provides data models for network impairments and realistic
 //! 4G/5G behavior presets that can be used by both the netns-testbench
 //! and the legacy netlink-sim backend.
@@ -148,7 +148,7 @@ impl DirectionSpec {
         Self {
             base_delay_ms: 200, // High delay due to handover/reconnection
             jitter_ms: 100,
-            loss_pct: 0.5, // 50% loss during blockage
+            loss_pct: 0.5,         // 50% loss during blockage
             loss_burst_corr: 0.95, // Highly correlated (blocked/unblocked states)
             reorder_pct: 0.1,
             duplicate_pct: 0.01,
@@ -192,7 +192,7 @@ impl DirectionSpec {
             jitter_ms: 20, // Variable due to beam steering
             loss_pct: 0.008,
             loss_burst_corr: 0.6, // Interference comes in bursts
-            reorder_pct: 0.01, // Beam switches can cause reordering
+            reorder_pct: 0.01,    // Beam switches can cause reordering
             duplicate_pct: 0.001,
             rate_kbps: 50000, // Reduced due to interference
             mtu: Some(1400),
@@ -227,7 +227,7 @@ impl DirectionSpec {
         }
     }
 
-        /// Create race car 4G USB modem characteristics - best case
+    /// Create race car 4G USB modem characteristics - best case
     pub fn race_4g_strong() -> Self {
         Self {
             base_delay_ms: 45,
@@ -320,7 +320,7 @@ impl DirectionSpec {
             loss_burst_corr: 0.8,
             reorder_pct: 0.05,
             duplicate_pct: 0.01,
-            rate_kbps: 100, // Severely degraded during handover
+            rate_kbps: 100,  // Severely degraded during handover
             mtu: Some(1400), // Smaller MTU during instability
         }
     }
@@ -337,7 +337,7 @@ impl DirectionSpec {
         }
     }
 
-        /// Apply race car signal degradation (terrain/building blockage)
+    /// Apply race car signal degradation (terrain/building blockage)
     pub fn with_race_blockage(mut self, severity: f32) -> Self {
         // Terrain/building blockage causes rate reduction and increased loss
         let degradation = 1.0 - (severity * 0.7); // Up to 70% degradation
@@ -417,43 +417,43 @@ impl DirectionSpec {
     /// Apply mmWave beam blockage effects (sudden signal loss/recovery)
     pub fn with_mmwave_blockage(mut self, blockage_severity: f32) -> Self {
         let severity = blockage_severity.clamp(0.0, 1.0);
-        
+
         // Blockage causes sudden high loss and delay spikes
         self.loss_pct = (self.loss_pct + severity * 0.3).min(1.0); // Up to 30% additional loss
         self.loss_burst_corr = (self.loss_burst_corr + severity * 0.5).min(1.0); // Highly bursty
         self.base_delay_ms += (severity * 100.0) as u32; // Up to 100ms spike
         self.jitter_ms += (severity * 50.0) as u32;
-        
+
         // Rate drops significantly during blockage
         self.rate_kbps = ((self.rate_kbps as f32) * (1.0 - severity * 0.9)) as u32;
-        
+
         self
     }
 
     /// Apply beamforming steering effects
     pub fn with_beamforming_steering(mut self, steering_intensity: f32) -> Self {
         let intensity = steering_intensity.clamp(0.0, 1.0);
-        
+
         // Beam steering causes variable delay and reordering
         self.jitter_ms += (intensity * 20.0) as u32;
         self.reorder_pct += intensity * 0.01; // Up to 1% reordering
-        
+
         // Brief loss spikes during beam transitions
         self.loss_pct += intensity * 0.005;
         self.loss_burst_corr += intensity * 0.3;
-        
+
         self
     }
 
     /// Apply carrier aggregation effects
     pub fn with_carrier_aggregation(mut self, ca_bands: u32) -> Self {
         let multiplier = (ca_bands as f32).max(1.0);
-        
+
         // CA increases rate but can cause reordering due to different band delays
         self.rate_kbps = ((self.rate_kbps as f32) * multiplier) as u32;
         self.reorder_pct += (multiplier - 1.0) * 0.002; // Slight reordering increase per extra band
         self.jitter_ms += ((multiplier - 1.0) * 5.0) as u32; // Scheduling complexity
-        
+
         self
     }
 
@@ -527,7 +527,7 @@ impl Schedule {
         let strong = DirectionSpec::race_4g_strong().with_usb_constraints();
         let moderate = DirectionSpec::race_4g_moderate().with_usb_constraints();
         let weak = DirectionSpec::race_4g_weak().with_usb_constraints();
-        
+
         Schedule::Markov {
             states: vec![strong, moderate, weak],
             // Race conditions: frequently changing signal strength
@@ -536,7 +536,7 @@ impl Schedule {
                 vec![0.30, 0.50, 0.20], // moderate -> can improve or degrade
                 vec![0.10, 0.40, 0.50], // weak -> mostly stay weak or improve to moderate
             ],
-            initial_state: 1, // Start in moderate state
+            initial_state: 1,                        // Start in moderate state
             mean_dwell_time: Duration::from_secs(8), // 8s average - fast changes at race speeds
         }
     }
@@ -546,7 +546,7 @@ impl Schedule {
         let strong = DirectionSpec::race_5g_strong().with_usb_constraints();
         let moderate = DirectionSpec::race_5g_moderate().with_usb_constraints();
         let weak = DirectionSpec::race_5g_weak().with_usb_constraints();
-        
+
         Schedule::Markov {
             states: vec![strong, moderate, weak],
             // 5G is better but still affected by race mobility
@@ -565,15 +565,15 @@ impl Schedule {
         let normal_4g = DirectionSpec::race_4g_moderate().with_usb_constraints();
         let normal_5g = DirectionSpec::race_5g_moderate().with_usb_constraints();
         let handover = DirectionSpec::race_handover_spike();
-        
+
         Schedule::Steps(vec![
             (Duration::from_secs(0), normal_4g.clone()),
-            (Duration::from_secs(15), handover.clone()),  // Handover event
+            (Duration::from_secs(15), handover.clone()), // Handover event
             (Duration::from_secs(18), normal_5g.clone()), // Switch to 5G tower
-            (Duration::from_secs(35), handover.clone()),  // Another handover
-            (Duration::from_secs(38), normal_4g),         // Back to 4G
-            (Duration::from_secs(55), handover),          // Final handover
-            (Duration::from_secs(58), normal_5g),         // Settle on 5G
+            (Duration::from_secs(35), handover.clone()), // Another handover
+            (Duration::from_secs(38), normal_4g),        // Back to 4G
+            (Duration::from_secs(55), handover),         // Final handover
+            (Duration::from_secs(58), normal_5g),        // Settle on 5G
         ])
     }
 
@@ -583,16 +583,16 @@ impl Schedule {
         let back_straight = DirectionSpec::race_4g_strong().with_usb_constraints();
         let turn_complex = DirectionSpec::race_4g_moderate().with_race_blockage(0.4);
         let tunnel_section = DirectionSpec::race_4g_weak().with_race_blockage(0.8);
-        
+
         // Simulate a 90-second lap with varying signal conditions
         Schedule::Steps(vec![
-            (Duration::from_secs(0), pit_straight),     // Best signal at pit
+            (Duration::from_secs(0), pit_straight), // Best signal at pit
             (Duration::from_secs(15), turn_complex.clone()), // Turns with blockage
-            (Duration::from_secs(25), back_straight),   // Good signal on back straight
-            (Duration::from_secs(45), turn_complex.clone()),    // More turns
-            (Duration::from_secs(55), tunnel_section),  // Worst signal in tunnel
-            (Duration::from_secs(65), turn_complex),    // Final turn complex
-            // Loop repeats at 90s
+            (Duration::from_secs(25), back_straight), // Good signal on back straight
+            (Duration::from_secs(45), turn_complex.clone()), // More turns
+            (Duration::from_secs(55), tunnel_section), // Worst signal in tunnel
+            (Duration::from_secs(65), turn_complex), // Final turn complex
+                                                    // Loop repeats at 90s
         ])
     }
 }
@@ -667,7 +667,10 @@ impl TestScenario {
     pub fn bonding_asymmetric() -> Self {
         let mut metadata = HashMap::new();
         metadata.insert("test_type".to_string(), "bonding".to_string());
-        metadata.insert("expected_behavior".to_string(), "weight_adaptation".to_string());
+        metadata.insert(
+            "expected_behavior".to_string(),
+            "weight_adaptation".to_string(),
+        );
 
         Self {
             name: "bonding_asymmetric".to_string(),
@@ -739,7 +742,10 @@ impl TestScenario {
                 "rx0".to_string(),
                 Schedule::Steps(vec![
                     (Duration::from_secs(0), nr_good),
-                    (Duration::from_secs(60), lte_edge.clone().with_handover_spike()),
+                    (
+                        Duration::from_secs(60),
+                        lte_edge.clone().with_handover_spike(),
+                    ),
                     (Duration::from_secs(65), lte_edge),
                 ]),
             )],
@@ -759,9 +765,15 @@ impl TestScenario {
                 "rx0".to_string(),
                 Schedule::Steps(vec![
                     (Duration::from_secs(0), DirectionSpec::nr_mmwave()),
-                    (Duration::from_secs(30), DirectionSpec::nr_mmwave().with_mmwave_blockage(1.0)),
+                    (
+                        Duration::from_secs(30),
+                        DirectionSpec::nr_mmwave().with_mmwave_blockage(1.0),
+                    ),
                     (Duration::from_secs(33), DirectionSpec::nr_mmwave()), // Quick recovery
-                    (Duration::from_secs(60), DirectionSpec::nr_mmwave().with_mmwave_blockage(0.5)),
+                    (
+                        Duration::from_secs(60),
+                        DirectionSpec::nr_mmwave().with_mmwave_blockage(0.5),
+                    ),
                     (Duration::from_secs(65), DirectionSpec::nr_mmwave()),
                 ]),
             )],
@@ -815,9 +827,18 @@ impl TestScenario {
                 "rx0".to_string(),
                 Schedule::Steps(vec![
                     (Duration::from_secs(0), DirectionSpec::nr_sub6ghz()),
-                    (Duration::from_secs(30), DirectionSpec::nr_sub6ghz().with_carrier_aggregation(2)),
-                    (Duration::from_secs(60), DirectionSpec::nr_sub6ghz().with_carrier_aggregation(3)),
-                    (Duration::from_secs(90), DirectionSpec::nr_carrier_aggregation()),
+                    (
+                        Duration::from_secs(30),
+                        DirectionSpec::nr_sub6ghz().with_carrier_aggregation(2),
+                    ),
+                    (
+                        Duration::from_secs(60),
+                        DirectionSpec::nr_sub6ghz().with_carrier_aggregation(3),
+                    ),
+                    (
+                        Duration::from_secs(90),
+                        DirectionSpec::nr_carrier_aggregation(),
+                    ),
                 ]),
             )],
             duration_seconds: Some(120),
@@ -1008,7 +1029,7 @@ mod tests {
     fn test_direction_presets() {
         let good = DirectionSpec::good();
         let poor = DirectionSpec::poor();
-        
+
         assert!(good.rate_kbps > poor.rate_kbps);
         assert!(good.loss_pct < poor.loss_pct);
         assert!(good.base_delay_ms < poor.base_delay_ms);
@@ -1024,14 +1045,17 @@ mod tests {
 
         assert_eq!(scenario.name, "test");
         assert_eq!(scenario.duration_seconds, Some(60));
-        assert_eq!(scenario.metadata.get("type"), Some(&"unit_test".to_string()));
+        assert_eq!(
+            scenario.metadata.get("type"),
+            Some(&"unit_test".to_string())
+        );
     }
 
     #[test]
     fn test_presets() {
         let basic = Presets::basic_scenarios();
         assert!(!basic.is_empty());
-        
+
         let all = Presets::all_scenarios();
         assert!(all.len() >= basic.len());
     }
@@ -1040,7 +1064,7 @@ mod tests {
     fn test_utils_scaling() {
         let spec = DirectionSpec::typical();
         let scaled = utils::scale_rate(spec.clone(), 2.0);
-        
+
         assert_eq!(scaled.rate_kbps, spec.rate_kbps * 2);
     }
 }
