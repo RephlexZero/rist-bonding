@@ -481,4 +481,382 @@ mod tests {
         let result = Scheduler::get_next_spec(&mut runtime, Duration::ZERO);
         assert!(result.is_err());
     }
+
+    #[tokio::test]
+    async fn test_scheduler_shutdown() {
+        let scheduler = Scheduler::new();
+
+        // Add some runtimes
+        let runtime1 = LinkRuntime::new(
+            "test1".to_string(),
+            1,
+            Arc::new(QdiscManager),
+            DirectionSpec::good(),
+            Schedule::Constant(DirectionSpec::good()),
+        );
+        let runtime2 = LinkRuntime::new(
+            "test2".to_string(),
+            2,
+            Arc::new(QdiscManager),
+            DirectionSpec::poor(),
+            Schedule::Constant(DirectionSpec::poor()),
+        );
+
+        scheduler.add_link_runtime(runtime1).await;
+        scheduler.add_link_runtime(runtime2).await;
+
+        // Start scheduler
+        assert!(scheduler.start().await.is_ok());
+
+        // Should be able to shutdown without hanging
+        scheduler.shutdown().await;
+        assert!(*scheduler.shutdown.lock().await);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_scheduler_operations() {
+        let scheduler = Scheduler::new();
+
+        // Add multiple runtimes concurrently
+        let add_handles: Vec<_> = (0u32..5u32)
+            .map(|i| {
+                let scheduler = &scheduler;
+                async move {
+                    let runtime = LinkRuntime::new(
+                        format!("test_{}", i),
+                        i,
+                        Arc::new(QdiscManager),
+                        DirectionSpec::good(),
+                        Schedule::Constant(DirectionSpec::good()),
+                    );
+                    scheduler.add_link_runtime(runtime).await;
+                }
+            })
+            .collect();
+
+        // Execute all adds concurrently
+        futures::future::join_all(add_handles).await;
+
+        // Verify all runtimes were added
+        assert_eq!(scheduler.runtimes.lock().await.len(), 5);
+
+        // Start and shutdown concurrently shouldn't cause issues
+        let start_result = scheduler.start().await;
+        assert!(start_result.is_ok());
+
+        scheduler.shutdown().await;
+        assert!(*scheduler.shutdown.lock().await);
+    }
+
+    #[tokio::test]
+    async fn test_scheduler_task_error_recovery() {
+        let scheduler = Scheduler::new();
+
+        // Create a runtime with an invalid Markov schedule (empty states)
+        let invalid_schedule = Schedule::Markov {
+            states: vec![], // Empty states should cause errors
+            transition_matrix: vec![],
+            initial_state: 0,
+            mean_dwell_time: Duration::from_secs(1),
+        };
+
+        let runtime = LinkRuntime::new(
+            "error_test".to_string(),
+            1,
+            Arc::new(QdiscManager),
+            DirectionSpec::good(),
+            invalid_schedule,
+        );
+
+        scheduler.add_link_runtime(runtime).await;
+
+        // Starting should not fail even with problematic runtimes
+        // (errors are handled within tasks and logged)
+        assert!(scheduler.start().await.is_ok());
+
+        scheduler.shutdown().await;
+    }
+
+    #[test]
+    fn test_markov_schedule_invalid_initial_state() {
+        let schedule = Schedule::Markov {
+            states: vec![DirectionSpec::good(), DirectionSpec::poor()],
+            transition_matrix: vec![vec![0.8, 0.2], vec![0.6, 0.4]],
+            initial_state: 5, // Invalid initial state (index out of bounds)
+            mean_dwell_time: Duration::from_secs(10),
+        };
+
+        let mut runtime = LinkRuntime::new(
+            "test".to_string(),
+            1,
+            Arc::new(QdiscManager),
+            DirectionSpec::good(),
+            schedule,
+        );
+
+        // Should not panic on invalid initial state, but might return error or default behavior
+        let result = Scheduler::get_next_spec(&mut runtime, Duration::ZERO);
+        // Implementation should handle this gracefully
+        if result.is_err() {
+            // Error is acceptable
+        } else if let Ok(Some((spec, _))) = result {
+            // Or it might default to a valid state
+            assert!(spec.rate_kbps > 0);
+        }
+    }
+
+    #[test]
+    fn test_markov_schedule_invalid_transition_matrix() {
+        let schedule = Schedule::Markov {
+            states: vec![DirectionSpec::good(), DirectionSpec::poor()],
+            transition_matrix: vec![
+                vec![0.8], // Missing entry - should have 2 elements
+                vec![0.6, 0.4],
+            ],
+            initial_state: 0,
+            mean_dwell_time: Duration::from_secs(10),
+        };
+
+        let mut runtime = LinkRuntime::new(
+            "test".to_string(),
+            1,
+            Arc::new(QdiscManager),
+            DirectionSpec::good(),
+            schedule,
+        );
+
+        // Should handle malformed transition matrix gracefully
+        let result = Scheduler::get_next_spec(&mut runtime, Duration::ZERO);
+        // Either error or graceful degradation is acceptable
+        match result {
+            Ok(Some((spec, _))) => assert!(spec.rate_kbps > 0),
+            Ok(None) => {} // End of schedule
+            Err(_) => {}   // Error is acceptable for invalid input
+        }
+    }
+
+    #[test]
+    fn test_steps_schedule_empty() {
+        let schedule = Schedule::Steps(vec![]);
+        let mut runtime = LinkRuntime::new(
+            "test".to_string(),
+            1,
+            Arc::new(QdiscManager),
+            DirectionSpec::good(),
+            schedule,
+        );
+
+        // Empty steps schedule should return None immediately
+        let result = Scheduler::get_next_spec(&mut runtime, Duration::ZERO).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_steps_schedule_unordered() {
+        let good = DirectionSpec::good();
+        let poor = DirectionSpec::poor();
+
+        // Create unordered steps
+        let schedule = Schedule::Steps(vec![
+            (Duration::from_secs(60), good.clone()),
+            (Duration::from_secs(0), poor.clone()), // Out of order
+            (Duration::from_secs(30), good.clone()),
+        ]);
+
+        let mut runtime = LinkRuntime::new(
+            "test".to_string(),
+            1,
+            Arc::new(QdiscManager),
+            good.clone(),
+            schedule,
+        );
+
+        // Should handle unordered steps (implementation dependent)
+        let result = Scheduler::get_next_spec(&mut runtime, Duration::from_secs(10));
+        // Either error or some graceful handling is acceptable
+        match result {
+            Ok(Some((spec, delay))) => {
+                assert!(spec.rate_kbps > 0);
+                assert!(delay >= Duration::ZERO);
+            }
+            Ok(None) => {}
+            Err(_) => {}
+        }
+    }
+
+    #[tokio::test]
+    async fn test_apply_spec_error_handling() {
+        // Test that apply_spec handles errors gracefully
+        let runtime = LinkRuntime::new(
+            "nonexistent_namespace".to_string(),
+            999, // Invalid interface index
+            Arc::new(QdiscManager),
+            DirectionSpec::good(),
+            Schedule::Constant(DirectionSpec::good()),
+        );
+
+        let spec = DirectionSpec::poor();
+
+        // Should not panic on invalid namespace/interface
+        let result = Scheduler::apply_spec(&runtime, &spec).await;
+        // Current implementation just logs and returns Ok, but future implementations might error
+        match result {
+            Ok(()) => {} // Current behavior
+            Err(_) => {} // Future implementations might return errors
+        }
+    }
+
+    #[test]
+    fn test_load_trace_file_invalid_json() {
+        use std::fs;
+        use tempfile::NamedTempFile;
+
+        // Create invalid JSON file
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(&temp_file, "{ invalid json }").unwrap();
+
+        let result = LinkRuntime::load_trace_file(temp_file.path());
+        assert!(result.is_err());
+
+        if let Err(RuntimeError::InvalidSchedule(msg)) = result {
+            assert!(msg.contains("Invalid JSON"));
+        } else {
+            panic!("Expected InvalidSchedule error with JSON message");
+        }
+    }
+
+    #[test]
+    fn test_load_trace_file_csv_not_implemented() {
+        use std::fs;
+        use tempfile::Builder;
+
+        // Create CSV file
+        let temp_file = Builder::new().suffix(".csv").tempfile().unwrap();
+        fs::write(&temp_file, "time,rate\n0,1000\n30,2000\n").unwrap();
+
+        let result = LinkRuntime::load_trace_file(temp_file.path());
+        assert!(result.is_err());
+
+        if let Err(RuntimeError::InvalidSchedule(msg)) = result {
+            assert!(msg.contains("CSV trace files not yet implemented"));
+        } else {
+            panic!("Expected InvalidSchedule error for CSV");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_race_condition_markov_state_initialization() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let schedule = Schedule::Markov {
+            states: vec![DirectionSpec::good(), DirectionSpec::poor()],
+            transition_matrix: vec![vec![0.5, 0.5], vec![0.5, 0.5]],
+            initial_state: 0,
+            mean_dwell_time: Duration::from_millis(100),
+        };
+
+        let runtime = Arc::new(Mutex::new(LinkRuntime::new(
+            "race_test".to_string(),
+            1,
+            Arc::new(QdiscManager),
+            DirectionSpec::good(),
+            schedule,
+        )));
+
+        // Simulate concurrent access to Markov state initialization
+        let handles: Vec<_> = (0..10)
+            .map(|i| {
+                let runtime = runtime.clone();
+                tokio::spawn(async move {
+                    let mut rt = runtime.lock().await;
+                    let result = Scheduler::get_next_spec(&mut rt, Duration::from_millis(i * 10));
+                    result
+                })
+            })
+            .collect();
+
+        // All tasks should complete without panic
+        let results = futures::future::join_all(handles).await;
+        for handle_result in results {
+            assert!(handle_result.is_ok()); // No panic
+                                            // Individual results may vary, but should not crash
+        }
+    }
+
+    #[tokio::test]
+    async fn test_scheduler_with_high_frequency_updates() {
+        let scheduler = Scheduler::new();
+
+        // Create a schedule with very frequent updates
+        let steps: Vec<_> = (0..100)
+            .map(|i| {
+                (
+                    Duration::from_millis(i * 10),
+                    if i % 2 == 0 {
+                        DirectionSpec::good()
+                    } else {
+                        DirectionSpec::poor()
+                    },
+                )
+            })
+            .collect();
+
+        let runtime = LinkRuntime::new(
+            "high_freq_test".to_string(),
+            1,
+            Arc::new(QdiscManager),
+            DirectionSpec::good(),
+            Schedule::Steps(steps),
+        );
+
+        scheduler.add_link_runtime(runtime).await;
+
+        // Start scheduler
+        assert!(scheduler.start().await.is_ok());
+
+        // Let it run briefly
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Should be able to shutdown cleanly
+        scheduler.shutdown().await;
+        assert!(*scheduler.shutdown.lock().await);
+    }
+
+    #[tokio::test]
+    async fn test_multiple_schedulers_independence() {
+        let scheduler1 = Scheduler::new();
+        let scheduler2 = Scheduler::new();
+
+        // Add different runtimes to each scheduler
+        let runtime1 = LinkRuntime::new(
+            "sched1_test".to_string(),
+            1,
+            Arc::new(QdiscManager),
+            DirectionSpec::good(),
+            Schedule::Constant(DirectionSpec::good()),
+        );
+
+        let runtime2 = LinkRuntime::new(
+            "sched2_test".to_string(),
+            2,
+            Arc::new(QdiscManager),
+            DirectionSpec::poor(),
+            Schedule::Constant(DirectionSpec::poor()),
+        );
+
+        scheduler1.add_link_runtime(runtime1).await;
+        scheduler2.add_link_runtime(runtime2).await;
+
+        // Both should start and shutdown independently
+        assert!(scheduler1.start().await.is_ok());
+        assert!(scheduler2.start().await.is_ok());
+
+        scheduler1.shutdown().await;
+        assert!(*scheduler1.shutdown.lock().await);
+        assert!(!*scheduler2.shutdown.lock().await); // scheduler2 still running
+
+        scheduler2.shutdown().await;
+        assert!(*scheduler2.shutdown.lock().await);
+    }
 }

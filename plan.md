@@ -1,38 +1,48 @@
-Report
+Test Coverage Report
+Areas with Unnecessary or Duplicative Testing
+1. Duplicate Algorithm and Scenario Tests
 
-Issue:
-test_race_car_with_netns_and_video_output receives thousands of RTP packets but never records a video frame.
-Runtime logs show tsdemux only exposing an AAC audio pad; no H.265 video pad appears. Consequently, progress reports remain at “Received: 0 frames, 259 KB” throughout the run.
+ristsmart/tests and crates/rist-elements/tests contain nearly identical files (unit_swrr_algorithm.rs, recovery_scenarios.rs, ewma_algorithm.rs, etc.), causing the same logic to be exercised twice without adding coverage.
+Suggested taskConsolidate algorithm tests for SWRR, EWMA, recovery scenarios, etc.
+2. Overlapping Integration Tests
 
-Likely Cause:
-In the sender pipeline, the H.265 stream is parsed without any configuration before being fed to mpegtsmux. Because h265parse is left at its defaults, mpegtsmux never advertises the video elementary stream in the TS Program Map Table, so tsdemux on the receiver side only detects audio
-.
-The receiver pipeline, by contrast, explicitly configures h265parse to output an MP4‑friendly stream (config-interval, stream-format, and alignment)
+Integration tests appear in multiple locations:
 
-.
+    ristsmart/tests/integration_tests.rs
 
-Recommended Fixes:
+    crates/rist-elements/tests/integration_tests.rs
 
-    Configure H.265 parser on the sender side
+    The standalone crates/integration_tests crate (with an additional example at crates/integration_tests/examples/end_to_end_test.rs)
 
-    let vparse = gstreamer::ElementFactory::make("h265parse")
-        .property("config-interval", 1i32)
-        .build()?;
+This fragmentation leads to slow CI and redundant scenarios.
+Suggested taskUnify integration tests into a single suite
+3. Scenario Validation Duplication
 
-    Ensures the parser outputs codec headers frequently so mpegtsmux can register the video stream.
+crates/netns-testbench/tests/integration.rs re-validates scenarios::Presets and builder functions already covered by crates/scenarios/src/lib.rs tests.
+Suggested taskTrim redundant scenario validation tests
+4. Low-value Tests in Integration Test Crate
 
-    Validate MPEG‑TS contents
+crates/integration_tests/src/lib.rs only checks object construction and default values, offering little systemic validation.
+Suggested taskReplace trivial tests with meaningful integration checks
+Areas Requiring More Thorough Testing
+5. Observability Crate Lacks Tests
 
-        Inspect sender_debug.ts with gst-discoverer-1.0 or ffprobe to confirm both video and audio PIDs are present.
+The crates/observability module exposes metrics collection and trace recording but has no tests.
+Suggested taskIntroduce unit tests for MetricsCollector and TraceRecorder
+6. Bench CLI Without Validation
 
-        If the video track is missing, verify that mpegtsmux supports H.265 (requires a recent GStreamer “bad” plugin set).
+crates/bench-cli provides a command-line interface yet has no integration or unit tests.
+Suggested taskAdd CLI integration tests using assert_cmd
+7. Minimal Coverage for Enhanced Orchestrator
 
-    Double‑check RTP payload mapping
+netlink-sim/src/enhanced.rs only tests basic constructor paths under the enhanced feature.
+Suggested taskExpand EnhancedNetworkOrchestrator testing
+8. Missing Error-Path Tests in Netns Testbench
 
-        Explicitly set payload-type=33 on both ristsink and ristsrc to avoid PT mismatches.
+While crates/netns-testbench/src/runtime.rs covers scheduling algorithms, it lacks tests for invalid configurations and concurrent runtime behavior.
+Suggested taskCover error handling and concurrency in runtime scheduler
+9. Under-tested GStreamer Integration
 
-    Regression test
-
-        After applying the fixes, rerun the 60‑second test and confirm frames_received increments and tsdemux announces a video pad.
-
-Implementing these changes should allow the receiver to decode the video stream, letting the test pass and completing the project.
+No tests cover the GStreamer-specific elements under ristsmart/crates/rist-elements pipelines.
+Suggested taskCreate GStreamer element tests
+These actions will remove redundant coverage and focus effort on untested but critical components, streamlining the test suite while increasing confidence in the codebase.

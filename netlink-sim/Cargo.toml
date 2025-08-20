@@ -16,6 +16,7 @@ observability = { path = "../crates/observability", optional = true }
 
 [dev-dependencies]
 tracing-subscriber = "0.3"
+tempfile = "3.8"
 
 [features]
 default = []

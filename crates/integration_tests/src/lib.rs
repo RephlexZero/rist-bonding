@@ -400,17 +400,230 @@ impl ValidationReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono;
+    use std::time::Duration;
+    use tokio::time::timeout;
 
     #[tokio::test]
-    async fn test_integration_test_creation() {
-        let test = RistIntegrationTest::new("test123".to_string(), 5006).await;
-        assert!(test.is_ok());
+    async fn test_full_race_car_integration() {
+        // Test the complete race car integration scenario
+        let test_id = format!("integration_test_{}", chrono::Utc::now().timestamp());
+        let mut test = RistIntegrationTest::new(test_id.clone(), 5008)
+            .await
+            .expect("Failed to create integration test");
+
+        // Test race car bonding setup
+        let links = test
+            .setup_race_car_bonding()
+            .await
+            .expect("Failed to setup race car bonding");
+
+        assert!(!links.is_empty(), "Should have created bonding links");
+        assert!(
+            links.len() >= 2,
+            "Should have at least 2 bonding links for redundancy"
+        );
+
+        // Test that links have realistic race car parameters
+        for link in &links {
+            assert!(
+                link.scenario.forward_params.rate_bps >= 100_000,
+                "Race car links should have at least 100 Kbps"
+            );
+            assert!(
+                link.scenario.forward_params.rate_bps <= 10_000_000,
+                "Race car links should not exceed 10 Mbps"
+            );
+        }
     }
 
     #[tokio::test]
-    async fn test_phase_metrics_default() {
-        let metrics = PhaseMetrics::default();
-        assert_eq!(metrics.avg_bitrate, 0.0);
-        assert_eq!(metrics.packet_loss, 0.0);
+    async fn test_phase_transition_validation() {
+        let test_id = format!("phase_test_{}", chrono::Utc::now().timestamp());
+        let mut test = RistIntegrationTest::new(test_id, 5009)
+            .await
+            .expect("Failed to create integration test");
+
+        // Test network degradation schedule application
+        test.apply_degradation_schedule()
+            .await
+            .expect("Failed to apply degradation schedule");
+
+        // Test handover event triggering
+        test.trigger_handover_event()
+            .await
+            .expect("Failed to trigger handover event");
+
+        // Test recovery schedule application
+        test.apply_recovery_schedule()
+            .await
+            .expect("Failed to apply recovery schedule");
+    }
+
+    #[tokio::test]
+    async fn test_metrics_collection_and_validation() {
+        let test_id = format!("metrics_test_{}", chrono::Utc::now().timestamp());
+        let test = RistIntegrationTest::new(test_id, 5010)
+            .await
+            .expect("Failed to create integration test");
+
+        // Test metrics collection
+        let metrics = test
+            .collect_phase_metrics()
+            .await
+            .expect("Failed to collect phase metrics");
+
+        // Validate metrics structure and reasonable values
+        assert!(
+            metrics.avg_bitrate >= 0.0,
+            "Average bitrate should be non-negative"
+        );
+        assert!(
+            metrics.packet_loss >= 0.0 && metrics.packet_loss <= 100.0,
+            "Packet loss should be a valid percentage"
+        );
+        assert!(metrics.avg_rtt >= 0.0, "Average RTT should be non-negative");
+        assert!(
+            metrics.primary_link_util >= 0.0 && metrics.primary_link_util <= 100.0,
+            "Primary link utilization should be a valid percentage"
+        );
+        assert!(
+            metrics.backup_link_util >= 0.0 && metrics.backup_link_util <= 100.0,
+            "Backup link utilization should be a valid percentage"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validation_report_comprehensive() {
+        let mut results = TestResults::new("test_validation".to_string());
+
+        // Add test phases with different characteristics
+        results.add_phase(
+            "strong",
+            PhaseMetrics {
+                avg_bitrate: 2000.0,
+                packet_loss: 0.1,
+                avg_rtt: 20.0,
+                primary_link_util: 80.0,
+                backup_link_util: 20.0,
+            },
+        );
+
+        results.add_phase(
+            "degraded",
+            PhaseMetrics {
+                avg_bitrate: 800.0, // Should be less than 1000 for test
+                packet_loss: 2.0,
+                avg_rtt: 150.0,
+                primary_link_util: 60.0,
+                backup_link_util: 40.0,
+            },
+        );
+
+        results.add_phase(
+            "handover",
+            PhaseMetrics {
+                avg_bitrate: 1200.0,
+                packet_loss: 3.0, // Should be less than 5% for bonding effectiveness
+                avg_rtt: 100.0,
+                primary_link_util: 50.0,
+                backup_link_util: 50.0,
+            },
+        );
+
+        results.add_phase(
+            "recovery",
+            PhaseMetrics {
+                avg_bitrate: 1800.0, // Should be greater than 1500 for test
+                packet_loss: 0.5,
+                avg_rtt: 25.0,
+                primary_link_util: 75.0,
+                backup_link_util: 25.0,
+            },
+        );
+
+        let test_id = format!("validation_test_{}", chrono::Utc::now().timestamp());
+        let test = RistIntegrationTest::new(test_id, 5011)
+            .await
+            .expect("Failed to create integration test");
+
+        let report = test
+            .validate_bonding_behavior(&results)
+            .await
+            .expect("Failed to validate bonding behavior");
+
+        // Test that validation correctly identifies good bonding behavior
+        assert!(
+            report.adaptive_bitrate_working,
+            "Should detect adaptive bitrate based on phase characteristics"
+        );
+        assert!(
+            report.bonding_effective,
+            "Should detect effective bonding during handover phase"
+        );
+        assert!(
+            report.all_passed(),
+            "All validation checks should pass with good metrics"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_traffic_simulation_phases() {
+        let test_id = format!("traffic_test_{}", chrono::Utc::now().timestamp());
+        let test = RistIntegrationTest::new(test_id, 5012)
+            .await
+            .expect("Failed to create integration test");
+
+        // Test different traffic simulation phases with short durations
+        let phases = ["strong", "degraded", "handover", "recovery"];
+
+        for phase in &phases {
+            // Use timeout to ensure test doesn't hang
+            let result = timeout(
+                Duration::from_secs(10),
+                test.simulate_traffic_phase(phase, Duration::from_millis(500)),
+            )
+            .await;
+
+            assert!(
+                result.is_ok(),
+                "Traffic simulation should complete within timeout"
+            );
+            assert!(
+                result.unwrap().is_ok(),
+                "Traffic simulation for phase {} should succeed",
+                phase
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_error_handling_and_cleanup() {
+        // Test with invalid port to trigger error handling
+        let result = RistIntegrationTest::new("error_test".to_string(), 0).await;
+        // This might succeed depending on implementation, but should handle gracefully
+
+        if let Ok(test) = result {
+            // Test that cleanup works properly (Drop implementation)
+            drop(test);
+        }
+
+        // Test validation with empty results
+        let empty_results = TestResults::new("empty_test".to_string());
+        let test_id = format!("error_test_{}", chrono::Utc::now().timestamp());
+        let test = RistIntegrationTest::new(test_id, 5013)
+            .await
+            .expect("Failed to create integration test");
+
+        let report = test
+            .validate_bonding_behavior(&empty_results)
+            .await
+            .expect("Should handle empty results gracefully");
+
+        // Empty results should fail validation
+        assert!(
+            !report.all_passed(),
+            "Empty results should not pass all validations"
+        );
     }
 }

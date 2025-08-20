@@ -32,6 +32,8 @@ scenarios = { path = "../scenarios" }
 [dev-dependencies]
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 tokio-test = "0.4"
+tempfile = "3.8"
+futures = "0.3"
 
 [features]
 default = []
