@@ -27,7 +27,7 @@ pub trait DispatcherTestingProvider {
     /// Get property from element (generic version)
     fn get_property<T>(element: &gst::Element, name: &str) -> Result<T, glib::Error>
     where
-        T: glib::value::FromValue + 'static;
+        T: for<'a> glib::value::FromValue<'a> + 'static;
     /// Run pipeline for specific duration
     fn run_pipeline_for_duration(
         pipeline: &gst::Pipeline,

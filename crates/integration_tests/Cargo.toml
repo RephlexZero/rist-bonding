@@ -11,6 +11,10 @@ serde_json = "1.0"
 tracing = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 
+# GStreamer dependencies
+gstreamer = "0.24.1"
+glib = "0.21.1"
+
 # Local crates
 netlink-sim = { path = "../../netlink-sim", features = ["enhanced"] }
 scenarios = { path = "../scenarios" }
