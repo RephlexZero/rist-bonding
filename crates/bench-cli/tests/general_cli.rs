@@ -18,7 +18,9 @@ fn test_cli_help_and_version() {
     cmd.arg("--help");
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("CLI tool for running RIST network testbench scenarios"))
+        .stdout(predicate::str::contains(
+            "CLI tool for running RIST network testbench scenarios",
+        ))
         .stdout(predicate::str::contains("Commands:"));
 
     let mut cmd = cli_command();
@@ -50,7 +52,8 @@ fn test_subcommand_help() {
     for (cmd, description) in subcommands {
         let mut command = cli_command();
         command.args(&[cmd, "--help"]);
-        command.assert()
+        command
+            .assert()
             .success()
             .stdout(predicate::str::contains(description));
     }

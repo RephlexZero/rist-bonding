@@ -1,7 +1,7 @@
 //! Time-varying network schedules for dynamic testing scenarios
 //!
 //! This module provides Schedule enum for describing how network conditions
-//! change over time, including constant conditions, stepped changes, 
+//! change over time, including constant conditions, stepped changes,
 //! Markov chains, and trace replay capabilities.
 
 use crate::direction::DirectionSpec;

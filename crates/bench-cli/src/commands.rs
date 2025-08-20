@@ -150,7 +150,10 @@ fn resolve_scenario(scenario: &str) -> Result<TestScenario> {
         _ => {
             // Try to load from file
             error!("Scenario file loading not yet implemented");
-            anyhow::bail!("Scenario '{}' not found. File loading not yet implemented.", scenario);
+            anyhow::bail!(
+                "Scenario '{}' not found. File loading not yet implemented.",
+                scenario
+            );
         }
     }
 }
@@ -211,10 +214,18 @@ mod tests {
         for preset_name in preset_names {
             let result = resolve_preset(Some(preset_name.to_string()));
             assert!(result.is_ok(), "Preset '{}' should be valid", preset_name);
-            
+
             let scenario = result.unwrap();
-            assert!(!scenario.name.is_empty(), "Preset '{}' should have a name", preset_name);
-            assert!(!scenario.links.is_empty(), "Preset '{}' should have links", preset_name);
+            assert!(
+                !scenario.name.is_empty(),
+                "Preset '{}' should have a name",
+                preset_name
+            );
+            assert!(
+                !scenario.links.is_empty(),
+                "Preset '{}' should have links",
+                preset_name
+            );
         }
     }
 
@@ -223,7 +234,7 @@ mod tests {
         // Test that all scenario names from list command resolve correctly
         let scenario_names = vec![
             "baseline_good",
-            "bonding_asymmetric", 
+            "bonding_asymmetric",
             "mobile_handover",
             "degrading_network",
             "nr_to_lte_handover",
@@ -235,11 +246,19 @@ mod tests {
 
         for scenario_name in scenario_names {
             let result = resolve_scenario(scenario_name);
-            assert!(result.is_ok(), "Scenario '{}' should be valid", scenario_name);
-            
+            assert!(
+                result.is_ok(),
+                "Scenario '{}' should be valid",
+                scenario_name
+            );
+
             let scenario = result.unwrap();
             assert_eq!(scenario.name, scenario_name);
-            assert!(!scenario.links.is_empty(), "Scenario '{}' should have links", scenario_name);
+            assert!(
+                !scenario.links.is_empty(),
+                "Scenario '{}' should have links",
+                scenario_name
+            );
         }
     }
 
@@ -270,7 +289,7 @@ mod tests {
         assert!(result.is_ok(), "cmd_list should execute without error");
     }
 
-    #[tokio::test] 
+    #[tokio::test]
     async fn test_cmd_stats_placeholder() {
         // Test that cmd_stats executes (even though it's a placeholder)
         let result = cmd_stats(1).await;

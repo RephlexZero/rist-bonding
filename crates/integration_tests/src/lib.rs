@@ -75,7 +75,10 @@ impl RistIntegrationTest {
 
         // Create bonding scenario using the scenarios crate
         let scenario = scenarios::TestScenario::bonding_asymmetric();
-        let _handle = self.orchestrator.start_scenario(scenario, self.rx_port).await?;
+        let _handle = self
+            .orchestrator
+            .start_scenario(scenario, self.rx_port)
+            .await?;
 
         // Start the scheduler
         self.orchestrator.start_scheduler().await?;
@@ -84,11 +87,7 @@ impl RistIntegrationTest {
 
         info!("✓ Bonding setup complete");
         for (i, handle) in links.iter().enumerate() {
-            debug!(
-                "  Link {}: {}",
-                i + 1,
-                handle.scenario.name
-            );
+            debug!("  Link {}: {}", i + 1, handle.scenario.name);
         }
 
         Ok(links)
@@ -263,29 +262,33 @@ impl RistIntegrationTest {
         Ok(())
     }
 
-    async fn apply_degradation_schedule(&mut self) -> Result<()> {
-        info!("Would apply degradation schedule (simplified for netns-testbench)");
+    pub async fn apply_degradation_schedule(&mut self) -> Result<()> {
+        // Simplified degradation schedule for netns-testbench
+        info!("Applying degradation schedule (placeholder)");
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
         Ok(())
     }
 
-    async fn trigger_handover_event(&mut self) -> Result<()> {
-        info!("Would trigger handover event (simplified for netns-testbench)");
+    pub async fn trigger_handover_event(&mut self) -> Result<()> {
+        // Simplified handover trigger for netns-testbench
+        info!("Triggering handover event (placeholder)");
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         Ok(())
     }
 
-    async fn apply_recovery_schedule(&mut self) -> Result<()> {
+    pub async fn apply_recovery_schedule(&mut self) -> Result<()> {
         info!("Would apply recovery schedule (simplified for netns-testbench)");
         Ok(())
     }
 
-    async fn collect_phase_metrics(&self) -> Result<PhaseMetrics> {
+    pub async fn collect_phase_metrics(&self) -> Result<PhaseMetrics> {
         // Simplified metrics collection for netns-testbench
         Ok(PhaseMetrics {
-            avg_bitrate: 1000.0, // Placeholder value
-            packet_loss: 0.01,   // Placeholder value
-            avg_rtt: 20.0,       // Placeholder value
-            primary_link_util: 75.0,  // Placeholder value
-            backup_link_util: 25.0,   // Placeholder value
+            avg_bitrate: 1000.0,     // Placeholder value
+            packet_loss: 0.01,       // Placeholder value
+            avg_rtt: 20.0,           // Placeholder value
+            primary_link_util: 75.0, // Placeholder value
+            backup_link_util: 25.0,  // Placeholder value
         })
     }
 }
@@ -327,7 +330,7 @@ pub struct TestResults {
 }
 
 impl TestResults {
-    fn new(test_id: String) -> Self {
+    pub fn new(test_id: String) -> Self {
         Self {
             test_id,
             phases: Vec::new(),
@@ -335,7 +338,7 @@ impl TestResults {
         }
     }
 
-    fn add_phase(&mut self, phase: &str, metrics: PhaseMetrics) {
+    pub fn add_phase(&mut self, phase: &str, metrics: PhaseMetrics) {
         self.phases.push((phase.to_string(), metrics));
     }
 }

@@ -9,7 +9,7 @@ use gstreamer as gst;
 
 pub trait DispatcherTestingProvider {
     /// Create a dispatcher element with optional weights
-    fn create_dispatcher(weights: Option<&[f32]>) -> gst::Element;
+    fn create_dispatcher(weights: Option<&[f64]>) -> gst::Element;
     /// Create a fake sink element for testing
     fn create_fake_sink() -> gst::Element;
     /// Create a counter sink element with properties for testing events
@@ -23,9 +23,9 @@ pub trait DispatcherTestingProvider {
         pipeline: &gst::Pipeline,
         state: gst::State,
         timeout_secs: u32,
-    ) -> Result<(), gst::StateChangeError>;
+    ) -> Result<(), Box<dyn std::error::Error>>;
     /// Get property from element (generic version)
-    fn get_property<T>(element: &gst::Element, name: &str) -> Result<T, glib::Error>
+    fn get_property<T>(element: &gst::Element, name: &str) -> Result<T, Box<dyn std::error::Error>>
     where
         T: for<'a> glib::value::FromValue<'a> + 'static;
     /// Run pipeline for specific duration

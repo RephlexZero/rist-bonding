@@ -1,6 +1,6 @@
 //! Builder pattern for creating custom test scenarios
 //!
-//! This module provides ScenarioBuilder for constructing TestScenario 
+//! This module provides ScenarioBuilder for constructing TestScenario
 //! instances with a fluent API.
 
 use crate::link::LinkSpec;

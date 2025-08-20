@@ -303,6 +303,26 @@ pub fn create_fake_sink() -> gst::Element {
         .expect("Failed to create fakesink")
 }
 
+/// Create a RIST sink for testing
+pub fn create_rist_sink(address: &str) -> gst::Element {
+    gst::ElementFactory::make("ristsink")
+        .property("address", address)
+        .property("port", 5000u32)
+        .property("buffer-time", 200u32)
+        .build()
+        .expect("Failed to create ristsink")
+}
+
+/// Create a RIST source for testing
+pub fn create_rist_source(address: &str) -> gst::Element {
+    gst::ElementFactory::make("ristsrc")
+        .property("address", address)
+        .property("port", 5000u32)
+        .property("buffer-time", 200u32)
+        .build()
+        .expect("Failed to create ristsrc")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
