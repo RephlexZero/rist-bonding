@@ -1364,6 +1364,7 @@ dependencies = [
  "gstreamer",
  "netns-testbench",
  "observability",
+ "rist-elements",
  "scenarios",
  "serde",
  "serde_json",

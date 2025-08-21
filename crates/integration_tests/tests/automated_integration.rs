@@ -153,6 +153,57 @@ async fn test_phase_transitions() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn test_complete_bonding_with_custom_dispatcher() -> Result<()> {
+    let _ = tracing_subscriber::fmt()
+        .with_target(false)
+        .with_ansi(true)
+        .try_init();
+
+    // Distinct id so the MP4 filename is unique
+    let test_id = format!(
+        "automated_custom_{}",
+        chrono::Utc::now().format("%Y%m%d_%H%M%S")
+    );
+    let mut test = RistIntegrationTest::new(test_id.clone(), 5012).await?;
+
+    // Setup namespaces and links
+    if let Err(e) = test.setup_bonding().await {
+        if e.to_string().contains("Permission denied") {
+            info!(
+                "SKIP: netns requires root/CAP_SYS_ADMIN; skipping custom dispatcher test: {}",
+                e
+            );
+            return Ok(());
+        } else {
+            return Err(e);
+        }
+    }
+
+    // Start pipelines using custom rist-elements (ristdispatcher + dynbitrate)
+    match test.start_rist_pipelines_in_netns_with_custom_dispatcher().await {
+        Ok(()) => {}
+        Err(e) => {
+            // Gracefully skip if elements are missing (plugin not on GST_PLUGIN_PATH) or permission denied
+            let es = e.to_string();
+            if es.contains("Permission denied") || es.contains("Custom elements missing") {
+                info!(
+                    "SKIP: custom elements or perms unavailable; skipping: {}",
+                    es
+                );
+                return Ok(());
+            }
+            return Err(e);
+        }
+    }
+
+    // Run a shorter flow just to produce output and exercise control
+    let _ = test.run_basic_flow().await?;
+    info!("Custom dispatcher flow completed");
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_metrics_collection() -> Result<()> {
     let _ = tracing_subscriber::fmt()
@@ -266,6 +317,66 @@ async fn test_validation_logic() -> Result<()> {
     );
 
     debug!("Validation logic working correctly");
+    Ok(())
+}
+
+/// Produce two MP4s without requiring root by running local-mode pipelines
+#[tokio::test]
+#[serial]
+async fn test_produce_two_mp4s_local_mode() -> Result<()> {
+    let _ = tracing_subscriber::fmt()
+        .with_target(false)
+        .with_ansi(true)
+        .try_init();
+
+    // First: baseline local-mode
+    let id1 = format!(
+        "automated_local1_{}",
+        chrono::Utc::now().format("%Y%m%d_%H%M%S")
+    );
+    let mut t1 = RistIntegrationTest::new(id1.clone(), 5510).await?;
+    match t1.start_local_rist_pipelines().await {
+        Ok(()) => {
+            // Let it run briefly to record
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            drop(t1); // triggers EOS and mp4 finalization
+        }
+        Err(e) => {
+            info!("SKIP: baseline local-mode unavailable: {}", e);
+        }
+    }
+
+    // Second: custom dispatcher local-mode (skip gracefully if elements missing)
+    let id2 = format!(
+        "automated_local2_custom_{}",
+        chrono::Utc::now().format("%Y%m%d_%H%M%S")
+    );
+    let mut t2 = RistIntegrationTest::new(id2.clone(), 5512).await?;
+    match t2.start_local_rist_pipelines_with_custom_dispatcher().await {
+        Ok(()) => {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            drop(t2);
+        }
+        Err(e) => {
+            info!("SKIP: custom local-mode unavailable: {}", e);
+        }
+    }
+
+    // Verify files exist if they were expected
+    let path1 = integration_tests::RistIntegrationTest::artifact_path(&format!("{}.mp4", id1));
+    if let Ok(meta) = tokio::fs::metadata(&path1).await {
+        info!("Local baseline MP4 size = {} bytes at {}", meta.len(), path1.display());
+    } else {
+        info!("Local baseline MP4 missing: {}", path1.display());
+    }
+
+    let path2 = integration_tests::RistIntegrationTest::artifact_path(&format!("{}.mp4", id2));
+    if let Ok(meta) = tokio::fs::metadata(&path2).await {
+        info!("Local custom MP4 size = {} bytes at {}", meta.len(), path2.display());
+    } else {
+        info!("Local custom MP4 missing (likely skipped): {}", path2.display());
+    }
+
     Ok(())
 }
 

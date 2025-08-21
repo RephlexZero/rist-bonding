@@ -33,6 +33,28 @@ pub struct RistIntegrationTest {
 }
 
 impl RistIntegrationTest {
+    /// Log the origin of an element factory (plugin name/version/filename) to confirm which plugin provides it
+    fn log_factory_origin(name: &str) {
+        match gst::ElementFactory::find(name) {
+            Some(factory) => {
+                let plugin = factory.plugin();
+                let plugin_name = plugin.as_ref().map(|p| p.name().to_string()).unwrap_or_else(|| "<unknown>".to_string());
+                let plugin_version = plugin.as_ref().map(|p| p.version().to_string()).unwrap_or_else(|| "<unknown>".to_string());
+                let plugin_filename = plugin
+                    .as_ref()
+                    .and_then(|p| p.filename())
+                    .map(|f| f.display().to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                info!(
+                    "factory_origin name={} plugin={} version={} file={}",
+                    name, plugin_name, plugin_version, plugin_filename
+                );
+            }
+            None => {
+                info!("factory_origin name={} plugin=<not found>", name);
+            }
+        }
+    }
     /// Resolve a consistent artifacts directory for all test outputs.
     /// Priority:
     /// 1) TEST_ARTIFACTS_DIR env var, if set
@@ -84,6 +106,12 @@ impl RistIntegrationTest {
     pub async fn new(test_id: String, rx_port: u16) -> Result<Self> {
         // Initialize GStreamer once per process
         let _ = gst::init();
+        // Try to register custom rist-elements (test plugin) so `ristdispatcher` and `dynbitrate` are available
+        #[allow(unused_must_use)]
+        {
+            // It's okay if this no-ops (feature gated in rist-elements)
+            let _ = gstristelements::register_for_tests();
+        }
         let orchestrator = netns_testbench::NetworkOrchestrator::new(42).await?;
         // Enable on-screen preview if requested
         let show_video = std::env::var("RIST_SHOW_VIDEO")
@@ -160,6 +188,14 @@ impl RistIntegrationTest {
         let mp4_location: PathBuf = Self::artifact_path(&format!("{}.mp4", self.test_id));
         // test_id is used below when constructing artifact paths; no clone needed here.
         let receiver: gst::Pipeline = ns_mgr.exec_in_namespace(&ns_b, || {
+            // Log which plugin provides RIST elements and potential dispatchers
+            Self::log_factory_origin("ristsrc");
+            Self::log_factory_origin("ristsink");
+            // Try a couple of likely dispatcher/round-robin names
+            Self::log_factory_origin("roundrobin");
+            Self::log_factory_origin("gstroundrobin");
+            Self::log_factory_origin("ristdispatcher");
+
             let pipeline = gst::Pipeline::new();
             let rsrc = gst::ElementFactory::make("ristsrc")
                 .property("address", "0.0.0.0")
@@ -248,6 +284,8 @@ impl RistIntegrationTest {
 
         // Build and start sender inside a_ns (H.265)
         let sender: gst::Pipeline = ns_mgr.exec_in_namespace(&ns_a, || {
+            // Log which plugin provides RIST sink in sender ns context too
+            Self::log_factory_origin("ristsink");
             let pipeline = gst::Pipeline::new();
             let vsrc = gst::ElementFactory::make("videotestsrc")
                 .property("is-live", true)
@@ -292,15 +330,345 @@ impl RistIntegrationTest {
         Ok(())
     }
 
+    /// Start RIST pipelines in netns but use custom rist-elements dispatcher (ristdispatcher)
+    /// and dynamic bitrate controller (dynbitrate) on the sender.
+    /// If the custom elements are unavailable, returns a Skip-shaped error for the caller to handle.
+    pub async fn start_rist_pipelines_in_netns_with_custom_dispatcher(&mut self) -> Result<()> {
+        use netns_testbench::addr::Configurer as AddrConfigurer;
+        use netns_testbench::netns::Manager as NsManager;
+
+        if self.rx_port % 2 != 0 {
+            return Err(anyhow::anyhow!(
+                "RIST requires an even RTP port; got {}",
+                self.rx_port
+            ));
+        }
+
+        let links = self.orchestrator.get_active_links();
+        if links.is_empty() {
+            return Err(anyhow::anyhow!(
+                "No active links. Call setup_bonding() first."
+            ));
+        }
+        let link = &links[0];
+        let link_spec = link
+            .scenario
+            .links
+            .get(0)
+            .ok_or_else(|| anyhow::anyhow!("Link scenario missing link spec"))?;
+        let ns_a = format!("{}_{}", link_spec.a_ns, link.link_id); // sender
+        let ns_b = format!("{}_{}", link_spec.b_ns, link.link_id); // receiver
+
+        let link_num: u8 = link
+            .link_id
+            .strip_prefix("link_")
+            .and_then(|s| s.parse::<u8>().ok())
+            .ok_or_else(|| anyhow::anyhow!("Invalid link_id format: {}", link.link_id))?;
+        let (_left, right) = AddrConfigurer::generate_p2p_subnet(link_num)
+            .map_err(|e| anyhow::anyhow!("Failed to compute link subnet: {}", e))?;
+        let receiver_ip = right.ip();
+        let receiver_ip_str = receiver_ip.to_string();
+
+        let mut ns_mgr = NsManager::new()?;
+        ns_mgr.attach_existing_namespace(&ns_a)?;
+        ns_mgr.attach_existing_namespace(&ns_b)?;
+
+        // Receiver same as default variant
+        let buffer_count = self.buffer_count.clone();
+        let rx_port = self.rx_port;
+        let show_video = self.show_video;
+        let mp4_location: PathBuf = Self::artifact_path(&format!("{}.mp4", self.test_id));
+        let receiver: gst::Pipeline = ns_mgr.exec_in_namespace(&ns_b, || {
+            Self::log_factory_origin("ristsrc");
+            let pipeline = gst::Pipeline::new();
+            let rsrc = gst::ElementFactory::make("ristsrc")
+                .property("address", "0.0.0.0")
+                .property("port", rx_port as u32)
+                .property("encoding-name", "H265")
+                .property("receiver-buffer", 5000u32)
+                .build()
+                .unwrap();
+            let depay = gst::ElementFactory::make("rtph265depay").build().unwrap();
+            let fsink = gst::ElementFactory::make("fakesink")
+                .property("sync", false)
+                .property("signal-handoffs", true)
+                .build()
+                .unwrap();
+            let count = buffer_count.clone();
+            fsink.connect("handoff", false, move |_| {
+                count.fetch_add(1, Ordering::Relaxed);
+                None
+            });
+            let tee = gst::ElementFactory::make("tee").build().unwrap();
+            let q_count = gst::ElementFactory::make("queue").build().unwrap();
+            pipeline.add_many([&rsrc, &depay, &tee, &q_count, &fsink]).unwrap();
+            gst::Element::link_many([&rsrc, &depay, &tee]).unwrap();
+            gst::Element::link_many([&q_count, &fsink]).unwrap();
+            let tee_count_pad = tee.request_pad_simple("src_%u").unwrap();
+            let q_count_sink = q_count.static_pad("sink").unwrap();
+            tee_count_pad.link(&q_count_sink).unwrap();
+            if show_video {
+                let q_view = gst::ElementFactory::make("queue").build().unwrap();
+                let dec = gst::ElementFactory::make("avdec_h265").build().unwrap();
+                let vconv = gst::ElementFactory::make("videoconvert").build().unwrap();
+                let vsink = gst::ElementFactory::make("autovideosink")
+                    .property("sync", false)
+                    .build()
+                    .unwrap();
+                pipeline.add_many([&q_view, &dec, &vconv, &vsink]).unwrap();
+                gst::Element::link_many([&q_view, &dec, &vconv, &vsink]).unwrap();
+                let tee_view_pad = tee.request_pad_simple("src_%u").unwrap();
+                let q_view_sink = q_view.static_pad("sink").unwrap();
+                tee_view_pad.link(&q_view_sink).unwrap();
+            }
+            let q_mp4 = gst::ElementFactory::make("queue").build().unwrap();
+            let h265parse = gst::ElementFactory::make("h265parse")
+                .property("config-interval", -1i32)
+                .build()
+                .unwrap();
+            let mp4mux = gst::ElementFactory::make("mp4mux").build().unwrap();
+            let location = mp4_location.clone();
+            info!("Recording MP4 to {}", location.to_string_lossy());
+            let filesink = gst::ElementFactory::make("filesink")
+                .property("location", location.to_string_lossy().to_string())
+                .build()
+                .unwrap();
+            pipeline.add_many([&q_mp4, &h265parse, &mp4mux, &filesink]).unwrap();
+            gst::Element::link_many([&q_mp4, &h265parse]).unwrap();
+            let h265_src = h265parse.static_pad("src").unwrap();
+            if let Some(video_pad) = mp4mux.request_pad_simple("video_%u") {
+                h265_src.link(&video_pad).unwrap();
+            }
+            gst::Element::link_many([&mp4mux, &filesink]).unwrap();
+            let tee_mp4_pad = tee.request_pad_simple("src_%u").unwrap();
+            let q_mp4_sink = q_mp4.static_pad("sink").unwrap();
+            tee_mp4_pad.link(&q_mp4_sink).unwrap();
+            pipeline
+        })?;
+        receiver
+            .set_state(gst::State::Playing)
+            .map_err(|_| anyhow::anyhow!("Receiver pipeline failed to start (Playing)"))?;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // Sender with custom dispatcher and dynbitrate
+        let rx_port = self.rx_port;
+        let sender: gst::Pipeline = ns_mgr.exec_in_namespace(&ns_a, || {
+            // Ensure custom elements are registered
+            let have_dispatcher = gst::ElementFactory::find("ristdispatcher").is_some();
+            let have_dynbitrate = gst::ElementFactory::find("dynbitrate").is_some();
+            if !have_dispatcher || !have_dynbitrate {
+                panic!(
+                    "Custom elements missing: ristdispatcher={} dynbitrate={} (set GST_PLUGIN_PATH to build dir)",
+                    have_dispatcher,
+                    have_dynbitrate
+                );
+            }
+            Self::log_factory_origin("ristdispatcher");
+            Self::log_factory_origin("dynbitrate");
+            let pipeline = gst::Pipeline::new();
+            let vsrc = gst::ElementFactory::make("videotestsrc")
+                .property("is-live", true)
+                .build()
+                .unwrap();
+            let vconv = gst::ElementFactory::make("videoconvert").build().unwrap();
+            let venc = gst::ElementFactory::make("x265enc")
+                .property_from_str("tune", "zerolatency")
+                .property_from_str("speed-preset", "ultrafast")
+                .property("bitrate", 4000u32)
+                .build()
+                .unwrap();
+            let vparse = gst::ElementFactory::make("h265parse")
+                .property("config-interval", 1i32)
+                .build()
+                .unwrap();
+            let pay = gst::ElementFactory::make("rtph265pay").build().unwrap();
+            let dynb = gst::ElementFactory::make("dynbitrate").build().unwrap();
+            let ristsink = gst::ElementFactory::make("ristsink")
+                .property("address", receiver_ip_str.as_str())
+                .property("port", rx_port as u32)
+                .property("sender-buffer", 5000u32)
+                .property("stats-update-interval", 1000u32)
+                .build()
+                .unwrap();
+            let dispatcher = gst::ElementFactory::make("ristdispatcher").build().unwrap();
+            // Attach dispatcher to rist sink
+            ristsink.set_property("dispatcher", &dispatcher);
+
+            pipeline
+                .add_many([&vsrc, &vconv, &venc, &vparse, &pay, &dynb, &ristsink])
+                .unwrap();
+            gst::Element::link_many([&vsrc, &vconv, &venc, &vparse, &pay, &dynb, &ristsink])
+                .unwrap();
+
+            // Wire up dynbitrate control
+            dynb.set_property("encoder", &venc);
+            dynb.set_property("rist", &ristsink);
+            dynb.set_property("dispatcher", &dispatcher);
+            dynb.set_property("min-kbps", 500u32);
+            dynb.set_property("max-kbps", 20000u32);
+            dynb.set_property("step-kbps", 250u32);
+            dynb.set_property("target-loss-pct", 1.0f64);
+            dynb.set_property("downscale-keyunit", &true);
+            pipeline
+        })?;
+        sender
+            .set_state(gst::State::Playing)
+            .map_err(|_| anyhow::anyhow!("Sender pipeline failed to start (Playing)"))?;
+
+        self.receiver = Some(receiver);
+        self.sender = Some(sender);
+        self.mp4_path = Some(mp4_location);
+        info!(
+            "Started RIST H.265 pipelines (custom dispatcher) in netns: sender={} -> receiver={} ({})",
+            ns_a, ns_b, receiver_ip_str
+        );
+        Ok(())
+    }
+
     /// Start local RIST H.265 sender/receiver pipelines (receiver first)
     pub async fn start_local_rist_pipelines(&mut self) -> Result<()> {
-        info!("🚀 Starting local RIST H.265 pipelines (receiver first)");
+    info!("🚀 Starting local RIST H.265 pipelines (receiver first)");
 
-        let mp4_location: PathBuf = Self::artifact_path(&format!("{}.mp4", self.test_id));
+    // Log which plugin provides RIST elements and potential dispatchers
+    Self::log_factory_origin("ristsrc");
+    Self::log_factory_origin("ristsink");
+    Self::log_factory_origin("roundrobin");
+    Self::log_factory_origin("gstroundrobin");
+    Self::log_factory_origin("ristdispatcher");
+
+    let mp4_location: PathBuf = Self::artifact_path(&format!("{}.mp4", self.test_id));
+
+    // Choose a free even port for local mode (base + RTCP)
+    let chosen_port = Self::find_free_even_port(self.rx_port);
+    self.rx_port = chosen_port;
 
         // Receiver: ristsrc -> rtph265depay -> tee -> (counting, optional preview, MP4)
         let receiver = gst::Pipeline::new();
         let rsrc = gst::ElementFactory::make("ristsrc")
+            .property("address", "0.0.0.0")
+            .property("port", self.rx_port as u32)
+            .property("encoding-name", "H265")
+            .property("receiver-buffer", 5000u32)
+            .build()?;
+        let depay = gst::ElementFactory::make("rtph265depay").build()?;
+        let fsink = gst::ElementFactory::make("fakesink")
+            .property("sync", false)
+            .property("signal-handoffs", true)
+            .build()?;
+        let count = self.buffer_count.clone();
+        fsink.connect("handoff", false, move |_| {
+            count.fetch_add(1, Ordering::Relaxed);
+            None
+        });
+
+        let tee = gst::ElementFactory::make("tee").build()?;
+        let q_count = gst::ElementFactory::make("queue").build()?;
+        receiver.add_many([&rsrc, &depay, &tee, &q_count, &fsink])?;
+        gstreamer::Element::link_many([&rsrc, &depay, &tee])?;
+        gstreamer::Element::link_many([&q_count, &fsink])?;
+        let tee_count_pad = tee.request_pad_simple("src_%u").unwrap();
+        let q_count_sink = q_count.static_pad("sink").unwrap();
+        tee_count_pad.link(&q_count_sink).unwrap();
+
+        if self.show_video {
+            let q_view = gstreamer::ElementFactory::make("queue").build()?;
+            let dec = gstreamer::ElementFactory::make("avdec_h265").build()?;
+            let vconv = gstreamer::ElementFactory::make("videoconvert").build()?;
+            let vsink = gstreamer::ElementFactory::make("autovideosink")
+                .property("sync", false)
+                .build()?;
+            receiver.add_many([&q_view, &dec, &vconv, &vsink])?;
+            gstreamer::Element::link_many([&q_view, &dec, &vconv, &vsink])?;
+            let tee_view_pad = tee.request_pad_simple("src_%u").unwrap();
+            let q_view_sink = q_view.static_pad("sink").unwrap();
+            tee_view_pad.link(&q_view_sink).unwrap();
+        }
+
+        // Always-on MP4 branch
+        let q_mp4 = gstreamer::ElementFactory::make("queue").build()?;
+        let h265parse = gstreamer::ElementFactory::make("h265parse")
+            .property("config-interval", -1i32)
+            .build()?;
+        let mp4mux = gstreamer::ElementFactory::make("mp4mux").build()?;
+        info!("Recording MP4 to {}", mp4_location.to_string_lossy());
+        let filesink = gstreamer::ElementFactory::make("filesink")
+            .property("location", mp4_location.to_string_lossy().to_string())
+            .build()?;
+        receiver.add_many([&q_mp4, &h265parse, &mp4mux, &filesink])?;
+        gstreamer::Element::link_many([&q_mp4, &h265parse]).unwrap();
+        let h265_src = h265parse.static_pad("src").unwrap();
+        if let Some(video_pad) = mp4mux.request_pad_simple("video_%u") {
+            h265_src.link(&video_pad).unwrap();
+        } else {
+            eprintln!("mp4mux: failed to request video pad");
+        }
+        gstreamer::Element::link_many([&mp4mux, &filesink]).unwrap();
+        let tee_mp4_pad = tee.request_pad_simple("src_%u").unwrap();
+        let q_mp4_sink = q_mp4.static_pad("sink").unwrap();
+        tee_mp4_pad.link(&q_mp4_sink).unwrap();
+
+    // Start receiver first and wait for Playing
+    self.wait_for_state(&receiver, gst::State::Playing, 3)?;
+
+        // Sender: videotestsrc -> x265enc -> h265parse -> rtph265pay -> ristsink
+        let sender = gst::Pipeline::new();
+        let vsrc = gst::ElementFactory::make("videotestsrc")
+            .property("is-live", true)
+            .build()?;
+        let vconv = gst::ElementFactory::make("videoconvert").build()?;
+        let venc = gst::ElementFactory::make("x265enc")
+            .property_from_str("tune", "zerolatency")
+            .property_from_str("speed-preset", "ultrafast")
+            .build()?;
+        let vparse = gst::ElementFactory::make("h265parse")
+            .property("config-interval", 1i32)
+            .build()?;
+        let pay = gst::ElementFactory::make("rtph265pay").build()?;
+        let rsink = gst::ElementFactory::make("ristsink")
+            .property("address", "127.0.0.1")
+            .property("port", self.rx_port as u32)
+            .build()?;
+        sender.add_many([&vsrc, &vconv, &venc, &vparse, &pay, &rsink])?;
+        gst::Element::link_many([&vsrc, &vconv, &venc, &vparse, &pay, &rsink])?;
+
+    // Wait briefly for sender too
+    sleep(Duration::from_millis(200)).await;
+        self.wait_for_state(&sender, gst::State::Playing, 3)?;
+
+        self.receiver = Some(receiver);
+        self.sender = Some(sender);
+        info!("Local RIST H.265 pipelines started");
+        self.mp4_path = Some(mp4_location);
+        Ok(())
+    }
+
+    /// Start local RIST H.265 pipelines but use custom rist-elements dispatcher (ristdispatcher)
+    /// and dynamic bitrate controller (dynbitrate) on the sender.
+    pub async fn start_local_rist_pipelines_with_custom_dispatcher(&mut self) -> Result<()> {
+        // Log available factories
+        Self::log_factory_origin("ristsrc");
+        Self::log_factory_origin("ristsink");
+        Self::log_factory_origin("ristdispatcher");
+        Self::log_factory_origin("dynbitrate");
+
+        // Ensure required elements exist; if not, return a clear error
+        if gst::ElementFactory::find("ristdispatcher").is_none()
+            || gst::ElementFactory::find("dynbitrate").is_none()
+        {
+            return Err(anyhow::anyhow!(
+                "Custom elements missing: ristdispatcher or dynbitrate"
+            ));
+        }
+
+    let mp4_location: PathBuf = Self::artifact_path(&format!("{}.mp4", self.test_id));
+
+    // Choose a free even port for local mode
+    let chosen_port = Self::find_free_even_port(self.rx_port);
+    self.rx_port = chosen_port;
+
+        // Receiver: ristsrc -> rtph265depay -> tee -> (counting, optional preview, MP4)
+        let receiver = gst::Pipeline::new();
+    let rsrc = gst::ElementFactory::make("ristsrc")
             .property("address", "0.0.0.0")
             .property("port", self.rx_port as u32)
             .property("encoding-name", "H265")
@@ -368,7 +736,7 @@ impl RistIntegrationTest {
             .set_state(gstreamer::State::Playing)
             .map_err(|_| anyhow::anyhow!("Receiver pipeline failed to start (Playing)"))?;
 
-        // Sender: videotestsrc -> x265enc -> h265parse -> rtph265pay -> ristsink
+        // Sender with custom dispatcher + dynbitrate
         let sender = gst::Pipeline::new();
         let vsrc = gst::ElementFactory::make("videotestsrc")
             .property("is-live", true)
@@ -377,17 +745,34 @@ impl RistIntegrationTest {
         let venc = gst::ElementFactory::make("x265enc")
             .property_from_str("tune", "zerolatency")
             .property_from_str("speed-preset", "ultrafast")
+            .property("bitrate", 4000u32)
             .build()?;
         let vparse = gst::ElementFactory::make("h265parse")
             .property("config-interval", 1i32)
             .build()?;
         let pay = gst::ElementFactory::make("rtph265pay").build()?;
-        let rsink = gst::ElementFactory::make("ristsink")
+        let dynb = gst::ElementFactory::make("dynbitrate").build()?;
+        let ristsink = gst::ElementFactory::make("ristsink")
             .property("address", "127.0.0.1")
             .property("port", self.rx_port as u32)
+            .property("sender-buffer", 5000u32)
+            .property("stats-update-interval", 1000u32)
             .build()?;
-        sender.add_many([&vsrc, &vconv, &venc, &vparse, &pay, &rsink])?;
-        gst::Element::link_many([&vsrc, &vconv, &venc, &vparse, &pay, &rsink])?;
+        let dispatcher = gst::ElementFactory::make("ristdispatcher").build()?;
+        ristsink.set_property("dispatcher", &dispatcher);
+
+        sender.add_many([&vsrc, &vconv, &venc, &vparse, &pay, &dynb, &ristsink])?;
+        gst::Element::link_many([&vsrc, &vconv, &venc, &vparse, &pay, &dynb, &ristsink])?;
+
+        // Wire up dynbitrate
+        dynb.set_property("encoder", &venc);
+        dynb.set_property("rist", &ristsink);
+        dynb.set_property("dispatcher", &dispatcher);
+        dynb.set_property("min-kbps", 500u32);
+        dynb.set_property("max-kbps", 20000u32);
+        dynb.set_property("step-kbps", 250u32);
+        dynb.set_property("target-loss-pct", 1.0f64);
+        dynb.set_property("downscale-keyunit", &true);
 
         // Wait for states
         self.wait_for_state(&receiver, gst::State::Playing, 3)?;
@@ -396,11 +781,34 @@ impl RistIntegrationTest {
 
         self.receiver = Some(receiver);
         self.sender = Some(sender);
-        info!("Local RIST H.265 pipelines started");
         self.mp4_path = Some(mp4_location);
+        info!("Local RIST H.265 pipelines with custom dispatcher started");
         Ok(())
     }
 
+    /// Find a free, even UDP port starting from preferred, trying up to 50 candidates.
+    fn find_free_even_port(preferred: u16) -> u16 {
+        use std::net::UdpSocket;
+        let mut port = if preferred % 2 == 0 { preferred } else { preferred + 1 };
+        for _ in 0..50 {
+            let p1 = port;
+            let p2 = port.saturating_add(1);
+            let try1 = UdpSocket::bind(("127.0.0.1", p1));
+            let try2 = UdpSocket::bind(("127.0.0.1", p2));
+            match (try1, try2) {
+                (Ok(s1), Ok(s2)) => {
+                    drop(s1);
+                    drop(s2);
+                    return port;
+                }
+                _ => {
+                    port = port.saturating_add(2);
+                }
+            }
+        }
+        // Fallback: let OS decide an ephemeral even-ish port
+        5600
+    }
     /// Set up bonding scenario (generic)
     pub async fn setup_bonding(&mut self) -> Result<Vec<netns_testbench::LinkHandle>> {
         info!("Setting up bonding scenario...");

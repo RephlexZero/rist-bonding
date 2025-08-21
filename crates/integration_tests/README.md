@@ -148,6 +148,21 @@ cargo test -p integration_tests element_pad_semantics
 cargo test -p integration_tests -- --nocapture
 ```
 
+### Produce two MP4s without root (local mode)
+```bash
+cargo test -p integration_tests --test automated_integration -- --nocapture test_produce_two_mp4s_local_mode
+```
+This will create two files under `target/test-artifacts` (override with `TEST_ARTIFACTS_DIR`):
+- automated_local1_*.mp4 (baseline local mode)
+- automated_local2_custom_*.mp4 (custom dispatcher + dynbitrate; skipped if elements unavailable)
+
+### Run netns tests with sudo (best practice)
+Use the provided wrapper to build as your user and only run with sudo:
+```bash
+scripts/run_automated_integration_sudo.sh
+```
+This preserves `CARGO_TARGET_DIR` and `TEST_ARTIFACTS_DIR` so artifacts land under your workspace and avoids rebuilding as root. Set `GST_PLUGIN_PATH` if using locally built GStreamer plugins.
+
 ### With Different Backends
 ```bash
 # Test with netns-testbench backend

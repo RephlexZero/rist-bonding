@@ -19,6 +19,7 @@ glib = "0.21.1"
 netns-testbench = { path = "../netns-testbench" }
 scenarios = { path = "../scenarios" }
 observability = { path = "../observability" }
+gstristelements = { package = "rist-elements", path = "../rist-elements", features = ["test-plugin"] }
 
 [dev-dependencies]
 tracing-subscriber = "0.3"
