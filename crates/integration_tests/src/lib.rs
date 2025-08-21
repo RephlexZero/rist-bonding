@@ -289,12 +289,25 @@ impl RistIntegrationTest {
             let pipeline = gst::Pipeline::new();
             let vsrc = gst::ElementFactory::make("videotestsrc")
                 .property("is-live", true)
+                .property_from_str("pattern", "ball")
+                .build()
+                .unwrap();
+            // Force 1080p60 raw video for higher complexity
+            let caps = gst::Caps::builder("video/x-raw")
+                .field("format", &"I420")
+                .field("width", &1920i32)
+                .field("height", &1080i32)
+                .field("framerate", &gst::Fraction::new(60, 1))
+                .build();
+            let vcap = gst::ElementFactory::make("capsfilter")
+                .property("caps", &caps)
                 .build()
                 .unwrap();
             let vconv = gst::ElementFactory::make("videoconvert").build().unwrap();
             let venc = gst::ElementFactory::make("x265enc")
                 .property_from_str("tune", "zerolatency")
                 .property_from_str("speed-preset", "ultrafast")
+                .property("bitrate", 8000u32)
                 .build()
                 .unwrap();
             let vparse = gst::ElementFactory::make("h265parse")
@@ -308,9 +321,9 @@ impl RistIntegrationTest {
                 .build()
                 .unwrap();
             pipeline
-                .add_many([&vsrc, &vconv, &venc, &vparse, &pay, &rsink])
+                .add_many([&vsrc, &vcap, &vconv, &venc, &vparse, &pay, &rsink])
                 .unwrap();
-            gst::Element::link_many([&vsrc, &vconv, &venc, &vparse, &pay, &rsink]).unwrap();
+            gst::Element::link_many([&vsrc, &vcap, &vconv, &venc, &vparse, &pay, &rsink]).unwrap();
             // Do not panic here; let caller set state and handle errors
             pipeline
         })?;
@@ -468,13 +481,24 @@ impl RistIntegrationTest {
             let pipeline = gst::Pipeline::new();
             let vsrc = gst::ElementFactory::make("videotestsrc")
                 .property("is-live", true)
+                .property_from_str("pattern", "ball")
+                .build()
+                .unwrap();
+            let caps = gst::Caps::builder("video/x-raw")
+                .field("format", &"I420")
+                .field("width", &1920i32)
+                .field("height", &1080i32)
+                .field("framerate", &gst::Fraction::new(60, 1))
+                .build();
+            let vcap = gst::ElementFactory::make("capsfilter")
+                .property("caps", &caps)
                 .build()
                 .unwrap();
             let vconv = gst::ElementFactory::make("videoconvert").build().unwrap();
             let venc = gst::ElementFactory::make("x265enc")
                 .property_from_str("tune", "zerolatency")
                 .property_from_str("speed-preset", "ultrafast")
-                .property("bitrate", 4000u32)
+                .property("bitrate", 12000u32)
                 .build()
                 .unwrap();
             let vparse = gst::ElementFactory::make("h265parse")
@@ -495,9 +519,9 @@ impl RistIntegrationTest {
             ristsink.set_property("dispatcher", &dispatcher);
 
             pipeline
-                .add_many([&vsrc, &vconv, &venc, &vparse, &pay, &dynb, &ristsink])
+                .add_many([&vsrc, &vcap, &vconv, &venc, &vparse, &pay, &dynb, &ristsink])
                 .unwrap();
-            gst::Element::link_many([&vsrc, &vconv, &venc, &vparse, &pay, &dynb, &ristsink])
+            gst::Element::link_many([&vsrc, &vcap, &vconv, &venc, &vparse, &pay, &dynb, &ristsink])
                 .unwrap();
 
             // Wire up dynbitrate control
@@ -614,11 +638,23 @@ impl RistIntegrationTest {
         let sender = gst::Pipeline::new();
         let vsrc = gst::ElementFactory::make("videotestsrc")
             .property("is-live", true)
+            .property_from_str("pattern", "ball")
+            .build()?;
+        // 1080p60 caps
+        let caps = gst::Caps::builder("video/x-raw")
+            .field("format", &"I420")
+            .field("width", &1920i32)
+            .field("height", &1080i32)
+            .field("framerate", &gst::Fraction::new(60, 1))
+            .build();
+        let vcap = gst::ElementFactory::make("capsfilter")
+            .property("caps", &caps)
             .build()?;
         let vconv = gst::ElementFactory::make("videoconvert").build()?;
         let venc = gst::ElementFactory::make("x265enc")
             .property_from_str("tune", "zerolatency")
             .property_from_str("speed-preset", "ultrafast")
+            .property("bitrate", 8000u32)
             .build()?;
         let vparse = gst::ElementFactory::make("h265parse")
             .property("config-interval", 1i32)
@@ -628,8 +664,8 @@ impl RistIntegrationTest {
             .property("address", "127.0.0.1")
             .property("port", self.rx_port as u32)
             .build()?;
-        sender.add_many([&vsrc, &vconv, &venc, &vparse, &pay, &rsink])?;
-        gst::Element::link_many([&vsrc, &vconv, &venc, &vparse, &pay, &rsink])?;
+        sender.add_many([&vsrc, &vcap, &vconv, &venc, &vparse, &pay, &rsink])?;
+        gst::Element::link_many([&vsrc, &vcap, &vconv, &venc, &vparse, &pay, &rsink])?;
 
     // Wait briefly for sender too
     sleep(Duration::from_millis(200)).await;
@@ -740,12 +776,23 @@ impl RistIntegrationTest {
         let sender = gst::Pipeline::new();
         let vsrc = gst::ElementFactory::make("videotestsrc")
             .property("is-live", true)
+            .property_from_str("pattern", "ball")
+            .build()?;
+        // 1080p60 caps
+        let caps = gst::Caps::builder("video/x-raw")
+            .field("format", &"I420")
+            .field("width", &1920i32)
+            .field("height", &1080i32)
+            .field("framerate", &gst::Fraction::new(60, 1))
+            .build();
+        let vcap = gst::ElementFactory::make("capsfilter")
+            .property("caps", &caps)
             .build()?;
         let vconv = gst::ElementFactory::make("videoconvert").build()?;
         let venc = gst::ElementFactory::make("x265enc")
             .property_from_str("tune", "zerolatency")
             .property_from_str("speed-preset", "ultrafast")
-            .property("bitrate", 4000u32)
+            .property("bitrate", 12000u32)
             .build()?;
         let vparse = gst::ElementFactory::make("h265parse")
             .property("config-interval", 1i32)
@@ -761,8 +808,8 @@ impl RistIntegrationTest {
         let dispatcher = gst::ElementFactory::make("ristdispatcher").build()?;
         ristsink.set_property("dispatcher", &dispatcher);
 
-        sender.add_many([&vsrc, &vconv, &venc, &vparse, &pay, &dynb, &ristsink])?;
-        gst::Element::link_many([&vsrc, &vconv, &venc, &vparse, &pay, &dynb, &ristsink])?;
+        sender.add_many([&vsrc, &vcap, &vconv, &venc, &vparse, &pay, &dynb, &ristsink])?;
+        gst::Element::link_many([&vsrc, &vcap, &vconv, &venc, &vparse, &pay, &dynb, &ristsink])?;
 
         // Wire up dynbitrate
         dynb.set_property("encoder", &venc);
