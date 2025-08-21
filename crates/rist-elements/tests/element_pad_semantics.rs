@@ -66,7 +66,7 @@ fn create_test_pipeline() -> (gst::Pipeline, gst::Element, gst::Element, gst::El
 async fn test_pad_creation_and_linking() -> Result<(), Box<dyn std::error::Error>> {
     testing::init_for_tests();
 
-    println!("🔗 Testing pad creation and linking");
+    println!("Testing pad creation and linking");
 
     let (pipeline, _src, dispatcher, _sink) = create_test_pipeline();
 
@@ -103,7 +103,7 @@ async fn test_pad_creation_and_linking() -> Result<(), Box<dyn std::error::Error
     // Clean up
     pipeline.set_state(gst::State::Null)?;
 
-    println!("✓ Pad creation and linking test passed");
+    println!("Pad creation and linking test passed");
     Ok(())
 }
 
@@ -143,7 +143,7 @@ async fn test_caps_negotiation() -> Result<(), Box<dyn std::error::Error>> {
 
     pipeline.set_state(gst::State::Null)?;
 
-    println!("✓ Caps negotiation test passed");
+    println!("Caps negotiation test passed");
     Ok(())
 }
 
@@ -207,7 +207,7 @@ async fn test_event_handling() -> Result<(), Box<dyn std::error::Error>> {
         "Should have recorded some events"
     );
 
-    println!("✓ Event handling test passed");
+    println!("Event handling test passed");
     Ok(())
 }
 
@@ -288,7 +288,7 @@ async fn test_dynamic_pad_lifecycle() -> Result<(), Box<dyn std::error::Error>> 
         "Should have recorded pad lifecycle events"
     );
 
-    println!("✓ Dynamic pad lifecycle test passed");
+    println!("Dynamic pad lifecycle test passed");
     Ok(())
 }
 
@@ -362,7 +362,7 @@ async fn test_buffer_flow_integrity() -> Result<(), Box<dyn std::error::Error>> 
     assert!(final_buffer_count > 0, "Should have processed some buffers");
     assert!(final_byte_count > 0, "Should have processed some data");
 
-    println!("✓ Buffer flow integrity test passed");
+    println!("Buffer flow integrity test passed");
     Ok(())
 }
 
@@ -439,7 +439,7 @@ async fn test_error_handling_recovery() -> Result<(), Box<dyn std::error::Error>
 
     // We expect the pipeline to handle errors gracefully
     // The exact counts depend on GStreamer behavior
-    println!("✓ Error handling and recovery test passed");
+    println!("Error handling and recovery test passed");
 
     Ok(())
 }
@@ -503,6 +503,6 @@ async fn test_multithread_pad_safety() -> Result<(), Box<dyn std::error::Error>>
         "All pad accesses should have completed"
     );
 
-    println!("✓ Multi-threaded pad safety test passed");
+    println!("Multi-threaded pad safety test passed");
     Ok(())
 }

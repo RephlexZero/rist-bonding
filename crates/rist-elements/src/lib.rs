@@ -52,19 +52,19 @@ pub fn register_for_tests() {
     } else {
         // Verify registration
         if gst::ElementFactory::find("ristdispatcher").is_some() {
-            println!("✓ ristdispatcher registered successfully");
+            println!("ristdispatcher registered successfully");
         }
         if gst::ElementFactory::find("dynbitrate").is_some() {
-            println!("✓ dynbitrate registered successfully");
+            println!("dynbitrate registered successfully");
         }
         if gst::ElementFactory::find("counter_sink").is_some() {
-            println!("✓ counter_sink registered successfully");
+            println!("counter_sink registered successfully");
         }
         if gst::ElementFactory::find("encoder_stub").is_some() {
-            println!("✓ encoder_stub registered successfully");
+            println!("encoder_stub registered successfully");
         }
         if gst::ElementFactory::find("riststats_mock").is_some() {
-            println!("✓ riststats_mock registered successfully");
+            println!("riststats_mock registered successfully");
         }
     }
 }

@@ -12,7 +12,7 @@ use tracing::info;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
-    info!("🔍 Starting RIST Observability & Metrics Demo");
+    info!("Starting RIST Observability & Metrics Demo");
 
     // Create observability orchestrator with full configuration
     let config = ObservabilityConfig {

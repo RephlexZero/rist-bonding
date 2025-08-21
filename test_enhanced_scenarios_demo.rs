@@ -31,7 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     
     // Demonstrate multi-link scenarios
-    println!("\n🔗 Multi-Link Scenarios:");
+    println!("\nMulti-Link Scenarios:");
     for scenario in Presets::multi_link_scenarios() {
         println!("  {:<20} - {}", scenario.name, scenario.description);
         if let Some(duration) = scenario.duration_seconds {
@@ -66,13 +66,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let poor = DirectionSpec::poor();
     
     let degradation = Schedule::degradation_cycle(good.clone(), poor.clone());
-    println!("  ✓ Degradation cycle: good -> poor -> recovery");
+    println!("  Degradation cycle: good -> poor -> recovery");
     
     let handover = Schedule::handover_simulation(DirectionSpec::nr_good());
-    println!("  ✓ Handover simulation: normal -> spike -> recovery");
+    println!("  Handover simulation: normal -> spike -> recovery");
     
     let bursty = Schedule::bursty_markov(good.clone(), poor.clone());
-    println!("  ✓ Bursty Markov chain: probabilistic good/poor transitions");
+    println!("  Bursty Markov chain: probabilistic good/poor transitions");
     
     // Demonstrate scenario builder
     println!("\n🏗️  Custom Scenario Builder:");
@@ -93,7 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .metadata("complexity", "medium")
         .build();
     
-    println!("  ✓ Built custom scenario: {}", custom_scenario.name);
+    println!("  Built custom scenario: {}", custom_scenario.name);
     println!("    Description: {}", custom_scenario.description);
     println!("    Links: {}", custom_scenario.links.len());
     println!("    Metadata: {:?}", custom_scenario.metadata);
@@ -104,11 +104,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let original = DirectionSpec::typical();
     let scaled = utils::scale_rate(original.clone(), 0.5);
-    println!("  ✓ Rate scaling: {}kbps -> {}kbps (0.5x)", 
+    println!("  Rate scaling: {}kbps -> {}kbps (0.5x)", 
              original.rate_kbps, scaled.rate_kbps);
     
     let lossy = utils::add_loss(original.clone(), 0.01);
-    println!("  ✓ Added loss: {:.3}% -> {:.3}%", 
+    println!("  Added loss: {:.3}% -> {:.3}%", 
              original.loss_pct * 100.0, lossy.loss_pct * 100.0);
     
     let stepped = utils::create_degradation(
@@ -117,7 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         5, 
         Duration::from_secs(60)
     );
-    println!("  ✓ Created stepped degradation over 60s with 5 steps");
+    println!("  Created stepped degradation over 60s with 5 steps");
     
     // Show 4G/5G specific features
     println!("\n📡 4G/5G Specific Features:");
@@ -125,20 +125,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let lte_normal = DirectionSpec::lte_downlink();
     let lte_handover = lte_normal.clone().with_handover_spike();
-    println!("  ✓ Handover spike: {}ms -> {}ms delay", 
+    println!("  Handover spike: {}ms -> {}ms delay", 
              lte_normal.base_delay_ms, lte_handover.base_delay_ms);
     
     let bufferbloated = DirectionSpec::typical().with_bufferbloat(0.5);
-    println!("  ✓ Bufferbloat simulation: delay multiplier applied");
+    println!("  Bufferbloat simulation: delay multiplier applied");
     
     println!("\n🎯 Architecture Benefits:");
     println!("------------------------");
-    println!("  ✓ Pure data models - no OS dependencies in scenarios crate");
-    println!("  ✓ Enhanced scheduling - constant, steps, Markov, replay");
-    println!("  ✓ Realistic 4G/5G presets with asymmetric up/downlink");
-    println!("  ✓ Builder patterns for complex scenario construction");
-    println!("  ✓ Utility functions for parameter manipulation");
-    println!("  ✓ Structured metadata for test categorization");
+    println!("  Pure data models - no OS dependencies in scenarios crate");
+    println!("  Enhanced scheduling - constant, steps, Markov, replay");
+    println!("  Realistic 4G/5G presets with asymmetric up/downlink");
+    println!("  Builder patterns for complex scenario construction");
+    println!("  Utility functions for parameter manipulation");
+    println!("  Structured metadata for test categorization");
     
     // Integration status
     println!("\n🔧 Integration Status:");

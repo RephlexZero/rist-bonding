@@ -1,7 +1,7 @@
 //! Complete end-to-end integration test runner
 //!
 //! This test runs the full system:
-//! - Race car cellular modeling
+//! - Network namespace cellular-like modeling
 //! - RIST dispatcher with bonding
 //! - Real-time observability
 //! - Comprehensive validation
@@ -16,25 +16,23 @@ async fn main() -> Result<()> {
     // Initialize logging
     fmt::init();
 
-    println!("🏁 RIST Bonding End-to-End Integration Test");
+    println!("RIST Bonding End-to-End Integration Test");
     println!("============================================\n");
 
     let test_start = Instant::now();
-    let test_id = format!("race_car_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S"));
+    let test_id = format!("bonding_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S"));
 
     // Create integration test
     let mut test = RistIntegrationTest::new(test_id.clone(), 5007).await?;
-    println!("✓ Integration test framework initialized\n");
+    println!("Integration test framework initialized\n");
 
-    // Start RIST dispatcher
-    test.start_rist_dispatcher().await?;
+    // Start RIST pipelines inside namespaces and bonding
+    let _links = test.setup_bonding().await?;
+    test.start_rist_pipelines_in_netns().await?;
 
-    // Set up race car bonding
-    let _links = test.setup_race_car_bonding().await?;
-
-    // Run complete race car test pattern
-    println!("🚗 Executing race car test scenario...");
-    let results = test.run_race_car_test_pattern().await?;
+    // Run basic flow
+    println!("▶️ Executing basic test flow...");
+    let results = test.run_basic_flow().await?;
 
     // Validate bonding behavior
     let validation = test.validate_bonding_behavior(&results).await?;
@@ -88,11 +86,8 @@ async fn generate_test_report(
             "load_balancing_working": validation.load_balancing_working,
             "all_passed": validation.all_passed()
         },
-        "race_car_conditions": {
-            "cellular_modems": "2x4G + 2x5G USB modems",
-            "bitrate_range": "300-2000 kbps per link",
-            "mobility": "High speed race car",
-            "environment": "Race track with tunnels and elevation changes"
+        "environment": {
+            "note": "Simulated in network namespaces using netns-testbench"
         }
     });
 
@@ -101,7 +96,7 @@ async fn generate_test_report(
     tokio::fs::write(&report_path, serde_json::to_string_pretty(&report)?).await?;
 
     // Print summary
-    println!("✓ Integration test report generated");
+    println!("Integration test report generated");
     println!("\n📈 Test Summary:");
     println!("  Test ID: {}", test_id);
     println!("  Duration: {:.1}s", results.total_duration.as_secs_f64());
@@ -114,7 +109,7 @@ async fn generate_test_report(
         );
     }
 
-    println!("\n🔍 Validation Results:");
+    println!("\nValidation Results:");
     println!(
         "  Adaptive bitrate: {}",
         if validation.adaptive_bitrate_working {

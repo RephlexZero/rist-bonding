@@ -84,7 +84,12 @@ impl LinkRuntime {
         let content = fs::read_to_string(path)
             .map_err(|e| RuntimeError::InvalidSchedule(format!("Cannot read trace file: {}", e)))?;
 
-        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+        // Detect JSON either by extension or by content prefix
+        let is_json_ext = path.extension().and_then(|s| s.to_str()) == Some("json");
+        let trimmed = content.trim_start();
+        let is_json_like = trimmed.starts_with('{') || trimmed.starts_with('[');
+
+        if is_json_ext || is_json_like {
             serde_json::from_str(&content).map_err(|e| {
                 RuntimeError::InvalidSchedule(format!("Invalid JSON trace file: {}", e))
             })
@@ -240,61 +245,81 @@ impl Scheduler {
                 mean_dwell_time,
                 initial_state,
             } => {
-                // Initialize Markov state if needed
+                // If no states, terminate gracefully
+                if states.is_empty() {
+                    return Err(RuntimeError::InvalidSchedule(
+                        "Markov schedule has no states".to_string(),
+                    ));
+                }
+
+                // Clamp invalid initial_state into range
+                let max_idx = states.len() - 1;
+                let init_state = if *initial_state > max_idx {
+                    max_idx
+                } else {
+                    *initial_state
+                };
+
+                // Initialize Markov state if needed, schedule first transition in the future
                 if runtime.markov_state.is_none() {
                     runtime.markov_state = Some(MarkovState {
-                        current_state: *initial_state,
-                        next_transition_time: Instant::now(),
+                        current_state: init_state,
+                        next_transition_time: Instant::now() + *mean_dwell_time,
                         rng: StdRng::from_entropy(),
                     });
                 }
 
                 let now = Instant::now();
-                let should_transition;
-                let delay;
-                let current_state;
-
-                {
+                let (should_transition, delay, current_state) = {
                     let markov_state = runtime.markov_state.as_ref().unwrap();
-                    current_state = markov_state.current_state;
-
+                    let cs = markov_state.current_state;
                     if now >= markov_state.next_transition_time {
-                        should_transition = true;
-                        delay = Duration::ZERO;
+                        (true, Duration::ZERO, cs)
                     } else {
-                        should_transition = false;
-                        delay = markov_state.next_transition_time.duration_since(now);
+                        (
+                            false,
+                            markov_state.next_transition_time.duration_since(now),
+                            cs,
+                        )
                     }
-                }
+                };
 
                 if should_transition {
                     let markov_state = runtime.markov_state.as_mut().unwrap();
 
-                    // Determine next state using transition matrix
-                    let transition_probs = &transition_matrix[current_state];
-                    let rand_val: f32 = markov_state.rng.gen();
-
-                    let mut cumulative_prob = 0.0;
-                    for (next_state, &prob) in transition_probs.iter().enumerate() {
-                        cumulative_prob += prob;
-                        if rand_val < cumulative_prob {
-                            markov_state.current_state = next_state;
-                            break;
+                    // Determine next state using transition matrix (guard indices)
+                    if let Some(row) = transition_matrix.get(markov_state.current_state) {
+                        let rand_val: f32 = markov_state.rng.gen();
+                        let mut cumulative_prob = 0.0;
+                        let mut chosen = markov_state.current_state; // default stay
+                        for (next_state, &prob) in row.iter().enumerate() {
+                            cumulative_prob += prob;
+                            if rand_val < cumulative_prob {
+                                chosen = next_state;
+                                break;
+                            }
                         }
+                        markov_state.current_state = chosen;
                     }
 
                     // Set next transition time using exponential distribution
                     let exponential_delay = {
                         let u: f32 = markov_state.rng.gen();
-                        let lambda = 1.0 / mean_dwell_time.as_secs_f32();
-                        Duration::from_secs_f32(-u.ln() / lambda)
+                        let lambda = 1.0 / mean_dwell_time.as_secs_f32().max(0.0001);
+                        Duration::from_secs_f32((-u.ln() / lambda).max(0.0))
                     };
                     markov_state.next_transition_time = now + exponential_delay;
 
-                    let spec = states[markov_state.current_state].clone();
+                    let spec = states
+                        .get(markov_state.current_state)
+                        .cloned()
+                        .unwrap_or_else(DirectionSpec::typical);
                     Ok(Some((spec, Duration::ZERO)))
                 } else {
-                    let spec = states[current_state].clone();
+                    let spec = states
+                        .get(current_state)
+                        .cloned()
+                        .unwrap_or_else(DirectionSpec::typical);
                     Ok(Some((spec, delay)))
                 }
             }

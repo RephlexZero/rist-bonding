@@ -38,7 +38,7 @@ fn test_rist_plugin_availability() {
     let has_ristsink = gst::ElementFactory::find("ristsink").is_some();
 
     if has_ristsrc && has_ristsink {
-        println!("✓ RIST transport elements found: ristsrc, ristsink");
+        println!("RIST transport elements found: ristsrc, ristsink");
     } else {
         println!("ⓘ RIST transport elements not available (this is OK for unit testing)");
     }

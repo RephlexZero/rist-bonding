@@ -5,8 +5,10 @@
 //! (hierarchical token bucket), and fq_codel (fair queuing with CoDel).
 
 use rtnetlink::Handle;
+use std::path::Path;
 use thiserror::Error;
-use tracing::{debug, info};
+use tokio::process::Command;
+use tracing::{debug, info, warn};
 
 #[derive(Error, Debug)]
 pub enum QdiscError {
@@ -114,6 +116,118 @@ impl QdiscManager {
             "Netem qdisc configured for interface {} (rate: {}bps, delay: {}us, loss: {}%)",
             interface_index, config.rate_bps, config.delay_us, config.loss_percent
         );
+        Ok(())
+    }
+
+    /// Apply a netem qdisc using shell commands within a specific namespace.
+    /// This uses `ip netns exec <ns>` so it matches the iproute2 namespace model
+    /// and works consistently with our Manager's base directory when IP_NETNS_DIR is set.
+    pub async fn apply_netem_in_namespace(
+        &self,
+        ns_name: &str,
+        iface_name: &str,
+        spec: &scenarios::DirectionSpec,
+        netns_base_dir: &Path,
+    ) -> Result<(), QdiscError> {
+        // Build netem arguments from DirectionSpec
+        let delay_ms = spec.base_delay_ms;
+        let jitter_ms = spec.jitter_ms;
+        let loss_pct = spec.loss_pct * 100.0;
+        let rate_bps = (spec.rate_kbps as u64) * 1000;
+
+        // Construct the command: ip netns exec <ns> tc qdisc replace dev <iface> root netem ...
+        let mut cmd = Command::new("ip");
+        cmd.arg("netns").arg("exec").arg(ns_name).arg("tc");
+        cmd.arg("qdisc").arg("replace").arg("dev").arg(iface_name);
+        cmd.arg("root").arg("netem");
+
+        if delay_ms > 0 {
+            cmd.arg("delay").arg(format!("{}ms", delay_ms));
+            if jitter_ms > 0 {
+                cmd.arg(format!("{}ms", jitter_ms));
+            }
+        }
+
+        if loss_pct > 0.0 {
+            cmd.arg("loss").arg(format!("{}%", loss_pct));
+        }
+
+        if rate_bps > 0 {
+            // Prefer kbit granularity to keep numbers small
+            let rate_kbit = rate_bps / 1000;
+            cmd.arg("rate").arg(format!("{}kbit", rate_kbit));
+        }
+
+        // Ensure ip uses the same netns directory as our Manager
+        cmd.env("IP_NETNS_DIR", netns_base_dir);
+
+        let output = cmd
+            .output()
+            .await
+            .map_err(|e| QdiscError::MessageEncoding(e.to_string()))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(QdiscError::MessageEncoding(format!(
+                "tc netem failed in ns {} on {}: {}",
+                ns_name, iface_name, stderr
+            )));
+        }
+
+        info!(
+            "Netem configured in ns {} on {} (delay={}ms jitter={}ms loss={}% rate={}kbps)",
+            ns_name, iface_name, delay_ms, jitter_ms, loss_pct, spec.rate_kbps
+        );
+        Ok(())
+    }
+
+    /// Remove all qdiscs on an interface within a specific namespace (best-effort).
+    /// This uses `ip netns exec <ns> tc qdisc del dev <iface> root` and ignores
+    /// errors if the qdisc is already absent.
+    pub async fn remove_all_in_namespace(
+        &self,
+        ns_name: &str,
+        iface_name: &str,
+        netns_base_dir: &Path,
+    ) -> Result<(), QdiscError> {
+        let mut cmd = Command::new("ip");
+        cmd.arg("netns")
+            .arg("exec")
+            .arg(ns_name)
+            .arg("tc")
+            .arg("qdisc")
+            .arg("del")
+            .arg("dev")
+            .arg(iface_name)
+            .arg("root");
+
+        // Ensure we operate in the same netns directory as Manager
+        cmd.env("IP_NETNS_DIR", netns_base_dir);
+
+        match cmd.output().await {
+            Ok(output) => {
+                if !output.status.success() {
+                    // If it fails, log and continue (it's best-effort cleanup)
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    warn!(
+                        "Failed to remove qdisc in ns {} on {}: {}",
+                        ns_name, iface_name, stderr
+                    );
+                } else {
+                    info!(
+                        "Removed qdisc in ns {} on interface {}",
+                        ns_name, iface_name
+                    );
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "Error executing tc qdisc del in ns {} on {}: {}",
+                    ns_name, iface_name, e
+                );
+            }
+        }
+
         Ok(())
     }
 

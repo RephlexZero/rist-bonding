@@ -72,10 +72,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Enhanced scheduler demo completed!");
     println!("The scheduler now supports:");
-    println!("✓ Markov chain transitions with configurable probability matrices");
-    println!("✓ Exponential dwell time distributions");
-    println!("✓ JSON trace replay capability");
-    println!("✓ Integration with comprehensive 5G scenarios");
+    println!("Markov chain transitions with configurable probability matrices");
+    println!("Exponential dwell time distributions");
+    println!("JSON trace replay capability");
+    println!("Integration with comprehensive 5G scenarios");
 
     Ok(())
 }

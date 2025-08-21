@@ -21,7 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize the network orchestrator
     let mut orchestrator = NetworkOrchestrator::new(12345).await?;
-    println!("✓ Network namespace orchestrator initialized");
+    println!("Network namespace orchestrator initialized");
 
     // Test different scenarios using the new enhanced scenarios
     let scenarios = vec![
@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         match orchestrator.start_scenario(scenario, rx_port).await {
             Ok(handle) => {
-                println!("✓ Successfully started scenario:");
+                println!("Successfully started scenario:");
                 println!("  - Ingress Port: {}", handle.ingress_port);
                 println!("  - Egress Port:  {}", handle.egress_port);
                 println!("  - RX Port:      {}", handle.rx_port);
@@ -53,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Err(e) = test_link_connectivity(&handle).await {
                     println!("⚠️  Link connectivity test failed: {}", e);
                 } else {
-                    println!("✓ Link connectivity test passed");
+                    println!("Link connectivity test passed");
                 }
             }
             Err(e) => {
@@ -83,9 +83,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Test bonding setup with enhanced scenarios
-    println!("\n🔗 Testing Bonding Setup:");
+    println!("\nTesting Bonding Setup:");
     match test_bonding_setup(&mut orchestrator, 7100).await {
-        Ok(()) => println!("✓ Bonding test setup completed successfully"),
+        Ok(()) => println!("Bonding test setup completed successfully"),
         Err(e) => {
             println!("✗ Bonding test setup failed: {}", e);
             if e.to_string().contains("permission") {
@@ -102,7 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   • Time-varying network conditions");
     println!("   • Drop-in replacement for the old network-sim backend");
 
-    println!("✓ Demo completed, orchestrator will clean up on drop");
+    println!("Demo completed, orchestrator will clean up on drop");
 
     Ok(())
 }

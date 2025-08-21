@@ -135,14 +135,14 @@ async fn main() -> Result<()> {
     // === Step 1: Initialize Network Orchestrator ===
     info!("\n🌐 Step 1: Starting advanced network orchestrator...");
     let mut orchestrator = NetworkOrchestrator::new(44).await?; // Car #44 seed
-    info!("✓ Network orchestrator ready with race car optimizations");
+    info!("Network orchestrator ready with race car optimizations");
     
     // === Step 2: Configure Race Car Network Scenario ===
     info!("\n📡 Step 2: Configuring Monaco street circuit network scenario...");
     let scenario = create_race_car_network_scenario();
     let link = orchestrator.start_scenario(scenario, 5044).await?;
     
-    info!("✓ Network scenario active:");
+    info!("Network scenario active:");
     info!("   Scenario: {}", link.scenario.name);
     info!("   Links: {} configured", link.scenario.links.len());
     info!("   Duration: {:?}", link.scenario.duration_seconds);
@@ -159,13 +159,13 @@ async fn main() -> Result<()> {
     pipeline.add_many([&src, &sink])?;
     src.link(&sink)?;
     
-    info!("✓ Race car pipeline constructed");
+    info!("Race car pipeline constructed");
     
     // === Step 4: Start the Race! ===
     info!("\n🏁 Step 4: Starting live race broadcast!");
     
     pipeline.set_state(gstreamer::State::Playing)?;
-    info!("✓ Live broadcast active - Monaco GP is underway!");
+    info!("Live broadcast active - Monaco GP is underway!");
     
     // === Step 5: Monitor Race Progress ===
     info!("\n📊 Step 5: Monitoring race progress and network performance...");
@@ -189,13 +189,13 @@ async fn main() -> Result<()> {
     info!("\n🧹 Step 6: Cleaning up race broadcast...");
     
     pipeline.set_state(gstreamer::State::Null)?;
-    info!("✓ Pipelines stopped");
-    info!("✓ Network resources released");
+    info!("Pipelines stopped");
+    info!("Network resources released");
     
     // === Final Race Report ===
     info!("\n📈 Final Race Report");
     info!("====================");
-    info!("✓ {} - Car #{} race broadcast completed successfully!", 
+    info!("{} - Car #{} race broadcast completed successfully!", 
           config.driver_name, config.car_number);
     info!("🏆 Monaco Grand Prix broadcast demonstration finished!");
     

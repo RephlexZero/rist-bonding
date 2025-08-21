@@ -121,10 +121,10 @@ pub mod counter_sink {
 
         fn property(&self, id: usize, _pspec: &glib::ParamSpec) -> glib::Value {
             match id {
-                1 => self.inner.count.load(Ordering::Relaxed).to_value(),
-                2 => (self.inner.got_eos.load(Ordering::Relaxed) != 0).to_value(),
-                3 => (self.inner.got_flush_start.load(Ordering::Relaxed) != 0).to_value(),
-                4 => (self.inner.got_flush_stop.load(Ordering::Relaxed) != 0).to_value(),
+                0 => self.inner.count.load(Ordering::Relaxed).to_value(),
+                1 => (self.inner.got_eos.load(Ordering::Relaxed) != 0).to_value(),
+                2 => (self.inner.got_flush_start.load(Ordering::Relaxed) != 0).to_value(),
+                3 => (self.inner.got_flush_stop.load(Ordering::Relaxed) != 0).to_value(),
                 _ => false.to_value(),
             }
         }

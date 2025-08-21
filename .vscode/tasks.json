@@ -1,0 +1,50 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "cargo-test-integration-automated",
+			"type": "shell",
+			"command": "sudo -E cargo test -p integration_tests --test automated_integration -- --nocapture",
+			"problemMatcher": [
+				"$rustc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "cargo-test-integration-automated",
+			"type": "shell",
+			"command": "sudo -E cargo test -p integration_tests --test automated_integration -- --nocapture",
+			"problemMatcher": [
+				"$rustc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "cargo-test-integration-automated",
+			"type": "shell",
+			"command": "sudo -E cargo test -p integration_tests --test automated_integration -- --nocapture",
+			"problemMatcher": [
+				"$rustc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "cargo-test-integration-automated",
+			"type": "shell",
+			"command": "sudo -E RIST_SAVE_MP4=1 cargo test -p integration_tests --test automated_integration -- --nocapture",
+			"problemMatcher": [
+				"$rustc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "cargo-test-integration-automated-mp4",
+			"type": "shell",
+			"command": "sudo -E RIST_SAVE_MP4=1 cargo test -p integration_tests --test automated_integration -- --nocapture",
+			"problemMatcher": [
+				"$rustc"
+			],
+			"group": "build"
+		}
+	]
+}

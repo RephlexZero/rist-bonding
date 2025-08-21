@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::PathBuf;
+use std::process::Stdio;
 use thiserror::Error;
 use tokio::fs;
 use tracing::{debug, info, warn};
@@ -52,7 +53,12 @@ pub struct Manager {
 impl Manager {
     /// Create a new namespace manager
     pub fn new() -> Result<Self, NetNsError> {
-        let base_dir = PathBuf::from("/var/run/netns");
+        // Allow overriding the default base directory for namespace files
+        // using IP_NETNS_DIR (iproute2 convention) or NETNS_BASE_DIR.
+        let base_dir = std::env::var("IP_NETNS_DIR")
+            .or_else(|_| std::env::var("NETNS_BASE_DIR"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("/var/run/netns"));
 
         // Ensure the base directory exists
         std::fs::create_dir_all(&base_dir).map_err(NetNsError::CreateDir)?;
@@ -136,14 +142,25 @@ impl Manager {
             match tokio::fs::remove_file(&ns_path).await {
                 Ok(()) => info!("Force deleted namespace: {}", name),
                 Err(e) => {
-                    // Try using `ip netns del` and then system rm as last resorts
-                    let _ = tokio::process::Command::new("ip")
-                        .args(["netns", "del", name])
-                        .status()
-                        .await;
+                    // If it was already gone, skip noisy fallbacks
+                    if e.kind() == std::io::ErrorKind::NotFound {
+                        info!("Namespace file already gone: {}", name);
+                        return Ok(());
+                    }
+                    // Try using `ip netns del` and then rm -f as last resorts (silence output)
+                    let _ = {
+                        let mut cmd = tokio::process::Command::new("ip");
+                        cmd.args(["netns", "del", name])
+                            .env("IP_NETNS_DIR", &self.base_dir)
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::null());
+                        cmd.status().await
+                    };
                     let status = tokio::process::Command::new("rm")
                         .arg("-f")
                         .arg(&ns_path)
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
                         .status()
                         .await;
                     if let Ok(status) = status {
@@ -331,6 +348,11 @@ impl Manager {
         self.namespaces.keys().cloned().collect()
     }
 
+    /// Get the base directory path where namespace files are created
+    pub fn base_dir_path(&self) -> &PathBuf {
+        &self.base_dir
+    }
+
     /// Execute a closure in a specific namespace
     pub fn exec_in_namespace<F, T>(&self, name: &str, f: F) -> Result<T, NetNsError>
     where
@@ -366,11 +388,18 @@ impl Drop for Manager {
             // Try std::fs remove; if it fails, try shell fallbacks
             if let Err(e) = std::fs::remove_file(&ns_path) {
                 // Try `ip netns del <name>` then rm -f
-                let _ = std::process::Command::new("ip")
-                    .args(["netns", "del", &name])
-                    .status();
+                let _ = {
+                    let mut cmd = std::process::Command::new("ip");
+                    cmd.args(["netns", "del", &name])
+                        .env("IP_NETNS_DIR", &self.base_dir)
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null());
+                    cmd.status()
+                };
                 let _ = std::process::Command::new("rm")
                     .args(["-f", ns_path.to_string_lossy().as_ref()])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
                     .status();
                 // As last resort, just warn
                 let _ = e; // suppress unused if success

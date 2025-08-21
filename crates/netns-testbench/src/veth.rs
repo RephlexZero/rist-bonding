@@ -9,7 +9,7 @@ use rtnetlink::{new_connection, Handle};
 use std::collections::HashMap;
 use thiserror::Error;
 use tokio::time::{sleep, Duration};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 #[derive(Error, Debug)]
 pub enum VethError {
@@ -427,14 +427,14 @@ fn is_valid_interface_name(name: &str) -> bool {
 
 impl Drop for PairManager {
     fn drop(&mut self) {
-        // Clean up all veth pairs
-        let pair_names: Vec<String> = self.pairs.keys().cloned().collect();
-        for name in pair_names {
-            if let Err(e) = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(self.delete_pair(&name))
-            }) {
-                warn!("Failed to clean up veth pair {}: {}", name, e);
-            }
+        // Best-effort cleanup of veth pairs. It's common that one end has already
+        // been deleted explicitly by the orchestrator; treat NotFound as success
+        // to avoid noisy warnings during drop.
+        let iface_names: Vec<String> = self.pairs.keys().cloned().collect();
+        for name in iface_names {
+            let _ = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(self.delete_if_exists(&name))
+            });
         }
     }
 }

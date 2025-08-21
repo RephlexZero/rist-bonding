@@ -137,4 +137,26 @@ impl Schedule {
                                                     // Loop repeats at 90s
         ])
     }
+
+    /// Return an initial or representative DirectionSpec for immediate application.
+    /// For Constant, returns the contained spec; for Steps, returns the first step or a default;
+    /// for Markov, returns the initial state's spec; for Replay, returns a reasonable default.
+    pub fn initial_spec(&self) -> DirectionSpec {
+        match self {
+            Schedule::Constant(spec) => spec.clone(),
+            Schedule::Steps(steps) => steps
+                .first()
+                .map(|(_, spec)| spec.clone())
+                .unwrap_or_else(DirectionSpec::typical),
+            Schedule::Markov {
+                states,
+                initial_state,
+                ..
+            } => states
+                .get(*initial_state)
+                .cloned()
+                .unwrap_or_else(DirectionSpec::typical),
+            Schedule::Replay { .. } => DirectionSpec::typical(),
+        }
+    }
 }

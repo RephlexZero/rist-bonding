@@ -38,6 +38,16 @@ pub struct NetworkOrchestrator {
     next_link_id: u64,
     next_port_forward: u16,
     next_port_reverse: u16,
+    /// Track resources per link for robust teardown
+    link_resources: Vec<LinkResources>,
+}
+
+#[derive(Clone, Debug)]
+struct LinkResources {
+    ns_a: String,
+    ns_b: String,
+    veth_a: String,
+    veth_b: String,
 }
 
 impl NetworkOrchestrator {
@@ -81,6 +91,7 @@ impl NetworkOrchestrator {
             next_link_id: 1,
             next_port_forward: base_forward,
             next_port_reverse: base_reverse,
+            link_resources: Vec::new(),
         })
     }
 
@@ -226,8 +237,29 @@ impl NetworkOrchestrator {
             .set_up(&veth_b, Some(&self.netns_manager))
             .await?;
 
+        // Apply basic netem derived from the scenario specs
+        // We target both directions: a_ns side interface veth-<id>-a and b_ns side veth-<id>-b
+        // Use ip netns exec tc, leveraging Manager's base_dir via IP_NETNS_DIR
+        let base_dir = self.netns_manager.base_dir_path().clone();
+        self.qdisc_manager
+            .apply_netem_in_namespace(&ns_a, &veth_a, &link_spec.a_to_b.initial_spec(), &base_dir)
+            .await
+            .map_err(|e| TestbenchError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+        self.qdisc_manager
+            .apply_netem_in_namespace(&ns_b, &veth_b, &link_spec.b_to_a.initial_spec(), &base_dir)
+            .await
+            .map_err(|e| TestbenchError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+
         // Set up runtime schedulers for both directions
         // TODO: Get actual interface indices and create proper runtime configs
+        // Track resources for teardown
+        self.link_resources.push(LinkResources {
+            ns_a: ns_a.clone(),
+            ns_b: ns_b.clone(),
+            veth_a: veth_a.clone(),
+            veth_b: veth_b.clone(),
+        });
+
         debug!("Link setup complete: {}", link_spec.name);
 
         Ok(())
@@ -241,12 +273,47 @@ impl NetworkOrchestrator {
     }
 
     /// Shutdown the orchestrator and clean up resources
-    pub async fn shutdown(self) -> Result<(), TestbenchError> {
+    pub async fn shutdown(mut self) -> Result<(), TestbenchError> {
         info!("Shutting down orchestrator");
 
         self.scheduler.shutdown().await;
 
-        // NetworkOrchestrator cleanup happens in Drop trait
+        // Best-effort teardown of qdiscs, veths, and namespaces
+        let base_dir = self.netns_manager.base_dir_path().clone();
+        // Remove qdiscs inside namespaces first to release references
+        for lr in &self.link_resources {
+            let _ = self
+                .qdisc_manager
+                .remove_all_in_namespace(&lr.ns_a, &lr.veth_a, &base_dir)
+                .await;
+            let _ = self
+                .qdisc_manager
+                .remove_all_in_namespace(&lr.ns_b, &lr.veth_b, &base_dir)
+                .await;
+        }
+
+        // Try to delete veths from default namespace; if they've been moved, this is a no-op.
+        for lr in &self.link_resources {
+            let _ = self.veth_manager.delete_if_exists(&lr.veth_a).await;
+            let _ = self.veth_manager.delete_if_exists(&lr.veth_b).await;
+        }
+
+        // Delete namespaces
+        for lr in &self.link_resources {
+            let _ = self.netns_manager.delete_namespace(&lr.ns_a).await;
+            let _ = self.netns_manager.delete_namespace(&lr.ns_b).await;
+        }
+
+        // Final sweep for stale namespaces with our prefixes
+        let _ = self
+            .netns_manager
+            .force_cleanup_stale_namespaces("tx0_link_")
+            .await;
+        let _ = self
+            .netns_manager
+            .force_cleanup_stale_namespaces("rx0_link_")
+            .await;
+
         Ok(())
     }
 }
