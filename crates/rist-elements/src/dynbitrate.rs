@@ -98,6 +98,24 @@ impl ObjectImpl for ControllerImpl {
 
         let sinkpad = gst::Pad::builder_from_template(&sink_template)
             .name("sink")
+            .event_function(|_pad, parent, event| {
+                // Forward all downstream events to src pad (e.g., CAPS, SEGMENT, EOS)
+                if let Some(element) = parent.and_then(|p| p.downcast_ref::<DynBitrate>()) {
+                    if let Some(srcpad) = element.static_pad("src") {
+                        return srcpad.push_event(event);
+                    }
+                }
+                false
+            })
+            .query_function(|_pad, parent, query| {
+                // Downstream queries from upstream peer: try to forward to src pad peer
+                if let Some(element) = parent.and_then(|p| p.downcast_ref::<DynBitrate>()) {
+                    if let Some(srcpad) = element.static_pad("src") {
+                        return srcpad.peer_query(query);
+                    }
+                }
+                false
+            })
             .chain_function(|_pad, parent, buffer| {
                 // Simple passthrough - forward to src pad
                 match parent.and_then(|p| p.downcast_ref::<DynBitrate>()) {
@@ -121,6 +139,24 @@ impl ObjectImpl for ControllerImpl {
 
         let srcpad = gst::Pad::builder_from_template(&src_template)
             .name("src")
+            // Forward upstream events to sink pad (e.g., reconfigure)
+            .event_function(|_pad, parent, event| {
+                if let Some(element) = parent.and_then(|p| p.downcast_ref::<DynBitrate>()) {
+                    if let Some(sinkpad) = element.static_pad("sink") {
+                        return sinkpad.push_event(event);
+                    }
+                }
+                false
+            })
+            // Handle upstream queries by forwarding to sink pad
+            .query_function(|_pad, parent, query| {
+                if let Some(element) = parent.and_then(|p| p.downcast_ref::<DynBitrate>()) {
+                    if let Some(sinkpad) = element.static_pad("sink") {
+                        return sinkpad.peer_query(query);
+                    }
+                }
+                false
+            })
             .build();
 
         obj.add_pad(&sinkpad).unwrap();

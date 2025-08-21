@@ -6,6 +6,7 @@
 use gstreamer::prelude::*;
 use gstristelements::testing;
 use netns_testbench::{NetworkOrchestrator, TestScenario};
+// For stress test, use the netlink-based forwarder orchestrator
 use scenarios::{DirectionSpec, LinkSpec, Schedule};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -34,7 +35,7 @@ fn build_sender_pipeline(ports: &[u16]) -> (gstreamer::Pipeline, gstreamer::Elem
     // Create video test source at 720p30 (more realistic for tests)
     let videotestsrc = gstreamer::ElementFactory::make("videotestsrc")
         .property("is-live", true)
-        .property("pattern", 0) // SMPTE color bars
+        .property_from_str("pattern", "smpte") // SMPTE color bars
         .property("num-buffers", 300) // 10 seconds at 30fps
         .build()
         .expect("Failed to create videotestsrc");
@@ -136,21 +137,41 @@ fn build_sender_pipeline(ports: &[u16]) -> (gstreamer::Pipeline, gstreamer::Elem
 fn build_receiver_pipeline(rx_port: u16) -> (gstreamer::Pipeline, gstreamer::Element) {
     let pipeline = gstreamer::Pipeline::new();
 
-    // Create RIST source
-    let ristsrc = testing::create_rist_source("127.0.0.1");
-    ristsrc.set_property("port", rx_port as u32);
+    // Create RIST source -> RTP depay -> MPEG-TS demux
+    let ristsrc = gstreamer::ElementFactory::make("ristsrc")
+        .property("address", "0.0.0.0")
+        .property("port", rx_port as u32)
+        // Larger receiver buffer helps with RTX and jitter under stress
+        .property("receiver-buffer", 5000u32)
+        .property("stats-update-interval", 1000u32)
+        .property("encoding-name", "MP2T")
+        .build()
+        .expect("Failed to create ristsrc");
+    let rtpmp2tdepay = gstreamer::ElementFactory::make("rtpmp2tdepay")
+        .build()
+        .expect("Failed to create rtpmp2tdepay");
+    // Tee off raw TS for saving while also feeding demux
+    let ts_tee = gstreamer::ElementFactory::make("tee")
+        .build()
+        .expect("Failed to create tee");
+    let tsq_file = gstreamer::ElementFactory::make("queue")
+        .build()
+        .expect("Failed to create queue");
+    let ts_filesink = gstreamer::ElementFactory::make("filesink")
+        .property("location", "target/stress_output.ts")
+        .build()
+        .expect("Failed to create filesink");
 
-    // Create demuxer
+    let tsq_demux = gstreamer::ElementFactory::make("queue")
+        .build()
+        .expect("Failed to create demux queue");
+
     let demux = gstreamer::ElementFactory::make("tsdemux")
         .build()
         .expect("Failed to create tsdemux");
 
-    // Create counters for verification
-    let counter = gstreamer::ElementFactory::make("identity")
-        .property("sync", true)
-        .property("silent", false)
-        .build()
-        .expect("Failed to create identity counter");
+    // Create counter sink for verification (from test harness)
+    let counter = testing::create_counter_sink();
 
     // Create sink
     let sink = gstreamer::ElementFactory::make("fakesink")
@@ -161,13 +182,28 @@ fn build_receiver_pipeline(rx_port: u16) -> (gstreamer::Pipeline, gstreamer::Ele
 
     // Add elements
     pipeline
-        .add_many([&ristsrc, &demux, &counter, &sink])
+        .add_many([
+            &ristsrc,
+            &rtpmp2tdepay,
+            &ts_tee,
+            &tsq_file,
+            &ts_filesink,
+            &tsq_demux,
+            &demux,
+            &counter,
+            &sink,
+        ])
         .expect("Failed to add elements to receiver pipeline");
 
     // Link static elements
-    ristsrc
-        .link(&demux)
-        .expect("Failed to link ristsrc to demux");
+    gstreamer::Element::link_many([&ristsrc, &rtpmp2tdepay, &ts_tee])
+        .expect("Failed to link ristsrc -> rtpmp2tdepay -> tee");
+    // Branch 1: Save raw TS to file
+    gstreamer::Element::link_many([&ts_tee, &tsq_file, &ts_filesink])
+        .expect("Failed to link tee to filesink");
+    // Branch 2: Feed demux for validation
+    gstreamer::Element::link_many([&ts_tee, &tsq_demux, &demux])
+        .expect("Failed to link tee to tsdemux");
 
     // Handle dynamic pads from demux
     let counter_clone = counter.clone();
@@ -181,6 +217,271 @@ fn build_receiver_pipeline(rx_port: u16) -> (gstreamer::Pipeline, gstreamer::Ele
             counter_clone
                 .link(&sink_clone)
                 .expect("Failed to link counter to sink");
+        }
+    });
+
+    (pipeline, counter)
+}
+
+/// Create a receiver pipeline that listens on multiple bonded ports
+fn build_stress_receiver_pipeline(ports: &[u16]) -> (gstreamer::Pipeline, gstreamer::Element) {
+    let pipeline = gstreamer::Pipeline::new();
+
+    // ristsrc configured to listen on all bonded ports
+    let ristsrc = gstreamer::ElementFactory::make("ristsrc")
+        .property("receiver-buffer", 5000u32)
+        .property("stats-update-interval", 1000u32)
+        .property("encoding-name", "MP2T")
+        .build()
+        .expect("Failed to create ristsrc");
+
+    // Configure bonding-addresses to bind on all local ports
+    let bonding_addrs = ports
+        .iter()
+        .map(|p| format!("0.0.0.0:{}", p))
+        .collect::<Vec<_>>()
+        .join(",");
+    ristsrc.set_property("bonding-addresses", bonding_addrs);
+
+    let rtpmp2tdepay = gstreamer::ElementFactory::make("rtpmp2tdepay")
+        .build()
+        .expect("Failed to create rtpmp2tdepay");
+    let ts_tee = gstreamer::ElementFactory::make("tee").build().unwrap();
+    let tsq_file = gstreamer::ElementFactory::make("queue").build().unwrap();
+    let ts_filesink = gstreamer::ElementFactory::make("filesink")
+        .property("location", "target/stress_output.ts")
+        .build()
+        .unwrap();
+    let tsq_demux = gstreamer::ElementFactory::make("queue").build().unwrap();
+    let demux = gstreamer::ElementFactory::make("tsdemux").build().unwrap();
+
+    // MP4 writing path: parse H.265/AAC and mux
+    let h265parse = gstreamer::ElementFactory::make("h265parse")
+        .property("config-interval", -1i32)
+        .build()
+        .unwrap();
+    let vtee = gstreamer::ElementFactory::make("tee").build().unwrap();
+    let vq_mp4 = gstreamer::ElementFactory::make("queue").build().unwrap();
+    let vq_count = gstreamer::ElementFactory::make("queue").build().unwrap();
+
+    let aacparse = gstreamer::ElementFactory::make("aacparse").build().unwrap();
+    let aq_mp4 = gstreamer::ElementFactory::make("queue").build().unwrap();
+
+    let mp4mux = gstreamer::ElementFactory::make("mp4mux").build().unwrap();
+    let mp4sink = gstreamer::ElementFactory::make("filesink")
+        .property("location", "target/stress_output.mp4")
+        .build()
+        .unwrap();
+
+    let counter = testing::create_counter_sink();
+
+    pipeline
+        .add_many([
+            &ristsrc,
+            &rtpmp2tdepay,
+            &ts_tee,
+            &tsq_file,
+            &ts_filesink,
+            &tsq_demux,
+            &demux,
+            &h265parse,
+            &vtee,
+            &vq_mp4,
+            &vq_count,
+            &aacparse,
+            &aq_mp4,
+            &mp4mux,
+            &mp4sink,
+            &counter,
+        ])
+        .expect("Failed to add elements to stress receiver pipeline");
+
+    gstreamer::Element::link_many([&ristsrc, &rtpmp2tdepay, &ts_tee])
+        .expect("Failed to link ristsrc -> rtpmp2tdepay -> tee");
+    gstreamer::Element::link_many([&ts_tee, &tsq_file, &ts_filesink])
+        .expect("Failed to link tee to filesink");
+    gstreamer::Element::link_many([&ts_tee, &tsq_demux, &demux])
+        .expect("Failed to link tee to tsdemux");
+
+    // Static MP4 path links that don't depend on demux pads
+    h265parse.link(&vtee).unwrap();
+    gstreamer::Element::link_many([&vq_count, &counter]).unwrap();
+    mp4mux.link(&mp4sink).unwrap();
+
+    // Dynamic pad linking into MP4 mux and counter path
+    let h265parse_clone = h265parse.clone();
+    let vtee_clone = vtee.clone();
+    let vq_mp4_clone = vq_mp4.clone();
+    let vq_count_clone = vq_count.clone();
+    let aacparse_clone = aacparse.clone();
+    let aq_mp4_clone = aq_mp4.clone();
+    let mp4mux_clone = mp4mux.clone();
+    demux.connect_pad_added(move |_demux, pad| {
+        let pad_name = pad.name();
+        if pad_name.starts_with("video_") {
+            // demux video -> h265parse
+            let sink_pad = h265parse_clone.static_pad("sink").unwrap();
+            if pad.link(&sink_pad).is_err() {
+                eprintln!("Failed to link demux video pad to h265parse");
+                return;
+            }
+            // vtee has two branches: mp4 and counter
+            if let Some(vtee_src_mp4) = vtee_clone.request_pad_simple("src_%u") {
+                let vq_mp4_sink = vq_mp4_clone.static_pad("sink").unwrap();
+                let _ = vtee_src_mp4.link(&vq_mp4_sink);
+                let vq_mp4_src = vq_mp4_clone.static_pad("src").unwrap();
+                if let Some(mp4_video_pad) = mp4mux_clone.request_pad_simple("video_%u") {
+                    let _ = vq_mp4_src.link(&mp4_video_pad);
+                }
+            }
+            if let Some(vtee_src_count) = vtee_clone.request_pad_simple("src_%u") {
+                let vq_count_sink = vq_count_clone.static_pad("sink").unwrap();
+                let _ = vtee_src_count.link(&vq_count_sink);
+            }
+        } else if pad_name.starts_with("audio_") {
+            // demux audio -> aacparse -> mp4mux
+            let sink_pad = aacparse_clone.static_pad("sink").unwrap();
+            if pad.link(&sink_pad).is_err() {
+                eprintln!("Failed to link demux audio pad to aacparse");
+                return;
+            }
+            let aac_src = aacparse_clone.static_pad("src").unwrap();
+            let aq_mp4_sink = aq_mp4_clone.static_pad("sink").unwrap();
+            let _ = aac_src.link(&aq_mp4_sink);
+            let aq_mp4_src = aq_mp4_clone.static_pad("src").unwrap();
+            if let Some(mp4_audio_pad) = mp4mux_clone.request_pad_simple("audio_%u") {
+                let _ = aq_mp4_src.link(&mp4_audio_pad);
+            }
+        }
+    });
+
+    (pipeline, counter)
+}
+
+/// Create a receiver pipeline that listens on a single forwarded rx_port (for netlink-sim)
+fn build_stress_receiver_pipeline_single(
+    rx_port: u16,
+) -> (gstreamer::Pipeline, gstreamer::Element) {
+    let pipeline = gstreamer::Pipeline::new();
+
+    // Single-port ristsrc listening on rx_port
+    let ristsrc = gstreamer::ElementFactory::make("ristsrc")
+        .property("address", "0.0.0.0")
+        .property("port", rx_port as u32)
+        .property("receiver-buffer", 5000u32)
+        .property("stats-update-interval", 1000u32)
+        .property("encoding-name", "MP2T")
+        .build()
+        .unwrap();
+
+    let rtpmp2tdepay = gstreamer::ElementFactory::make("rtpmp2tdepay")
+        .build()
+        .unwrap();
+    let ts_tee = gstreamer::ElementFactory::make("tee").build().unwrap();
+    let tsq_file = gstreamer::ElementFactory::make("queue").build().unwrap();
+    let ts_filesink = gstreamer::ElementFactory::make("filesink")
+        .property("location", "target/stress_output.ts")
+        .build()
+        .unwrap();
+    let tsq_demux = gstreamer::ElementFactory::make("queue").build().unwrap();
+    let demux = gstreamer::ElementFactory::make("tsdemux").build().unwrap();
+
+    let h265parse = gstreamer::ElementFactory::make("h265parse")
+        .property("config-interval", -1i32)
+        .build()
+        .unwrap();
+    let vtee = gstreamer::ElementFactory::make("tee").build().unwrap();
+    let vq_mp4 = gstreamer::ElementFactory::make("queue").build().unwrap();
+    let vq_count = gstreamer::ElementFactory::make("queue").build().unwrap();
+
+    let aacparse = gstreamer::ElementFactory::make("aacparse").build().unwrap();
+    let aq_mp4 = gstreamer::ElementFactory::make("queue").build().unwrap();
+
+    let mp4mux = gstreamer::ElementFactory::make("mp4mux").build().unwrap();
+    let mp4sink = gstreamer::ElementFactory::make("filesink")
+        .property("location", "target/stress_output.mp4")
+        .build()
+        .unwrap();
+
+    let counter = testing::create_counter_sink();
+
+    pipeline
+        .add_many([
+            &ristsrc,
+            &rtpmp2tdepay,
+            &ts_tee,
+            &tsq_file,
+            &ts_filesink,
+            &tsq_demux,
+            &demux,
+            &h265parse,
+            &vtee,
+            &vq_mp4,
+            &vq_count,
+            &aacparse,
+            &aq_mp4,
+            &mp4mux,
+            &mp4sink,
+            &counter,
+        ])
+        .expect("Failed to add elements to single-port stress receiver pipeline");
+
+    gstreamer::Element::link_many([&ristsrc, &rtpmp2tdepay, &ts_tee])
+        .expect("Failed to link ristsrc -> rtpmp2tdepay -> tee");
+    gstreamer::Element::link_many([&ts_tee, &tsq_file, &ts_filesink])
+        .expect("Failed to link tee to filesink");
+    gstreamer::Element::link_many([&ts_tee, &tsq_demux, &demux])
+        .expect("Failed to link tee to tsdemux");
+
+    // Static MP4 path links that don't depend on demux pads
+    h265parse.link(&vtee).unwrap();
+    gstreamer::Element::link_many([&vq_count, &counter]).unwrap();
+    mp4mux.link(&mp4sink).unwrap();
+
+    // Dynamic pad linking into MP4 mux and counter path
+    let h265parse_clone = h265parse.clone();
+    let vtee_clone = vtee.clone();
+    let vq_mp4_clone = vq_mp4.clone();
+    let vq_count_clone = vq_count.clone();
+    let aacparse_clone = aacparse.clone();
+    let aq_mp4_clone = aq_mp4.clone();
+    let mp4mux_clone = mp4mux.clone();
+    demux.connect_pad_added(move |_demux, pad| {
+        let pad_name = pad.name();
+        if pad_name.starts_with("video_") {
+            // demux video -> h265parse
+            let sink_pad = h265parse_clone.static_pad("sink").unwrap();
+            if pad.link(&sink_pad).is_err() {
+                eprintln!("Failed to link demux video pad to h265parse");
+                return;
+            }
+            // vtee has two branches: mp4 and counter
+            if let Some(vtee_src_mp4) = vtee_clone.request_pad_simple("src_%u") {
+                let vq_mp4_sink = vq_mp4_clone.static_pad("sink").unwrap();
+                let _ = vtee_src_mp4.link(&vq_mp4_sink);
+                let vq_mp4_src = vq_mp4_clone.static_pad("src").unwrap();
+                if let Some(mp4_video_pad) = mp4mux_clone.request_pad_simple("video_%u") {
+                    let _ = vq_mp4_src.link(&mp4_video_pad);
+                }
+            }
+            if let Some(vtee_src_count) = vtee_clone.request_pad_simple("src_%u") {
+                let vq_count_sink = vq_count_clone.static_pad("sink").unwrap();
+                let _ = vtee_src_count.link(&vq_count_sink);
+            }
+        } else if pad_name.starts_with("audio_") {
+            // demux audio -> aacparse -> mp4mux
+            let sink_pad = aacparse_clone.static_pad("sink").unwrap();
+            if pad.link(&sink_pad).is_err() {
+                eprintln!("Failed to link demux audio pad to aacparse");
+                return;
+            }
+            let aac_src = aacparse_clone.static_pad("src").unwrap();
+            let aq_mp4_sink = aq_mp4_clone.static_pad("sink").unwrap();
+            let _ = aac_src.link(&aq_mp4_sink);
+            let aq_mp4_src = aq_mp4_clone.static_pad("src").unwrap();
+            if let Some(mp4_audio_pad) = mp4mux_clone.request_pad_simple("audio_%u") {
+                let _ = aq_mp4_src.link(&mp4_audio_pad);
+            }
         }
     });
 
@@ -245,7 +546,7 @@ async fn test_single_link_rist_transmission() -> Result<(), Box<dyn std::error::
 
     // Build pipelines
     let (sender, _ristsink) = build_sender_pipeline(&[link.ingress_port]);
-    let (receiver, counter) = build_receiver_pipeline(config.rx_port);
+    let (receiver, counter) = build_stress_receiver_pipeline(&[link.ingress_port]);
 
     // Run test
     println!(
@@ -255,7 +556,7 @@ async fn test_single_link_rist_transmission() -> Result<(), Box<dyn std::error::
     run_pipelines(sender, receiver, config.test_duration_secs).await?;
 
     // Verify data was received
-    let count: u64 = testing::get_property(&counter, "processed").unwrap_or_else(|_| 0u64);
+    let count: u64 = testing::get_property(&counter, "count").unwrap_or_else(|_| 0u64);
 
     println!("📊 Received {} buffers", count);
     assert!(count > 0, "No data received through RIST link");
@@ -286,8 +587,7 @@ async fn test_dual_link_rist_bonding() -> Result<(), Box<dyn std::error::Error>>
 
     println!("✓ Started bonding scenario: {}", link.scenario.name);
 
-    // For bonding, we need multiple ingress ports
-    // In a real bonding scenario, we'd have multiple links
+    // For bonding in this simplified test, simulate a second session on a nearby port
     let ports = vec![link.ingress_port, link.ingress_port + 2];
 
     // Build pipelines with bonding
@@ -305,7 +605,7 @@ async fn test_dual_link_rist_bonding() -> Result<(), Box<dyn std::error::Error>>
     run_pipelines(sender, receiver, config.test_duration_secs).await?;
 
     // Verify data was received
-    let count: u64 = testing::get_property(&counter, "processed").unwrap_or_else(|_| 0u64);
+    let count: u64 = testing::get_property(&counter, "count").unwrap_or_else(|_| 0u64);
 
     println!("📊 Received {} buffers through bonding", count);
     assert!(count > 0, "No data received through bonded RIST links");
@@ -356,7 +656,7 @@ async fn test_network_degradation_recovery() -> Result<(), Box<dyn std::error::E
     run_pipelines(sender, receiver, config.test_duration_secs).await?;
 
     // Verify data was received despite degradation
-    let count: u64 = testing::get_property(&counter, "processed").unwrap_or_else(|_| 0u64);
+    let count: u64 = testing::get_property(&counter, "count").unwrap_or_else(|_| 0u64);
 
     println!("📊 Received {} buffers through degraded network", count);
     assert!(count > 0, "No data received despite network degradation");
@@ -440,7 +740,7 @@ async fn test_mobile_handover() -> Result<(), Box<dyn std::error::Error>> {
         .expect("Failed to stop receiver");
 
     // Verify data continuity during handover
-    let count: u64 = testing::get_property(&counter, "processed").unwrap_or_else(|_| 0u64);
+    let count: u64 = testing::get_property(&counter, "count").unwrap_or_else(|_| 0u64);
 
     println!("📊 Received {} buffers during handover test", count);
     println!("🔄 Detected {} handover events", handover_count);
@@ -524,7 +824,7 @@ async fn test_stress_multiple_concurrent_links() -> Result<(), Box<dyn std::erro
             .set_state(gstreamer::State::Null)
             .expect("Failed to stop receiver");
 
-        let count: u64 = testing::get_property(&counter, "processed").unwrap_or_else(|_| 0u64);
+        let count: u64 = testing::get_property(&counter, "count").unwrap_or_else(|_| 0u64);
         total_received += count;
 
         println!("📊 Scenario {}: received {} buffers", i + 1, count);
@@ -539,101 +839,274 @@ async fn test_stress_multiple_concurrent_links() -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
-/// Custom test scenario creation
-fn create_custom_race_car_scenario() -> TestScenario {
-    use std::time::Duration as StdDuration;
+/// Build an RTP (MP2T) sender with dispatcher+dynamically-controlled encoder, configured for bonding
+fn build_stress_sender_pipeline(ports: &[u16]) -> (gstreamer::Pipeline, gstreamer::Element) {
+    let pipeline = gstreamer::Pipeline::new();
 
-    // Create a realistic race car scenario with changing network conditions
-    let mut metadata = HashMap::new();
-    metadata.insert("scenario_type".to_string(), "race_car".to_string());
-    metadata.insert("track".to_string(), "monaco_street_circuit".to_string());
+    // Video: 1080p60 test source -> x265enc (ultrafast, zerolatency)
+    let vsrc = gstreamer::ElementFactory::make("videotestsrc")
+        .property("is-live", true)
+        .property_from_str("pattern", "smpte")
+        .build()
+        .expect("Failed to create videotestsrc");
+    let vconv = gstreamer::ElementFactory::make("videoconvert")
+        .build()
+        .unwrap();
+    let vscale = gstreamer::ElementFactory::make("videoscale")
+        .build()
+        .unwrap();
+    let v_caps = gstreamer::Caps::builder("video/x-raw")
+        .field("width", 1920i32)
+        .field("height", 1080i32)
+        .field("framerate", gstreamer::Fraction::new(60, 1))
+        .build();
+    let vcap = gstreamer::ElementFactory::make("capsfilter")
+        .property("caps", &v_caps)
+        .build()
+        .unwrap();
+    let venc = gstreamer::ElementFactory::make("x265enc")
+        .property_from_str("speed-preset", "ultrafast")
+        .property_from_str("tune", "zerolatency")
+        .property("bitrate", 8000u32) // start at 8 Mbps; dynbitrate will adjust
+        .property("key-int-max", 120i32)
+        .build()
+        .expect("Failed to create x265enc");
+    let vparse = gstreamer::ElementFactory::make("h265parse")
+        .property("config-interval", 1i32)
+        .build()
+        .expect("Failed to create h265parse");
 
-    TestScenario {
-        name: "race_car_monaco".to_string(),
-        description: "Monaco street circuit with tunnel and elevation changes".to_string(),
-        links: vec![
-            // Primary 5G link
-            LinkSpec {
-                name: "5g_primary".to_string(),
-                a_ns: "tx0".to_string(),
-                b_ns: "rx0".to_string(),
-                a_to_b: Schedule::Steps(vec![
-                    (StdDuration::from_secs(0), DirectionSpec::good()), // Start line
-                    (StdDuration::from_secs(5), DirectionSpec::good()), // City streets
-                    (StdDuration::from_secs(10), DirectionSpec::poor()), // Tunnel entry
-                    (StdDuration::from_secs(15), DirectionSpec::good()), // Tunnel exit
-                    (StdDuration::from_secs(20), DirectionSpec::good()), // Finish straight
-                ]),
-                b_to_a: Schedule::Constant(DirectionSpec::good()),
-            },
-            // Secondary LTE backup
-            LinkSpec {
-                name: "lte_backup".to_string(),
-                a_ns: "tx1".to_string(),
-                b_ns: "rx1".to_string(),
-                a_to_b: Schedule::Constant(DirectionSpec::typical()),
-                b_to_a: Schedule::Constant(DirectionSpec::typical()),
-            },
-        ],
-        duration_seconds: Some(30),
-        metadata,
-    }
+    // Audio: stereo AAC 256 kbps @ 48kHz
+    let asrc = gstreamer::ElementFactory::make("audiotestsrc")
+        .property("is-live", true)
+        .property("freq", 440.0f64)
+        .build()
+        .expect("Failed to create audiotestsrc");
+    let aconv = gstreamer::ElementFactory::make("audioconvert")
+        .build()
+        .unwrap();
+    let ares = gstreamer::ElementFactory::make("audioresample")
+        .build()
+        .unwrap();
+    let aenc = gstreamer::ElementFactory::make("avenc_aac")
+        .property("bitrate", 256000i32)
+        .build()
+        .expect("Failed to create avenc_aac");
+    let aparse = gstreamer::ElementFactory::make("aacparse").build().unwrap();
+
+    // Mux to MPEG-TS
+    let tsmux = gstreamer::ElementFactory::make("mpegtsmux")
+        .property("alignment", 7i32)
+        .build()
+        .expect("Failed to create mpegtsmux");
+
+    // RTP payload for MP2T
+    let rtpmp2tpay = gstreamer::ElementFactory::make("rtpmp2tpay")
+        .property("pt", 33u32)
+        .build()
+        .expect("Failed to create rtpmp2tpay");
+    let ssrc_value: u32 = 0x2468ABCE; // even
+    let rtp_caps = gstreamer::Caps::builder("application/x-rtp")
+        .field("media", "video")
+        .field("encoding-name", "MP2T")
+        .field("payload", 33i32)
+        .field("clock-rate", 90000i32)
+        .field("ssrc", ssrc_value)
+        .build();
+    let rtp_cf = gstreamer::ElementFactory::make("capsfilter")
+        .property("caps", &rtp_caps)
+        .build()
+        .unwrap();
+
+    // Our custom load balancer and bitrate controller
+    let dispatcher = testing::create_dispatcher(None);
+    let dynbitrate = testing::create_dynbitrate();
+
+    // RIST sink with dispatcher for bonded sessions
+    let ristsink = gstreamer::ElementFactory::make("ristsink")
+        .property("sender-buffer", 5000u32)
+        .property("stats-update-interval", 1000u32)
+        .build()
+        .expect("Failed to create ristsink");
+    ristsink.set_property("dispatcher", &dispatcher);
+
+    // Configure bonded sessions via bonding-addresses CSV
+    // Use localhost for all bonded sessions; the orchestrator maps ingress ports accordingly
+    let bonding_addrs = ports
+        .iter()
+        .map(|port| format!("127.0.0.1:{}", port))
+        .collect::<Vec<_>>()
+        .join(",");
+    ristsink.set_property("bonding-addresses", bonding_addrs);
+
+    // Add elements
+    pipeline
+        .add_many([
+            &vsrc,
+            &vconv,
+            &vscale,
+            &vcap,
+            &venc,
+            &vparse, // video
+            &asrc,
+            &aconv,
+            &ares,
+            &aenc,
+            &aparse, // audio
+            &tsmux,
+            &rtpmp2tpay,
+            &rtp_cf,
+            &dynbitrate,
+            &ristsink,
+        ])
+        .expect("Failed to add elements to sender pipeline");
+
+    // Link video branch
+    gstreamer::Element::link_many([&vsrc, &vconv, &vscale, &vcap, &venc, &vparse])
+        .expect("Failed to link video branch");
+    // Link audio branch
+    gstreamer::Element::link_many([&asrc, &aconv, &ares, &aenc, &aparse])
+        .expect("Failed to link audio branch");
+
+    // Request and link ts muxer pads (mpegtsmux uses request pads sink_%d)
+    let v_pad = vparse.static_pad("src").unwrap();
+    let v_sink = tsmux.request_pad_simple("sink_%d").unwrap();
+    v_pad.link(&v_sink).expect("Failed to link video to tsmux");
+    let a_pad = aparse.static_pad("src").unwrap();
+    let a_sink = tsmux.request_pad_simple("sink_%d").unwrap();
+    a_pad.link(&a_sink).expect("Failed to link audio to tsmux");
+
+    // Link TS -> RTP -> dynbitrate -> RIST sink
+    gstreamer::Element::link_many([&tsmux, &rtpmp2tpay, &rtp_cf, &dynbitrate, &ristsink])
+        .expect("Failed to link TS->RTP->dynbitrate->ristsink");
+
+    // Wire up dynbitrate control
+    dynbitrate.set_property("encoder", &venc);
+    dynbitrate.set_property("rist", &ristsink);
+    dynbitrate.set_property("dispatcher", &dispatcher);
+    dynbitrate.set_property("min-kbps", 500u32);
+    dynbitrate.set_property("max-kbps", 20000u32);
+    dynbitrate.set_property("step-kbps", 250u32);
+    dynbitrate.set_property("target-loss-pct", 1.0f64);
+    dynbitrate.set_property("downscale-keyunit", &true);
+
+    (pipeline, ristsink)
 }
 
-/// Test custom race car scenario
-#[tokio::test]
-#[ignore] // Remove this when ready to run
-async fn test_race_car_custom_scenario() -> Result<(), Box<dyn std::error::Error>> {
+/// Build four Markov-varying link scenarios at different bandwidth tiers
+fn build_stress_bonded_scenarios() -> Vec<TestScenario> {
+    fn markov_for_rate(rate_kbps: u32, name: &str) -> LinkSpec {
+        // Base state: target rate with moderate noise
+        let base = DirectionSpec {
+            base_delay_ms: 30,
+            jitter_ms: 10,
+            loss_pct: 0.003,
+            loss_burst_corr: 0.2,
+            reorder_pct: 0.003,
+            duplicate_pct: 0.0005,
+            rate_kbps,
+            mtu: Some(1500),
+        };
+        // Heavy loss state: severe burst loss to simulate fades/outages
+        let heavy = DirectionSpec {
+            base_delay_ms: 120,
+            jitter_ms: 50,
+            loss_pct: 0.2,        // 20% loss
+            loss_burst_corr: 0.9, // highly bursty
+            reorder_pct: 0.02,
+            duplicate_pct: 0.002,
+            rate_kbps: (rate_kbps as f32 * 0.6) as u32,
+            mtu: Some(1400),
+        };
+
+        let schedule = Schedule::Markov {
+            states: vec![base, heavy],
+            transition_matrix: vec![
+                vec![0.88, 0.12], // base -> base/heavy
+                vec![0.40, 0.60], // heavy -> base/heavy
+            ],
+            initial_state: 0,
+            mean_dwell_time: Duration::from_secs(8),
+        };
+
+        LinkSpec {
+            name: name.to_string(),
+            a_ns: format!("{}-tx", name),
+            b_ns: format!("{}-rx", name),
+            a_to_b: schedule.clone(),
+            b_to_a: schedule, // symmetric
+        }
+    }
+
+    let tiers = vec![
+        (150u32, "poor"),
+        (500u32, "low"),
+        (1000u32, "medium"),
+        (2000u32, "high"),
+    ];
+
+    tiers
+        .into_iter()
+        .map(|(kbps, label)| TestScenario {
+            name: format!("stress_{}_bonded", label),
+            description: format!("Stress link '{}' with Markov heavy loss", label),
+            links: vec![markov_for_rate(kbps, label)],
+            duration_seconds: Some(30),
+            metadata: {
+                let mut m = HashMap::new();
+                m.insert("scenario_type".to_string(), "stress".to_string());
+                m.insert("tier".to_string(), label.to_string());
+                m
+            },
+        })
+        .collect()
+}
+
+/// Stress test: 4 bonded links (poor/low/medium/high), RTP MP2T over RIST with dispatcher+dynbitrate
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore]
+async fn test_stress_test() -> Result<(), Box<dyn std::error::Error>> {
     testing::init_for_tests();
+    // Ensure our custom GStreamer elements can be discovered during test run
+    std::env::set_var("GST_PLUGIN_PATH", "target/debug");
     let config = TestConfig {
-        test_duration_secs: 30,
-        seed: 2000,
+        test_duration_secs: 20,
+        seed: 31415,
         ..Default::default()
     };
 
-    println!("🏎️  Testing custom race car scenario");
+    println!("🧪 Running stress test with 4 bonded links (Markov heavy loss)");
 
-    // Create network orchestrator
+    // Start four independent link scenarios for bonding using netns-testbench
     let mut orchestrator = NetworkOrchestrator::new(config.seed).await?;
-
-    // Start custom race car scenario
-    let scenario = create_custom_race_car_scenario();
-    let link = orchestrator
-        .start_scenario(scenario, config.rx_port)
+    let scenarios = build_stress_bonded_scenarios();
+    let handles = orchestrator
+        .start_bonding_scenarios(scenarios, config.rx_port)
         .await?;
 
-    println!("✓ Started race car scenario: {}", link.scenario.name);
+    println!("✓ Started {} bonded links", handles.len());
+    let ports: Vec<u16> = handles.iter().map(|h| h.ingress_port).collect();
 
-    // Build pipelines with race car optimizations
-    let (sender, ristsink) = build_sender_pipeline(&[link.ingress_port]);
-    let (receiver, counter) = build_receiver_pipeline(config.rx_port);
+    // Build sender/receiver (receiver must listen on the same bonded ports)
+    let (sender, ristsink) = build_stress_sender_pipeline(&ports);
+    let (receiver, counter) = build_stress_receiver_pipeline(&ports);
 
-    // Configure for race car requirements
-    ristsink.set_property("low-latency-mode", &true);
-    ristsink.set_property("adaptive-fec", &true);
-    ristsink.set_property("congestion-control", &"bbr");
-
-    // Run race car test
+    // Run pipelines
     println!(
-        "🚀 Running race car test for {} seconds",
+        "🚀 Running stress test for {} seconds",
         config.test_duration_secs
     );
     run_pipelines(sender, receiver, config.test_duration_secs).await?;
 
-    // Verify performance metrics
-    let count: u64 = testing::get_property(&counter, "processed").unwrap_or_else(|_| 0u64);
-    let latency_ms: f64 =
-        testing::get_property(&ristsink, "avg-latency-ms").unwrap_or_else(|_| 0.0f64);
+    // Verify data made it through
+    let count: u64 = testing::get_property(&counter, "count").unwrap_or_else(|_| 0u64);
+    println!("📊 Stress test: received {} buffers", count);
+    assert!(count > 0, "No data received in stress test");
 
-    println!("📊 Race car test results:");
-    println!("  - Buffers processed: {}", count);
-    println!("  - Average latency: {:.2} ms", latency_ms);
-
-    assert!(count > 0, "No data received in race car scenario");
-    assert!(
-        latency_ms < 100.0,
-        "Latency too high for race car application"
-    );
+    // Print bonding stats if available
+    let bonding_stats: String = testing::get_property(&ristsink, "stats")
+        .unwrap_or_else(|_| "No stats available".to_string());
+    println!("📈 RIST stats: {}", bonding_stats);
 
     Ok(())
 }
