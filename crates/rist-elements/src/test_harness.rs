@@ -479,6 +479,11 @@ pub mod riststats_mock {
         fn build_stats_structure(&self) -> gst::Structure {
             let model = self.model.lock().unwrap();
             let mut builder = gst::Structure::builder("rist/x-sender-stats");
+
+            // Aggregated totals for compatibility with parsers expecting global fields
+            let mut total_original: u64 = 0;
+            let mut total_retrans: u64 = 0;
+            let mut min_rtt: f64 = f64::INFINITY;
             for (i, sess) in model.sessions.iter().enumerate() {
                 let prefix = format!("session-{}.", i);
                 builder = builder
@@ -491,7 +496,20 @@ pub mod riststats_mock {
                         sess.sent_retrans,
                     )
                     .field(&format!("{}round-trip-time", prefix), sess.rtt_ms as f64);
+
+                total_original = total_original.saturating_add(sess.sent_original);
+                total_retrans = total_retrans.saturating_add(sess.sent_retrans);
+                let rtt_f = sess.rtt_ms as f64;
+                if rtt_f > 0.0 && rtt_f < min_rtt {
+                    min_rtt = rtt_f;
+                }
             }
+
+            // Add aggregated fields used by dynbitrate's fallback parser
+            builder = builder
+                .field("sent-original-packets", total_original)
+                .field("sent-retransmitted-packets", total_retrans)
+                .field("round-trip-time", if min_rtt.is_finite() { min_rtt } else { 0.0 });
             builder.build()
         }
     }

@@ -284,6 +284,10 @@ name = "demos"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "gstreamer",
+ "gstreamer-audio",
+ "gstreamer-rtp",
+ "gstreamer-video",
  "netns-testbench",
  "scenarios",
  "serde_json",

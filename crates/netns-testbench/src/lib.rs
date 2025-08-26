@@ -14,6 +14,7 @@ pub mod netns;
 pub mod qdisc;
 pub mod runtime;
 pub mod veth;
+pub mod cellular;
 
 // Re-export commonly used types
 pub use bench::{LinkHandle, NetworkOrchestrator};

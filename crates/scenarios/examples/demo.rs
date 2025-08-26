@@ -3,11 +3,11 @@ use scenarios::*;
 use std::time::Duration;
 
 fn main() {
-    println!("🚀 Enhanced Scenarios Demo");
+    println!("Enhanced Scenarios Demo");
     println!("=========================\n");
 
     // Show basic presets
-    println!("📊 Basic Scenarios:");
+    println!("Basic Scenarios:");
     for scenario in Presets::basic_scenarios() {
         println!("  {:<20} - {}", scenario.name, scenario.description);
     }

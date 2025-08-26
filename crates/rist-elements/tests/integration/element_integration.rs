@@ -392,7 +392,7 @@ async fn test_buffer_flow_integrity() -> Result<(), Box<dyn std::error::Error>> 
     let final_byte_count = *byte_count.lock().unwrap();
 
     println!(
-        "📊 Processed {} buffers, {} bytes",
+        "Processed {} buffers, {} bytes",
         final_buffer_count, final_byte_count
     );
 
@@ -429,7 +429,7 @@ async fn test_error_handling_recovery() -> Result<(), Box<dyn std::error::Error>
                     *error_count_clone.lock().unwrap() += 1;
                 }
                 gst::MessageView::Warning(warn) => {
-                    println!("⚠️  Pipeline warning: {}", warn.error());
+                    println!("Pipeline warning: {}", warn.error());
                     *warning_count_clone.lock().unwrap() += 1;
                 }
                 _ => {}
@@ -470,7 +470,7 @@ async fn test_error_handling_recovery() -> Result<(), Box<dyn std::error::Error>
     let final_warning_count = *warning_count.lock().unwrap();
 
     println!(
-        "📊 Errors: {}, Warnings: {}",
+        "Errors: {}, Warnings: {}",
         final_error_count, final_warning_count
     );
 
@@ -541,7 +541,7 @@ async fn test_multithread_pad_safety() -> Result<(), Box<dyn std::error::Error>>
     assert!(result.is_ok(), "Multi-threaded test should complete within timeout");
 
     let total_accesses = *access_count.lock().unwrap();
-    println!("📊 Total pad accesses: {}", total_accesses);
+    println!("Total pad accesses: {}", total_accesses);
 
     assert!(
         total_accesses >= 20, // At least some accesses should have happened

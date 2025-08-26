@@ -6,6 +6,7 @@
 
 use crate::addr::{AddressConfig, Configurer as AddrConfigurer};
 use crate::netns::Manager as NetNsManager;
+use crate::cellular::CellularProfile;
 use crate::qdisc::QdiscManager;
 use crate::runtime::Scheduler;
 use crate::veth::PairManager as VethManager;
@@ -154,6 +155,126 @@ impl NetworkOrchestrator {
     /// Get active links
     pub fn get_active_links(&self) -> &[LinkHandle] {
         &self.active_links
+    }
+
+    /// Apply a cellular profile to a given link's pair of namespaces/veths
+    pub async fn apply_cellular_profile(
+        &self,
+        link_id: &str,
+        profile: &CellularProfile,
+    ) -> Result<(), TestbenchError> {
+        // Find resources for the link
+        let lr = self
+            .link_resources
+            .iter()
+            .find(|lr| lr.veth_a.contains(link_id) && lr.veth_b.contains(link_id))
+            .ok_or_else(|| TestbenchError::InvalidConfig(format!(
+                "Unknown link id {}",
+                link_id
+            )))?;
+
+        // Build netem args and HTB/TBF shaper via tc in the namespaces
+        let base_dir = self.netns_manager.base_dir_path().clone();
+
+        self.apply_profile_to_iface(&lr.ns_a, &lr.veth_a, profile, &base_dir)
+            .await?;
+        self.apply_profile_to_iface(&lr.ns_b, &lr.veth_b, profile, &base_dir)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn apply_profile_to_iface(
+        &self,
+        ns: &str,
+        iface: &str,
+        profile: &CellularProfile,
+        base_dir: &std::path::Path,
+    ) -> Result<(), TestbenchError> {
+        use tokio::process::Command;
+
+        // 1) Root HTB class
+        let rate = profile.rate_kbit;
+        let mut cmd = Command::new("ip");
+        cmd.arg("netns").arg("exec").arg(ns).arg("tc");
+        cmd.arg("qdisc").arg("replace").arg("dev").arg(iface);
+        cmd.arg("root").arg("handle").arg("1:").arg("htb").arg("default").arg("10");
+        cmd.env("IP_NETNS_DIR", base_dir);
+        let _ = cmd.output().await.map_err(|e| TestbenchError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+
+        // Class
+        let mut cmd = Command::new("ip");
+        cmd.arg("netns").arg("exec").arg(ns).arg("tc");
+        cmd.arg("class").arg("replace").arg("dev").arg(iface);
+        cmd.arg("parent").arg("1:").arg("classid").arg("1:10");
+        cmd.arg("htb").arg("rate").arg(format!("{}kbit", rate));
+        cmd.arg("ceil").arg(format!("{}kbit", rate));
+        cmd.env("IP_NETNS_DIR", base_dir);
+        let _ = cmd.output().await.map_err(|e| TestbenchError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+
+        // 2) Attach netem to the class with delay/jitter/loss/reorder/duplicate/corrupt
+        let mut cmd = Command::new("ip");
+        cmd.arg("netns").arg("exec").arg(ns).arg("tc");
+        cmd.arg("qdisc").arg("replace").arg("dev").arg(iface);
+        cmd.arg("parent").arg("1:10").arg("handle").arg("10:");
+        cmd.arg("netem");
+        // delay jitter correlation
+        cmd.arg("delay")
+            .arg(format!("{}ms", profile.delay_ms))
+            .arg(format!("{}ms", profile.jitter_ms))
+            .arg(format!("{}%", profile.corr_pct));
+
+        // loss model
+        match profile.loss.clone() {
+            crate::cellular::LossModel::Random { pct, corr_pct } => {
+                cmd.arg("loss")
+                    .arg(format!("{}%", pct * 100.0))
+                    .arg(format!("{}%", corr_pct));
+            }
+            crate::cellular::LossModel::Gemodel {
+                p_enter_bad,
+                r_leave_bad,
+                bad_loss,
+                good_loss,
+            } => {
+                cmd.arg("loss")
+                    .arg("gemodel")
+                    .arg(format!("{}", p_enter_bad))
+                    .arg(format!("{}", r_leave_bad))
+                    .arg(format!("{}", bad_loss))
+                    .arg(format!("{}", good_loss));
+            }
+        }
+
+        // reorder
+        if profile.reorder_pct > 0.0 {
+            cmd.arg("reorder")
+                .arg(format!("{}%", profile.reorder_pct))
+                .arg(format!("{}%", profile.reorder_corr_pct));
+        }
+        // duplicate
+        if profile.duplicate_pct > 0.0 {
+            cmd.arg("duplicate").arg(format!("{}%", profile.duplicate_pct));
+        }
+        // corrupt
+        if profile.corrupt_pct > 0.0 {
+            cmd.arg("corrupt").arg(format!("{}%", profile.corrupt_pct));
+        }
+
+        cmd.env("IP_NETNS_DIR", base_dir);
+        let out = cmd
+            .output()
+            .await
+            .map_err(|e| TestbenchError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            return Err(TestbenchError::InvalidConfig(format!(
+                "tc netem apply failed in ns {} on {}: {}",
+                ns, iface, stderr
+            )));
+        }
+
+        Ok(())
     }
 
     /// Set up a single link from a LinkSpec

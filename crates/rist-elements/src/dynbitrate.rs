@@ -35,6 +35,7 @@ pub struct ControllerInner {
     target_loss_pct: Mutex<f64>,
     rtt_floor_ms: Mutex<u64>,
     downscale_keyunit: Mutex<bool>, // Force keyframe on bitrate downscale
+    tick_source: Mutex<Option<glib::SourceId>>, // periodic tick source id for cleanup
     last_change: Mutex<Option<Instant>>,
     // Encoder property detection cache
     bitrate_property: Mutex<Option<(String, f64)>>, // (property_name, scale_factor)
@@ -52,6 +53,7 @@ impl Default for ControllerInner {
             target_loss_pct: Mutex::new(1.0),
             rtt_floor_ms: Mutex::new(10),
             downscale_keyunit: Mutex::new(false),
+            tick_source: Mutex::new(None), // periodic tick source id for cleanup
             last_change: Mutex::new(None),
             bitrate_property: Mutex::new(None),
         }
@@ -165,7 +167,7 @@ impl ObjectImpl for ControllerImpl {
         // Install a periodic tick to poll ristsink stats and adjust bitrate
         // Use the same interval as dispatcher to avoid conflicts
         let weak = obj.downgrade();
-        gst::glib::timeout_add_local(Duration::from_millis(750), move || {
+        let id = gst::glib::timeout_add_local(Duration::from_millis(750), move || {
             // Offset slightly from dispatcher
             if let Some(obj) = weak.upgrade() {
                 obj.imp().tick();
@@ -174,6 +176,13 @@ impl ObjectImpl for ControllerImpl {
                 glib::ControlFlow::Break
             }
         });
+        *self.inner.tick_source.lock() = Some(id);
+    }
+    fn dispose(&self) {
+        if let Some(id) = self.inner.tick_source.lock().take() {
+            id.remove();
+        }
+        // No explicit parent_dispose available in this version; parent cleanup will run automatically.
     }
 
     fn properties() -> &'static [glib::ParamSpec] {
@@ -518,6 +527,15 @@ impl ControllerImpl {
         let rist = rist.unwrap();
         let encoder = encoder.unwrap();
 
+        // Get and report current bitrate
+        let current_kbps = self.get_encoder_bitrate(&encoder);
+        let obj = self.obj();
+        let structure = gst::Structure::builder("dynbitrate/current-bitrate")
+            .field("bitrate-kbps", current_kbps)
+            .build();
+        let msg = gst::message::Element::builder(structure).src(obj.upcast_ref::<gst::Object>()).build();
+        let _ = obj.post_message(msg);
+
         // Parse RIST stats and possibly drive dispatcher weights
         let stats_value: glib::Value = rist.property("stats");
         if let Ok(Some(structure)) = stats_value.get::<Option<gst::Structure>>() {
@@ -720,9 +738,10 @@ impl ControllerImpl {
         // Rate limiting
         let now = Instant::now();
         let last_change = *self.inner.last_change.lock();
-        let since = last_change
-            .map(|t| now.duration_since(t))
-            .unwrap_or(Duration::from_secs(1));
+        let since = match last_change {
+            Some(t) => now.duration_since(t),
+            None => Duration::from_secs(3600), // allow immediate first adjustment
+        };
 
         if since < Duration::from_millis(1200) {
             return; // Too soon to change
@@ -789,9 +808,10 @@ impl ControllerImpl {
 
         let now = Instant::now();
         let last_change = *self.inner.last_change.lock();
-        let since = last_change
-            .map(|t| now.duration_since(t))
-            .unwrap_or(Duration::from_secs(1));
+        let since = match last_change {
+            Some(t) => now.duration_since(t),
+            None => Duration::from_secs(3600), // allow immediate first adjustment
+        };
 
         if since < Duration::from_millis(1200) {
             return; // Too soon to change

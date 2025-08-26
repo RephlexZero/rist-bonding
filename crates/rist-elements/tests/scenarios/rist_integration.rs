@@ -204,11 +204,11 @@ fn test_rist_pipeline_with_transport() {
             if count > 0 {
                 println!("✅ RIST transport pipeline test completed successfully");
             } else {
-                println!("⚠️  RIST transport pipeline ran but no data received");
+                println!("RIST transport pipeline ran but no data received");
             }
         }
         Err(e) => {
-            println!("⚠️  RIST transport pipeline test failed: {}", e);
+            println!("RIST transport pipeline test failed: {}", e);
             // This is not necessarily a failure - RIST transport setup can be complex
         }
     }

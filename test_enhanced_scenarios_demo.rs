@@ -6,10 +6,10 @@ use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🚀 Enhanced Network Scenarios Demo");
+    println!("Enhanced Network Scenarios Demo");
     println!("==================================\n");
 
-    println!("📊 Available Scenario Presets:");
+    println!("Available Scenario Presets:");
     println!("------------------------------");
     
     // Demonstrate basic scenarios

@@ -33,7 +33,7 @@ async fn test_crate_imports_and_orchestrator() {
         }
         Err(e) => {
             println!(
-                "⚠️  NetworkOrchestrator creation failed (expected in CI without privileges): {}",
+                "NetworkOrchestrator creation failed (expected in CI without privileges): {}",
                 e
             );
 

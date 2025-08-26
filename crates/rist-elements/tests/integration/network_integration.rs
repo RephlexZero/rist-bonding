@@ -658,7 +658,7 @@ async fn run_pipelines(
                 }
                 gstreamer::MessageView::Warning(warn) => {
                     println!(
-                        "⚠️  Receiver warning: {} - {}",
+                        "Receiver warning: {} - {}",
                         warn.error(),
                         warn.debug().unwrap_or_else(|| "No debug info".into())
                     );
@@ -692,7 +692,7 @@ async fn run_pipelines(
                     }
                     gstreamer::MessageView::Warning(warn) => {
                         println!(
-                            "⚠️  Sender warning: {} - {}",
+                            "Sender warning: {} - {}",
                             warn.error(),
                             warn.debug().unwrap_or_else(|| "No debug info".into())
                         );
@@ -721,7 +721,7 @@ async fn run_pipelines(
                     }
                     gstreamer::MessageView::Warning(warn) => {
                         println!(
-                            "⚠️  Receiver warning: {} - {}",
+                            "Receiver warning: {} - {}",
                             warn.error(),
                             warn.debug().unwrap_or_else(|| "No debug info".into())
                         );
@@ -778,7 +778,7 @@ async fn test_single_link_rist_transmission() -> Result<(), Box<dyn std::error::
 
     // Run test
     println!(
-        "🚀 Running transmission test for {} seconds",
+        "Running transmission test for {} seconds",
         config.test_duration_secs
     );
     run_pipelines(sender, receiver, config.test_duration_secs).await?;
@@ -786,7 +786,7 @@ async fn test_single_link_rist_transmission() -> Result<(), Box<dyn std::error::
     // Verify data was received
     let count: u64 = testing::get_property(&counter, "count").unwrap_or_else(|_| 0u64);
 
-    println!("📊 Received {} buffers", count);
+    println!("Received {} buffers", count);
     assert!(count > 0, "No data received through RIST link");
 
     Ok(())
@@ -827,7 +827,7 @@ async fn test_dual_link_rist_bonding() -> Result<(), Box<dyn std::error::Error>>
 
     // Run test
     println!(
-        "🚀 Running bonding test for {} seconds",
+        "Running bonding test for {} seconds",
         config.test_duration_secs
     );
     run_pipelines(sender, receiver, config.test_duration_secs).await?;
@@ -835,13 +835,13 @@ async fn test_dual_link_rist_bonding() -> Result<(), Box<dyn std::error::Error>>
     // Verify data was received
     let count: u64 = testing::get_property(&counter, "count").unwrap_or_else(|_| 0u64);
 
-    println!("📊 Received {} buffers through bonding", count);
+    println!("Received {} buffers through bonding", count);
     assert!(count > 0, "No data received through bonded RIST links");
 
     // Verify bonding statistics
     let bonding_stats: String = testing::get_property(&ristsink, "stats")
         .unwrap_or_else(|_| "No stats available".to_string());
-    println!("📈 Bonding stats: {}", bonding_stats);
+    println!("Bonding stats: {}", bonding_stats);
 
     Ok(())
 }
@@ -878,7 +878,7 @@ async fn test_network_degradation_recovery() -> Result<(), Box<dyn std::error::E
 
     // Run test
     println!(
-        "🚀 Running degradation test for {} seconds",
+        "Running degradation test for {} seconds",
         config.test_duration_secs
     );
     run_pipelines(sender, receiver, config.test_duration_secs).await?;
@@ -886,7 +886,7 @@ async fn test_network_degradation_recovery() -> Result<(), Box<dyn std::error::E
     // Verify data was received despite degradation
     let count: u64 = testing::get_property(&counter, "count").unwrap_or_else(|_| 0u64);
 
-    println!("📊 Received {} buffers through degraded network", count);
+    println!("Received {} buffers through degraded network", count);
     assert!(count > 0, "No data received despite network degradation");
 
     // Check recovery metrics
@@ -929,7 +929,7 @@ async fn test_mobile_handover() -> Result<(), Box<dyn std::error::Error>> {
 
     // Run test with handover monitoring
     println!(
-        "🚀 Running handover test for {} seconds",
+        "Running handover test for {} seconds",
         config.test_duration_secs
     );
 
@@ -970,7 +970,7 @@ async fn test_mobile_handover() -> Result<(), Box<dyn std::error::Error>> {
     // Verify data continuity during handover
     let count: u64 = testing::get_property(&counter, "count").unwrap_or_else(|_| 0u64);
 
-    println!("📊 Received {} buffers during handover test", count);
+    println!("Received {} buffers during handover test", count);
     println!("Detected {} handover events", handover_count);
 
     assert!(count > 0, "No data received during mobile handover");
@@ -1036,7 +1036,7 @@ async fn test_stress_multiple_concurrent_links() -> Result<(), Box<dyn std::erro
 
     // Let all scenarios run concurrently
     println!(
-        "🚀 Running {} concurrent scenarios for {} seconds",
+        "Running {} concurrent scenarios for {} seconds",
         handles.len(),
         config.test_duration_secs
     );
@@ -1055,11 +1055,11 @@ async fn test_stress_multiple_concurrent_links() -> Result<(), Box<dyn std::erro
         let count: u64 = testing::get_property(&counter, "count").unwrap_or_else(|_| 0u64);
         total_received += count;
 
-        println!("📊 Scenario {}: received {} buffers", i + 1, count);
+        println!("Scenario {}: received {} buffers", i + 1, count);
     }
 
     println!(
-        "📊 Total received across all scenarios: {} buffers",
+        "Total received across all scenarios: {} buffers",
         total_received
     );
     assert!(total_received > 0, "No data received in stress test");
@@ -1378,7 +1378,7 @@ async fn test_simple_udp_connection() -> Result<(), Box<dyn std::error::Error>> 
 
     // Run the test
     println!(
-        "🚀 Running simple UDP test for {} seconds",
+        "Running simple UDP test for {} seconds",
         config.test_duration_secs
     );
 
@@ -1408,7 +1408,7 @@ async fn test_simple_udp_connection() -> Result<(), Box<dyn std::error::Error>> 
 
     // Check results
     let count = counter.load(Ordering::Relaxed);
-    println!("📊 Simple UDP test: received {} buffers", count);
+    println!("Simple UDP test: received {} buffers", count);
 
     if count == 0 {
         return Err("No data received in UDP test - basic framework issue".into());
@@ -1502,7 +1502,7 @@ async fn test_simple_rist_connection() -> Result<(), Box<dyn std::error::Error>>
 
     // Run the test
     println!(
-        "🚀 Running simple RIST test for {} seconds",
+        "Running simple RIST test for {} seconds",
         config.test_duration_secs
     );
 
@@ -1532,7 +1532,7 @@ async fn test_simple_rist_connection() -> Result<(), Box<dyn std::error::Error>>
 
     // Check results
     let count: u64 = testing::get_property(&counter, "count").unwrap_or_else(|_| 0u64);
-    println!("📊 Simple RIST test: received {} buffers", count);
+    println!("Simple RIST test: received {} buffers", count);
 
     if count == 0 {
         println!("❌ No data received - RIST elements may have issues:");
@@ -1591,8 +1591,8 @@ async fn test_stress_test() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Started {} bonded links", handles.len());
     let ports: Vec<u16> = handles.iter().map(|h| h.ingress_port).collect();
-    println!("📊 Using ingress ports: {:?}", ports);
-    println!("📊 Base egress port: {}", config.rx_port);
+    println!("Using ingress ports: {:?}", ports);
+    println!("Base egress port: {}", config.rx_port);
 
     // Build sender/receiver with simplified receiver for debugging
     println!("🏗️  Building stress sender pipeline...");
@@ -1637,7 +1637,7 @@ async fn test_stress_test() -> Result<(), Box<dyn std::error::Error>> {
 
     // Run pipelines with enhanced error monitoring
     println!(
-        "🚀 Running stress test for {} seconds",
+        "Running stress test for {} seconds",
         config.test_duration_secs
     );
     let result = run_pipelines(sender, receiver, config.test_duration_secs).await;
@@ -1650,12 +1650,12 @@ async fn test_stress_test() -> Result<(), Box<dyn std::error::Error>> {
 
     // Verify data made it through
     let count: u64 = testing::get_property(&counter, "count").unwrap_or_else(|_| 0u64);
-    println!("📊 Stress test: received {} buffers", count);
+    println!("Stress test: received {} buffers", count);
 
     // Print RIST statistics for debugging
     let bonding_stats: String = testing::get_property(&ristsink, "stats")
         .unwrap_or_else(|_| "No stats available".to_string());
-    println!("📈 RIST stats: {}", bonding_stats);
+    println!("RIST stats: {}", bonding_stats);
 
     // More detailed assertion with better error message
     if count == 0 {

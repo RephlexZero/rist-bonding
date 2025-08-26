@@ -7,3 +7,4 @@ mod element_integration;
 mod network_integration;
 mod pipeline_tests;
 mod property_debug;
+mod dynbitrate_behavior;
