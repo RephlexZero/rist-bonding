@@ -1,177 +1,322 @@
-# demos
+# demos# demos
 
-Demo programs showcasing network simulation backends and RIST testing capabilities.
 
-## Overview
 
-This crate contains demonstration programs that showcase the capabilities of the RIST bonding testbench ecosystem. These demos serve as both examples for users learning the system and validation tools for developers working on the various backend implementations.
+Demo programs showcasing network simulation and RIST testing capabilities.Demo programs showcasing network simulation backends and RIST testing capabilities.
 
-## Features
 
-- **Backend Demonstrations**: Examples using the netns-testbench backend
-- **Scenario Showcases**: Demonstrations of various network conditions and presets
+
+## Overview## Overview
+
+
+
+This crate contains demonstration programs that showcase how to use the RIST bonding testbench ecosystem. These demos serve as examples for users learning the system and provide working demonstrations of the `scenarios` and `netns-testbench` integration.This crate contains demonstration programs that showcase the capabilities of the RIST bonding testbench ecosystem. These demos serve as both examples for users learning the system and validation tools for developers working on the various backend implementations.
+
+
+
+## Available Demos## Features
+
+
+
+### `test_netns_demo`- **Backend Demonstrations**: Examples using the netns-testbench backend
+
+Demonstrates the netns-testbench backend with network namespace isolation.- **Scenario Showcases**: Demonstrations of various network conditions and presets
+
 - **RIST Protocol Examples**: Real-world RIST bonding and failover scenarios
-- **Observability Integration**: Examples of metrics collection and monitoring
-- **Performance Comparisons**: Side-by-side backend performance comparisons
+
+```bash- **Network Scenario Simulation**: Pre-configured scenarios for common RIST use cases
+
+# Requires sudo for network namespace operations- **Real-time Performance Analysis**: Live monitoring of network conditions and adaptation
+
+sudo cargo run --bin test_netns_demo- **Performance Comparisons**: Side-by-side backend performance comparisons
+
+```
 
 ## Available Demos
 
-### Network Simulation Demos
+**Features:**
 
-#### `test_network_sim_demo`
-Demonstrates the netns-testbench backend capabilities.
+- Network namespace isolation### Network Simulation Demos
+
+- Realistic traffic control using Linux TC
+
+- Multi-link topology setup#### `test_network_sim_demo`
+
+- Network impairment modeling (latency, loss, bandwidth limits)Demonstrates the netns-testbench backend capabilities.
+
+- Integration with scenarios crate
 
 ```bash
-cargo run --bin test_network_sim_demo
-```
 
-**Features:**
-- Basic network impairment simulation
-- Simple scenario execution
-- Performance measurements
+### `enhanced_scheduler`cargo run --bin test_network_sim_demo
+
+Demonstrates dynamic network condition scheduling and parameter updates.```
+
+
+
+```bash**Features:**
+
+# Requires sudo for network namespace operations- Basic network impairment simulation
+
+sudo cargo run --bin enhanced_scheduler- Simple scenario execution
+
+```- Performance measurements
+
 - Legacy backend compatibility
 
-#### `test_netns_demo`
-Showcases the advanced netns-testbench backend.
+**Features:**
 
-```bash
+- Time-based network condition changes#### `test_netns_demo`
+
+- Complex scheduling scenariosShowcases the advanced netns-testbench backend.
+
+- Real-time parameter updates during simulation
+
+- Performance impact analysis```bash
+
 # Requires sudo for network namespace operations
-sudo cargo run --bin test_netns_demo
+
+## Usage Examplessudo cargo run --bin test_netns_demo
+
 ```
 
+### Basic Network Namespace Testing
+
 **Features:**
-- Network namespace isolation
+
+The demos show how to integrate the scenarios and netns-testbench crates:- Network namespace isolation
+
 - Realistic traffic control
-- Multi-link topology setup
-- Advanced impairment modeling
+
+```rust- Multi-link topology setup
+
+use scenarios::presets::Presets;- Advanced impairment modeling
+
+use netns_testbench::NetworkOrchestrator;
 
 ### Scenario Demonstrations
 
-#### `enhanced_scheduler`
-Demonstrates dynamic network condition scheduling.
+#[tokio::main]
 
-```bash
-sudo cargo run --bin enhanced_scheduler
+async fn main() -> Result<(), Box<dyn std::error::Error>> {#### `enhanced_scheduler`
+
+    // Use a predefined scenarioDemonstrates dynamic network condition scheduling.
+
+    let scenario = Presets::mobile_4g("demo");
+
+    ```bash
+
+    // Create orchestrator with network namespace backendsudo cargo run --bin enhanced_scheduler
+
+    let mut orchestrator = NetworkOrchestrator::new(5004).await?;```
+
+    
+
+    // Apply the scenario**Features:**
+
+    orchestrator.apply_scenario(&scenario).await?;- Time-based network condition changes
+
+    - Complex scheduling scenarios
+
+    // Run for duration specified in scenario- Real-time parameter updates
+
+    tokio::time::sleep(std::time::Duration::from_secs(60)).await;- Performance impact analysis
+
+    
+
+    Ok(())#### `test_race_car_demo`
+
+}High-performance networking demonstration simulating racing telemetry.
+
 ```
 
-**Features:**
-- Time-based network condition changes
-- Complex scheduling scenarios
-- Real-time parameter updates
-- Performance impact analysis
-
-#### `test_race_car_demo`
-High-performance networking demonstration simulating racing telemetry.
-
 ```bash
-cargo run --bin test_race_car_demo
+
+### Custom Scenario Buildingcargo run --bin test_race_car_demo
+
 ```
-
-**Features:**
-- High-throughput data streaming
-- Low-latency requirements
-- Multi-link bonding
-- Real-time performance monitoring
-
-### Observability Demos
-
-#### `observability_demo`
-Comprehensive monitoring and metrics collection demonstration.
-
-```bash
-cargo run --bin observability_demo --features observability-demo
-```
-
-**Features:**
-- Prometheus metrics export
-- CSV data recording
-- Real-time dashboard setup
-- Performance analysis tools
-
-## Usage Examples
-
-### Basic Network Simulation
 
 ```rust
-// From test_network_sim_demo.rs
-use scenarios::presets::Presets;
-use netlink_sim::NetworkSimulator;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+use scenarios::{ScenarioBuilder, Schedule};**Features:**
+
+- High-throughput data streaming
+
+let scenario = ScenarioBuilder::new("custom_demo")- Low-latency requirements
+
+    .description("Custom network conditions")- Multi-link bonding
+
+    .duration_seconds(120)- Real-time performance monitoring
+
+    .add_link("primary", |link| {
+
+        link.bandwidth_mbps(10.0)## Usage Examples
+
+            .latency_ms(20.0)
+
+            .packet_loss_percent(0.5)### Basic Network Simulation
+
+    })
+
+    .add_link("backup", |link| {```rust
+
+        link.bandwidth_mbps(5.0)// From test_network_sim_demo.rs
+
+            .latency_ms(100.0) use scenarios::presets::Presets;
+
+            .packet_loss_percent(1.0)use netlink_sim::NetworkSimulator;
+
+    })
+
+    .build();#[tokio::main]
+
+```async fn main() -> Result<(), Box<dyn std::error::Error>> {
+
     // Create a 4G mobile scenario
-    let scenario = Presets::mobile_4g("demo");
+
+## Prerequisites    let scenario = Presets::mobile_4g("demo");
+
     
-    // Setup simulator
-    let mut simulator = NetworkSimulator::new();
-    simulator.apply_scenario(&scenario).await?;
-    
+
+### Linux Requirements    // Setup simulator
+
+- Linux system with network namespace support    let mut simulator = NetworkSimulator::new();
+
+- `sudo` privileges for network namespace operations    simulator.apply_scenario(&scenario).await?;
+
+- Traffic control (`tc`) utilities installed    
+
     // Run demo traffic
-    simulator.run_demo_traffic(Duration::from_secs(60)).await?;
-    
-    // Display results
-    let stats = simulator.get_statistics();
+
+### Build Requirements    simulator.run_demo_traffic(Duration::from_secs(60)).await?;
+
+```bash    
+
+# Install if not present    // Display results
+
+sudo apt-get install iproute2 iptables    let stats = simulator.get_statistics();
+
     println!("Average throughput: {} bps", stats.average_throughput);
-    println!("Packet loss: {:.2}%", stats.packet_loss_percent);
-    
-    Ok(())
-}
+
+# Build the demos    println!("Packet loss: {:.2}%", stats.packet_loss_percent);
+
+cargo build --bin test_netns_demo    
+
+cargo build --bin enhanced_scheduler    Ok(())
+
+```}
+
 ```
+
+## Running the Demos
 
 ### Advanced Network Namespace Testing
 
-```rust
-// From test_netns_demo.rs
-use netns_testbench::NetNsTestbench;
+### Environment Setup
+
+```bash```rust
+
+# Enable detailed logging// From test_netns_demo.rs
+
+export RUST_LOG=demos=info,netns_testbench=debug,scenarios=infouse netns_testbench::NetNsTestbench;
+
 use scenarios::ScenarioBuilder;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+# Set output directory (optional)
+
+export DEMO_OUTPUT_DIR=./demo_results#[tokio::main]
+
+```async fn main() -> Result<(), Box<dyn std::error::Error>> {
+
     // Create custom scenario with degrading conditions
-    let scenario = ScenarioBuilder::new("degradation_test")
-        .add_link("primary", |link| {
-            link.bandwidth_mbps(10.0)
-                .latency_ms(20.0)
+
+### Execution    let scenario = ScenarioBuilder::new("degradation_test")
+
+```bash        .add_link("primary", |link| {
+
+# Run the basic network namespace demo            link.bandwidth_mbps(10.0)
+
+sudo cargo run --bin test_netns_demo                .latency_ms(20.0)
+
                 .schedule(Schedule::new()
-                    .at_time(30.0, |spec| spec.packet_loss_percent(1.0))
-                    .at_time(60.0, |spec| spec.packet_loss_percent(5.0))
+
+# Run the enhanced scheduler demo                    .at_time(30.0, |spec| spec.packet_loss_percent(1.0))
+
+sudo cargo run --bin enhanced_scheduler                    .at_time(60.0, |spec| spec.packet_loss_percent(5.0))
+
                 )
-        })
-        .build();
-    
+
+# Run with verbose logging        })
+
+sudo RUST_LOG=debug cargo run --bin test_netns_demo        .build();
+
+```    
+
     // Setup testbench
-    let mut testbench = NetNsTestbench::new(Default::default()).await?;
+
+## Integration with Other Crates    let mut testbench = NetNsTestbench::new(Default::default()).await?;
+
     testbench.apply_scenario(&scenario).await?;
-    
-    // Run RIST bonding test
-    let results = testbench.run_rist_bonding_test(
-        "rist://192.168.100.2:5004",
-        Duration::from_secs(120)
+
+### Scenarios Integration    
+
+The demos extensively use the `scenarios` crate:    // Run RIST bonding test
+
+- Predefined scenarios via `Presets`    let results = testbench.run_rist_bonding_test(
+
+- Custom scenario building with `ScenarioBuilder`        "rist://192.168.100.2:5004",
+
+- Network condition scheduling        Duration::from_secs(120)
+
     ).await?;
-    
-    // Display comprehensive results
-    println!("RIST Bonding Demo Results:");
-    println!("========================");
-    for (time, stats) in results.time_series {
+
+### Network Testbench Integration      
+
+Direct integration with `netns-testbench`:    // Display comprehensive results
+
+- `NetworkOrchestrator` for network namespace management    println!("RIST Bonding Demo Results:");
+
+- Scenario application and execution    println!("========================");
+
+- Real-time network parameter updates    for (time, stats) in results.time_series {
+
         println!("{}s: {} bps, {:.1}% loss", 
-                time, stats.throughput, stats.packet_loss);
+
+## Educational Use                time, stats.throughput, stats.packet_loss);
+
     }
-    
-    Ok(())
-}
-```
+
+These demos are designed for:    
+
+- **Learning**: Understanding how to integrate scenarios with network simulation    Ok(())
+
+- **Validation**: Testing network conditions and RIST behavior}
+
+- **Development**: Serving as templates for custom testing scenarios```
+
+- **Demonstration**: Showing testbench capabilities
 
 ### Performance Comparison Demo
 
+Each demo includes detailed comments explaining the networking concepts, scenario setup, and measurement techniques being demonstrated.
+
 ```rust
-// Compare backends side-by-side
+
+## Output and Results// Compare backends side-by-side
+
 use demos::performance_comparison;
 
-#[tokio::main]  
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let scenario = Presets::mobile_4g("comparison");
+The demos provide:
+
+- **Console Output**: Live progress and network condition updates#[tokio::main]  
+
+- **Logging**: Detailed operation logs via `tracing`async fn main() -> Result<(), Box<dyn std::error::Error>> {
+
+- **Error Handling**: Comprehensive error reporting and recovery    let scenario = Presets::mobile_4g("comparison");
+
     
-    // Test with netns-testbench backend
+
+Results include network statistics, timing information, and scenario execution details logged to the console during runtime.    // Test with netns-testbench backend
     let netlink_results = performance_comparison::test_with_netlink_sim(&scenario).await?;
     
     // Test with netns-testbench backend  
@@ -194,9 +339,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```toml
 # Enable specific demo features
 [features]
-netns-sim = ["netns-testbench", "tracing", "tracing-subscriber"]
 netns-sim = ["netns-testbench", "tracing-subscriber"]
-observability-demo = ["observability", "tracing", "tracing-subscriber"]
 ```
 
 ### Environment Configuration
@@ -209,9 +352,6 @@ export RUST_LOG=demos=info,netns_testbench=debug
 
 # Set output directory for results
 export DEMO_OUTPUT_DIR=./demo_results
-
-# Configure Prometheus metrics endpoint
-export PROMETHEUS_PORT=9090
 ```
 
 ## Demo Scenarios
@@ -263,19 +403,6 @@ let custom = ScenarioBuilder::new("custom_demo")
     .build();
 ```
 
-### Observability Integration
-```rust
-use observability::{MetricsCollector, CsvExporter};
-
-// Collect metrics during demo
-let mut collector = MetricsCollector::new();
-// ... run demo ...
-
-// Export results
-let exporter = CsvExporter::new("demo_metrics.csv");
-exporter.export(&collector)?;
-```
-
 ### RIST Elements Integration
 ```rust
 use rist_elements::testing::RistTestPipeline;
@@ -299,9 +426,6 @@ cargo run --bin test_network_sim_demo
 
 # For netns-testbench demos (requires sudo)
 sudo cargo run --bin test_netns_demo
-
-# For observability demos
-cargo run --bin observability_demo --features observability-demo
 ```
 
 ### Output Formats

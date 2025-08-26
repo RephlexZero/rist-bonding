@@ -459,6 +459,7 @@ fn build_simple_receiver_pipeline(ports: &[u16]) -> (gstreamer::Pipeline, gstrea
 }
 
 /// Create a simplified receiver pipeline for single-port testing
+#[allow(dead_code)]
 fn build_simple_receiver_pipeline_single(
     rx_port: u16,
 ) -> (gstreamer::Pipeline, gstreamer::Element) {
@@ -497,6 +498,7 @@ fn build_simple_receiver_pipeline_single(
 
     (pipeline, counter)
 }
+#[allow(dead_code)]
 fn build_stress_receiver_pipeline_single(
     rx_port: u16,
 ) -> (gstreamer::Pipeline, gstreamer::Element) {
@@ -861,7 +863,7 @@ async fn test_network_degradation_recovery() -> Result<(), Box<dyn std::error::E
 
     // Start with degrading network scenario
     let scenario = TestScenario::degrading_network();
-    let link = orchestrator
+    let _link = orchestrator
         .start_scenario(scenario, config.rx_port)
         .await?;
 
@@ -912,7 +914,7 @@ async fn test_mobile_handover() -> Result<(), Box<dyn std::error::Error>> {
 
     // Start mobile handover scenario
     let scenario = TestScenario::mobile_handover();
-    let link = orchestrator
+    let _link = orchestrator
         .start_scenario(scenario, config.rx_port)
         .await?;
 
@@ -953,7 +955,7 @@ async fn test_mobile_handover() -> Result<(), Box<dyn std::error::Error>> {
 
         if current_link != "primary" {
             handover_count += 1;
-            println!("🔄 Handover detected to: {}", current_link);
+            println!("Handover detected to: {}", current_link);
         }
     }
 
@@ -969,7 +971,7 @@ async fn test_mobile_handover() -> Result<(), Box<dyn std::error::Error>> {
     let count: u64 = testing::get_property(&counter, "count").unwrap_or_else(|_| 0u64);
 
     println!("📊 Received {} buffers during handover test", count);
-    println!("🔄 Detected {} handover events", handover_count);
+    println!("Detected {} handover events", handover_count);
 
     assert!(count > 0, "No data received during mobile handover");
 
@@ -1015,7 +1017,7 @@ async fn test_stress_multiple_concurrent_links() -> Result<(), Box<dyn std::erro
     // Create and run multiple pipeline pairs
     let mut handles = Vec::new();
 
-    for (i, link) in links.iter().enumerate() {
+    for (i, _link) in links.iter().enumerate() {
         let port = config.rx_port + (i as u16 * 10);
         let (sender, _) = build_sender_pipeline_to_rx(port, 1);
         let (receiver, counter) = build_receiver_pipeline(port);

@@ -295,6 +295,39 @@ pub fn create_test_source() -> gst::Element {
         .expect("Failed to create audiotestsrc")
 }
 
+/// Create an RTP test source for RIST dispatcher testing
+pub fn create_rtp_test_source() -> gst::Element {
+    // Create a simple RTP source using rtpvrawpay which doesn't need encoder dependencies
+    let bin = gst::Bin::new();
+    
+    let videotestsrc = gst::ElementFactory::make("videotestsrc")
+        .property("num-buffers", 100)
+        .build()
+        .expect("Failed to create videotestsrc");
+        
+    let videoconvert = gst::ElementFactory::make("videoconvert")
+        .build()
+        .expect("Failed to create videoconvert");
+        
+    let rtpvrawpay = gst::ElementFactory::make("rtpvrawpay")
+        .build()
+        .expect("Failed to create rtpvrawpay");
+    
+    bin.add_many([&videotestsrc, &videoconvert, &rtpvrawpay])
+        .expect("Failed to add elements to bin");
+        
+    gst::Element::link_many([&videotestsrc, &videoconvert, &rtpvrawpay])
+        .expect("Failed to link elements in bin");
+    
+    // Add ghost pad
+    let src_pad = rtpvrawpay.static_pad("src").unwrap();
+    let ghost_pad = gst::GhostPad::with_target(&src_pad).unwrap();
+    ghost_pad.set_active(true).unwrap();
+    bin.add_pad(&ghost_pad).unwrap();
+    
+    bin.upcast()
+}
+
 /// Create a fake sink for testing
 pub fn create_fake_sink() -> gst::Element {
     gst::ElementFactory::make("fakesink")

@@ -237,9 +237,9 @@ impl ObjectImpl for ControllerImpl {
         PROPS.as_ref()
     }
 
-    fn set_property(&self, id: usize, value: &glib::Value, _pspec: &glib::ParamSpec) {
-        match id {
-            0 => {
+    fn set_property(&self, _id: usize, value: &glib::Value, pspec: &glib::ParamSpec) {
+        match pspec.name() {
+            "encoder" => {
                 let encoder = value.get::<Option<gst::Element>>().ok().flatten();
                 if let Some(ref enc) = encoder {
                     // Detect and cache encoder bitrate property
@@ -247,13 +247,13 @@ impl ObjectImpl for ControllerImpl {
                 }
                 *self.inner.encoder.lock() = encoder;
             }
-            1 => *self.inner.rist.lock() = value.get::<Option<gst::Element>>().ok().flatten(),
-            2 => *self.inner.min_kbps.lock() = value.get::<u32>().unwrap_or(500),
-            3 => *self.inner.max_kbps.lock() = value.get::<u32>().unwrap_or(8000),
-            4 => *self.inner.step_kbps.lock() = value.get::<u32>().unwrap_or(250),
-            5 => *self.inner.target_loss_pct.lock() = value.get::<f64>().unwrap_or(0.5),
-            6 => *self.inner.rtt_floor_ms.lock() = value.get::<u64>().unwrap_or(40),
-            7 => {
+            "rist" => *self.inner.rist.lock() = value.get::<Option<gst::Element>>().ok().flatten(),
+            "min-kbps" => *self.inner.min_kbps.lock() = value.get::<u32>().unwrap_or(500),
+            "max-kbps" => *self.inner.max_kbps.lock() = value.get::<u32>().unwrap_or(8000),
+            "step-kbps" => *self.inner.step_kbps.lock() = value.get::<u32>().unwrap_or(250),
+            "target-loss-pct" => *self.inner.target_loss_pct.lock() = value.get::<f64>().unwrap_or(0.5),
+            "min-rtx-rtt-ms" => *self.inner.rtt_floor_ms.lock() = value.get::<u64>().unwrap_or(40),
+            "dispatcher" => {
                 let disp = value.get::<Option<gst::Element>>().ok().flatten();
                 *self.inner.dispatcher.lock() = disp.clone();
 
@@ -265,26 +265,28 @@ impl ObjectImpl for ControllerImpl {
                     gst::debug!(CAT, "Disconnected from dispatcher");
                 }
             }
-            8 => {
+            "downscale-keyunit" => {
                 let downscale_keyunit = value.get::<bool>().unwrap_or(false);
                 *self.inner.downscale_keyunit.lock() = downscale_keyunit;
                 gst::debug!(CAT, "Set downscale-keyunit: {}", downscale_keyunit);
             }
-            _ => {}
+            _ => {
+                gst::warning!(CAT, "Unknown property: {}", pspec.name());
+            }
         }
     }
 
-    fn property(&self, id: usize, _pspec: &glib::ParamSpec) -> glib::Value {
-        match id {
-            0 => self.inner.encoder.lock().to_value(),
-            1 => self.inner.rist.lock().to_value(),
-            2 => self.inner.min_kbps.lock().to_value(),
-            3 => self.inner.max_kbps.lock().to_value(),
-            4 => self.inner.step_kbps.lock().to_value(),
-            5 => self.inner.target_loss_pct.lock().to_value(),
-            6 => self.inner.rtt_floor_ms.lock().to_value(),
-            7 => self.inner.dispatcher.lock().to_value(),
-            8 => self.inner.downscale_keyunit.lock().to_value(),
+    fn property(&self, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
+        match pspec.name() {
+            "encoder" => self.inner.encoder.lock().to_value(),
+            "rist" => self.inner.rist.lock().to_value(),
+            "min-kbps" => self.inner.min_kbps.lock().to_value(),
+            "max-kbps" => self.inner.max_kbps.lock().to_value(),
+            "step-kbps" => self.inner.step_kbps.lock().to_value(),
+            "target-loss-pct" => self.inner.target_loss_pct.lock().to_value(),
+            "min-rtx-rtt-ms" => self.inner.rtt_floor_ms.lock().to_value(),
+            "dispatcher" => self.inner.dispatcher.lock().to_value(),
+            "downscale-keyunit" => self.inner.downscale_keyunit.lock().to_value(),
             _ => {
                 // Return a safe default value for unknown properties
                 "".to_value()

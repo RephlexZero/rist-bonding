@@ -26,7 +26,7 @@ You have three options:
 1) Run those tests with sudo (quickest):
 
 ```bash
-sudo -E cargo test -p integration_tests -- --nocapture
+sudo -E cargo test -p rist-elements --test integration_tests -- --nocapture
 ```
 
 2) Grant capabilities to built test binaries (no sudo at runtime):

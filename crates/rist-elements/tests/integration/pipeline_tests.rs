@@ -270,7 +270,7 @@ fn test_dispatcher_caps_negotiation() {
 
     let pipeline = gst::Pipeline::new();
     let dispatcher = create_dispatcher_for_testing(Some(&[0.5, 0.5]));
-    let source = create_test_source();
+    let source = create_rtp_test_source();
     let sink = create_counter_sink();
 
     pipeline
@@ -291,7 +291,7 @@ fn test_dispatcher_caps_negotiation() {
 
     // Check that caps were negotiated on pads
     let sink_pad = dispatcher.static_pad("sink").unwrap();
-    let src_pad = dispatcher.static_pad("src_0").unwrap();
+    let src_pad = dispatcher.request_pad_simple("src_%u").unwrap();
 
     let sink_caps = sink_pad.current_caps();
     let src_caps = src_pad.current_caps();

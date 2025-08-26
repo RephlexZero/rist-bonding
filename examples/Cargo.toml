@@ -14,4 +14,3 @@ tracing-subscriber = "0.3"
 
 # Local crates with enhanced features
 scenarios = { path = "../crates/scenarios" }
-observability = { path = "../crates/observability" }

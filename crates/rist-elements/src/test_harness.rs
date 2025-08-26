@@ -119,12 +119,12 @@ pub mod counter_sink {
             PROPS.as_ref()
         }
 
-        fn property(&self, id: usize, _pspec: &glib::ParamSpec) -> glib::Value {
-            match id {
-                0 => self.inner.count.load(Ordering::Relaxed).to_value(),
-                1 => (self.inner.got_eos.load(Ordering::Relaxed) != 0).to_value(),
-                2 => (self.inner.got_flush_start.load(Ordering::Relaxed) != 0).to_value(),
-                3 => (self.inner.got_flush_stop.load(Ordering::Relaxed) != 0).to_value(),
+        fn property(&self, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
+            match pspec.name() {
+                "count" => self.inner.count.load(Ordering::Relaxed).to_value(),
+                "got-eos" => (self.inner.got_eos.load(Ordering::Relaxed) != 0).to_value(),
+                "got-flush-start" => (self.inner.got_flush_start.load(Ordering::Relaxed) != 0).to_value(),
+                "got-flush-stop" => (self.inner.got_flush_stop.load(Ordering::Relaxed) != 0).to_value(),
                 _ => false.to_value(),
             }
         }

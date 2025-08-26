@@ -31,7 +31,6 @@ Linux network namespace testbench for RIST bonding with netlink-based qdisc cont
 
 ### Integration Points
 - **Scenarios Integration**: Execute scenarios from the scenarios crate
-- **Observability Integration**: Comprehensive metrics collection
 - **RIST Testing**: Specialized RIST protocol testing capabilities
 
 ## Prerequisites
@@ -229,9 +228,6 @@ let interface_stats = metrics.collect_interface_stats("veth0").await?;
 
 // Collect qdisc statistics  
 let qdisc_stats = metrics.collect_qdisc_stats("veth0").await?;
-
-// Export to observability system
-observability::export_netns_metrics(&interface_stats, &qdisc_stats).await?;
 ```
 
 ## Testing Features

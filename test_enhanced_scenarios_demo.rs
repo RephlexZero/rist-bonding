@@ -131,7 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bufferbloated = DirectionSpec::typical().with_bufferbloat(0.5);
     println!("  Bufferbloat simulation: delay multiplier applied");
     
-    println!("\n🎯 Architecture Benefits:");
+    println!("\nArchitecture Benefits:");
     println!("------------------------");
     println!("  Pure data models - no OS dependencies in scenarios crate");
     println!("  Enhanced scheduling - constant, steps, Markov, replay");

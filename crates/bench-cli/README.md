@@ -12,7 +12,9 @@ Command-line tool for running RIST network testbench scenarios.
 - **Custom Network Conditions**: Define and execute custom network impairments
 - **Network Backend**: Support for the netns-testbench backend
 - **Automated Testing**: Batch execution of test suites with reporting
-- **Metrics Collection**: Integration with observability for performance monitoring
+- **Load Testing**: High-throughput traffic generation for network elements
+- **Network Condition Simulation**: Realistic network impairment modeling
+- **Benchmarking Suite**: Comprehensive performance measurement tools
 - **Configuration Management**: JSON-based scenario configuration
 
 ## Installation

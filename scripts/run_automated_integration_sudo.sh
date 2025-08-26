@@ -16,7 +16,7 @@ mkdir -p "$TEST_ARTIFACTS_DIR"
 export CARGO_TARGET_DIR="${ROOT_DIR}/target"
 
 # Build the test binary as the current user
-cargo test -p integration_tests --test automated_integration --no-run
+cargo test -p rist-elements --test integration_tests --no-run
 
 # Variables to preserve for GStreamer plugins and runtime
 ENV_KEEP=(
@@ -29,4 +29,4 @@ ENV_KEEP=(
 )
 
 echo "Running automated integration tests with sudo (netns required)"
-sudo -E env "${ENV_KEEP[@]}" cargo test -p integration_tests --test automated_integration -- --nocapture
+sudo -E env "${ENV_KEEP[@]}" cargo test -p rist-elements --test integration_tests -- --nocapture

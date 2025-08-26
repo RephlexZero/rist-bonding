@@ -73,6 +73,5 @@ let dynamic_scenario = ScenarioBuilder::new("dynamic_test")
 This crate is designed to work seamlessly with:
 - `netns-testbench`: Linux network namespace testing
 - `netns-testbench`: Network namespace simulation backend
-- `observability`: Metrics collection and monitoring
 
 The scenarios defined here can be executed by either backend while maintaining consistent behavior and measurement capabilities.

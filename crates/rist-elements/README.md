@@ -278,14 +278,7 @@ loop {
 
 ### Performance Monitoring
 
-```rust
-use observability::{MetricsCollector, GstBusCollector};
-
-// Setup metrics collection
-let mut metrics_collector = MetricsCollector::new();
-let bus_collector = GstBusCollector::new(pipeline.bus().unwrap());
-
-// Monitor element performance
+The RIST elements emit performance metrics via GStreamer bus messages that can be monitored:
 bus_collector.add_element_filter("ristdispatcher", |msg| {
     match msg.view() {
         gst::MessageView::Element(element_msg) => {

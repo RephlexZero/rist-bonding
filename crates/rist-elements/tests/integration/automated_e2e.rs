@@ -4,7 +4,7 @@
 //! Converted from examples/end_to_end_test.rs to run under `cargo test`.
 
 use anyhow::Result;
-use integration_tests::{RistIntegrationTest, TestResults, ValidationReport};
+use super::{RistIntegrationTest, TestResults, ValidationReport};
 use serial_test::serial;
 use std::time::Instant;
 use tracing::{debug, info};

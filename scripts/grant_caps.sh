@@ -8,7 +8,7 @@ set -euo pipefail
 #   ./scripts/grant_caps.sh
 # Then run the built test binaries directly (no sudo), e.g.:
 #   target/debug/deps/integration_tests-<hash> --nocapture
-#   target/debug/deps/automated_integration-<hash> --nocapture
+#   target/debug/deps/unit_tests-<hash> --nocapture
 #
 # Notes:
 # - You must re-run this script after re-compiling if the filenames change.
@@ -18,15 +18,15 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-echo "[grant_caps] Building tests (no-run) for integration_tests..."
-cargo test -p integration_tests --no-run
+echo "[grant_caps] Building tests (no-run) for rist-elements..."
+cargo test -p rist-elements --no-run
 
 echo "[grant_caps] Locating test binaries..."
-mapfile -t BINARIES < <(ls -1 target/debug/deps | grep -E '^(integration_tests|automated_integration)-[0-9a-f]+$' || true)
+mapfile -t BINARIES < <(ls -1 target/debug/deps | grep -E '^(integration_tests|unit_tests|stress_tests|scenario_tests)-[0-9a-f]+$' || true)
 
 if [[ ${#BINARIES[@]} -eq 0 ]]; then
   echo "[grant_caps] No test binaries found under target/debug/deps."
-  echo "             Run: cargo test -p integration_tests --no-run"
+  echo "             Run: cargo test -p rist-elements --no-run"
   exit 1
 fi
 
