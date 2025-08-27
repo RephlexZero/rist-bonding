@@ -17,81 +17,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
-    name: Code Quality
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-      
-      - name: Cache cargo build artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            . -> target
-      
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-      
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config \
-            libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev \
-            libgstreamer-plugins-bad1.0-dev
-      
-      - name: Run clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-
-  test:
-    name: Tests
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo build artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            . -> target
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config \
-            libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev \
-            libgstreamer-plugins-bad1.0-dev \
-            gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good \
-            gstreamer1.0-plugins-bad \
-            iproute2
-
-      - name: Run unit tests
-        run: cargo test --workspace --lib --locked --verbose
-
-      - name: Run integration tests
-        run: cargo test --workspace --test '*' --locked --verbose
-        env:
-          # Skip privileged network tests in CI
-          SKIP_NETWORK_NAMESPACE_TESTS: "1"
-
-  docker-test:
-    name: Docker Integration
+  docker-ci:
+    name: Docker CI Pipeline
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -110,14 +37,28 @@ jobs:
           echo "Waiting for services to start..."
           sleep 10
       
-      - name: Run containerized tests
+      - name: Check formatting
         run: |
-          docker compose -f docker-compose.ci.yml exec -T rist-bonding-dev bash -c "
-            echo 'Testing development setup...'
-            cargo --version
-            gst-inspect-1.0 --version
-            cargo test --workspace --lib --verbose
-          "
+          docker compose -f docker-compose.ci.yml exec -T rist-bonding-dev \
+            cargo fmt --all -- --check
+      
+      - name: Run clippy
+        run: |
+          docker compose -f docker-compose.ci.yml exec -T rist-bonding-dev \
+            cargo clippy --workspace --all-targets --all-features -- -D warnings
+      
+      - name: Run unit tests
+        run: |
+          docker compose -f docker-compose.ci.yml exec -T rist-bonding-dev \
+            cargo test --workspace --lib --locked --verbose
+      
+      - name: Run integration tests
+        run: |
+          docker compose -f docker-compose.ci.yml exec -T rist-bonding-dev \
+            cargo test --workspace --test '*' --locked --verbose
+        env:
+          # Skip privileged network tests in CI
+          SKIP_NETWORK_NAMESPACE_TESTS: "1"
       
       - name: Tear down services
         if: always()

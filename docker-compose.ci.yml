@@ -3,14 +3,23 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      cache_from:
+        - rist-bonding-dev:latest
     container_name: rist-bonding-dev-ci
     cap_add:
       - NET_ADMIN
     volumes:
       - .:/workspace
       - /lib/modules:/lib/modules:ro
+      # Use named volume for cargo cache in CI
+      - cargo-cache:/root/.cargo
     working_dir: /workspace
     command: sleep infinity
+    environment:
+      - CARGO_HOME=/root/.cargo
     # Enable interactive mode for CI
     stdin_open: true
     tty: true
+
+volumes:
+  cargo-cache:
