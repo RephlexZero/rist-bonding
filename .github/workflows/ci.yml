@@ -17,20 +17,163 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  docker-ci:
-    name: Docker CI Pipeline
+  build-and-push:
+    name: Build & Push Container
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+      cache-hit: ${{ steps.cache-check.outputs.cache-hit }}
+      should-build: ${{ steps.changes.outputs.should-build }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history for change detection
+      
+      - name: Check for Docker-related changes
+        id: changes
+        run: |
+          # Check if this is the first commit or if Docker-related files changed
+          if git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+            # Check for changes in Docker-related files since last commit
+            if git diff --name-only HEAD~1 HEAD | grep -E '^(Dockerfile|docker-compose.*\.yml|\.dockerignore)$'; then
+              echo "should-build=true" >> $GITHUB_OUTPUT
+              echo "🔨 Docker-related files changed, will build"
+            else
+              echo "should-build=false" >> $GITHUB_OUTPUT
+              echo "✅ No Docker-related changes, checking for existing image"
+            fi
+          else
+            # First commit, need to build
+            echo "should-build=true" >> $GITHUB_OUTPUT
+            echo "🔨 First commit, will build"
+          fi
+      
+      - name: Set up Docker Buildx
+        if: steps.changes.outputs.should-build == 'true'
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Log in to GitHub Container Registry
+        if: steps.changes.outputs.should-build == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Check if image exists (for non-Docker changes)
+        id: cache-check
+        if: steps.changes.outputs.should-build == 'false'
+        run: |
+          # For non-Docker changes, try to find the most recent image
+          # Check current SHA first, then latest
+          CURRENT_IMAGE="ghcr.io/${{ github.repository }}/rist-bonding-dev:${{ github.sha }}"
+          LATEST_IMAGE="ghcr.io/${{ github.repository }}/rist-bonding-dev:latest"
+          
+          docker login ghcr.io -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
+          
+          if docker manifest inspect $CURRENT_IMAGE >/dev/null 2>&1; then
+            echo "cache-hit=true" >> $GITHUB_OUTPUT
+            echo "✅ Found image for current SHA: $CURRENT_IMAGE"
+          elif docker manifest inspect $LATEST_IMAGE >/dev/null 2>&1; then
+            echo "cache-hit=true" >> $GITHUB_OUTPUT
+            echo "✅ Using latest image: $LATEST_IMAGE"
+            # Update the image output to use latest instead of SHA
+            echo "image=$LATEST_IMAGE" >> $GITHUB_OUTPUT
+          else
+            echo "cache-hit=false" >> $GITHUB_OUTPUT
+            echo "❌ No suitable image found, forcing build"
+            echo "should-build=true" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Extract metadata
+        id: meta
+        if: steps.changes.outputs.should-build == 'true' || (steps.changes.outputs.should-build == 'false' && steps.cache-check.outputs.cache-hit == 'false')
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/rist-bonding-dev
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+      
+      - name: Build and push Docker image
+        if: steps.changes.outputs.should-build == 'true' || (steps.changes.outputs.should-build == 'false' && steps.cache-check.outputs.cache-hit == 'false')
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      
+      - name: Output image reference
+        id: image
+        run: |
+          if [ "${{ steps.cache-check.outputs.image }}" != "" ]; then
+            # Use the image determined by cache check (might be latest)
+            echo "image=${{ steps.cache-check.outputs.image }}" >> $GITHUB_OUTPUT
+          else
+            # Use SHA-based image for new builds
+            echo "image=ghcr.io/${{ github.repository }}/rist-bonding-dev:${{ github.sha }}" >> $GITHUB_OUTPUT
+          fi
+
+  docker-ci:
+    name: Docker CI Pipeline
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v4
       
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       
-      - name: Start services with Docker Compose
+      - name: Create CI compose file with pre-built image
         run: |
-          docker compose -f docker-compose.ci.yml up --build -d
+          cat > docker-compose.ci-prebuilt.yml << EOF
+          services:
+            rist-bonding-dev:
+              image: ${{ needs.build-and-push.outputs.image }}
+              container_name: rist-bonding-dev-ci
+              cap_add:
+                - NET_ADMIN
+              volumes:
+                - .:/workspace
+                - /lib/modules:/lib/modules:ro
+                - cargo-cache:/root/.cargo
+              working_dir: /workspace
+              command: sleep infinity
+              environment:
+                - CARGO_HOME=/root/.cargo
+              stdin_open: true
+              tty: true
+          
+          volumes:
+            cargo-cache:
+          EOF
+      
+      - name: Start services with pre-built image
+        run: |
+          echo "Using image: ${{ needs.build-and-push.outputs.image }}"
+          if [ "${{ needs.build-and-push.outputs.should-build }}" = "true" ]; then
+            echo "🔨 Using freshly built image (Docker files changed)"
+          elif [ "${{ needs.build-and-push.outputs.cache-hit }}" = "true" ]; then
+            echo "✅ Using cached image (no Docker changes detected)"
+          else
+            echo "🔨 Using fallback image (forced rebuild)"
+          fi
+          docker compose -f docker-compose.ci-prebuilt.yml up -d
       
       - name: Wait for services to be ready
         run: |
@@ -39,22 +182,22 @@ jobs:
       
       - name: Check formatting
         run: |
-          docker compose -f docker-compose.ci.yml exec -T rist-bonding-dev \
+          docker compose -f docker-compose.ci-prebuilt.yml exec -T rist-bonding-dev \
             cargo fmt --all -- --check
       
       - name: Run clippy
         run: |
-          docker compose -f docker-compose.ci.yml exec -T rist-bonding-dev \
+          docker compose -f docker-compose.ci-prebuilt.yml exec -T rist-bonding-dev \
             cargo clippy --workspace --all-targets --all-features -- -D warnings
       
       - name: Run unit tests
         run: |
-          docker compose -f docker-compose.ci.yml exec -T rist-bonding-dev \
+          docker compose -f docker-compose.ci-prebuilt.yml exec -T rist-bonding-dev \
             cargo test --workspace --lib --locked --verbose
       
       - name: Run integration tests
         run: |
-          docker compose -f docker-compose.ci.yml exec -T rist-bonding-dev \
+          docker compose -f docker-compose.ci-prebuilt.yml exec -T rist-bonding-dev \
             cargo test --workspace --test '*' --locked --verbose
         env:
           # Skip privileged network tests in CI
@@ -62,7 +205,7 @@ jobs:
       
       - name: Tear down services
         if: always()
-        run: docker compose -f docker-compose.ci.yml down --volumes --remove-orphans
+        run: docker compose -f docker-compose.ci-prebuilt.yml down --volumes --remove-orphans
 
   security-audit:
     name: Security Audit
