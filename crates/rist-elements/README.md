@@ -1,19 +1,58 @@
 # rist-elements
 
-Rust GStreamer elements: RIST-aware dispatcher and dynamic bitrate controller.
+Advanced GStreamer elements for RIST (Reliable Internet Stream Transport) multi-path bonding and adaptive streaming control.
 
 ## Overview
 
-This crate implements custom GStreamer elements specifically designed for RIST (Reliable Internet Stream Transport) protocol applications. The primary element is a sophisticated dispatcher that can distribute RTP streams across multiple network paths with intelligent load balancing and failover capabilities.
+This crate implements sophisticated GStreamer elements specifically designed for RIST protocol applications with multi-path bonding capabilities. The core elements enable intelligent traffic distribution, automatic load balancing, and adaptive bitrate control for resilient video streaming over multiple network paths.
 
-## Features
+**Primary Use Cases:**
+- Live video streaming with network redundancy
+- Multi-path RIST bonding for increased reliability
+- Adaptive bitrate streaming based on network conditions
+- Production-grade streaming with automatic failover
 
-- **RIST Dispatcher Element**: Multi-path RTP stream distribution with bonding
-- **Dynamic Load Balancing**: Configurable traffic distribution across links
-- **Failover Support**: Automatic link failure detection and recovery
-- **Performance Monitoring**: Built-in metrics and statistics collection
-- **GStreamer Integration**: Native GStreamer element implementation
-- **Test Plugin Support**: Comprehensive testing utilities and mock elements
+## Key Features
+
+- **Advanced RIST Dispatcher**: Intelligent multi-path RTP distribution using Smooth Weighted Round Robin
+- **Dynamic Load Balancing**: Real-time traffic distribution based on RIST statistics
+- **Automatic Failover**: Link failure detection and seamless traffic redistribution
+- **Adaptive Bitrate Control**: Statistics-driven encoder bitrate management
+- **Performance Monitoring**: Comprehensive metrics collection and reporting
+- **Native GStreamer Integration**: Full GStreamer element implementation with proper event handling
+- **Comprehensive Testing**: Extensive test suite with mock elements and integration tests
+
+## Quick Start
+
+### Installation and Plugin Registration
+
+```bash
+# Build the plugin
+cargo build --release --all-features
+
+# Install to GStreamer plugin directory (system-wide)
+sudo cp target/release/libgstristelements.so /usr/lib/gstreamer-1.0/
+
+# Or test locally with plugin path
+export GST_PLUGIN_PATH=$PWD/target/release
+
+# Verify installation
+gst-inspect-1.0 ristdispatcher
+gst-inspect-1.0 dynbitrate
+```
+
+### Basic Multi-Path RIST Pipeline
+
+```bash
+# Simple dual-path bonding
+gst-launch-1.0 \
+  videotestsrc pattern=ball ! \
+  x264enc bitrate=2000 tune=zerolatency ! \
+  rtph264pay ! \
+  ristdispatcher name=d \
+  d.src_0 ! ristsink uri=rist://primary.example.com:1968 \
+  d.src_1 ! ristsink uri=rist://backup.example.com:1968
+```
 
 ## Key Elements
 
@@ -328,3 +367,13 @@ bus_collector.add_element_filter("ristdispatcher", |msg| {
 - **RTP**: Compatible with standard RTP payloaders
 - **Network**: Works with any GStreamer network sink elements
 - **Platforms**: Linux, macOS, Windows (with appropriate GStreamer installation)
+
+## Project Integration
+
+This crate is part of the [RIST Bonding](../../README.md) project. For complete documentation:
+
+- **[Main Project Documentation](../../README.md)**: Overview, architecture, and pipeline examples
+- **[Testing Guide](../../docs/testing/README.md)**: Comprehensive testing setup and troubleshooting
+- **[Plugin Documentation](../../docs/plugins/README.md)**: Detailed element configuration and usage
+- **[Network Simulation](../network-sim/README.md)**: Network condition simulation for testing
+- **[Development Environment](../../docs/testing/DOCKER_TESTING.md)**: Container-based development
