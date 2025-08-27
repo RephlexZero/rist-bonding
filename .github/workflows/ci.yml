@@ -70,10 +70,10 @@ jobs:
         id: cache-check
         if: steps.changes.outputs.should-build == 'false'
         run: |
-          # For non-Docker changes, try to find the most recent image
-          # Check current SHA first, then latest
-          CURRENT_IMAGE="ghcr.io/${{ github.repository }}/rist-bonding-dev:${{ github.sha }}"
-          LATEST_IMAGE="ghcr.io/${{ github.repository }}/rist-bonding-dev:latest"
+          # Convert repository name to lowercase for Docker compliance
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          CURRENT_IMAGE="ghcr.io/${REPO_LOWER}/rist-bonding-dev:${{ github.sha }}"
+          LATEST_IMAGE="ghcr.io/${REPO_LOWER}/rist-bonding-dev:latest"
           
           docker login ghcr.io -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
           
@@ -94,40 +94,50 @@ jobs:
       - name: Extract metadata
         id: meta
         if: steps.changes.outputs.should-build == 'true' || (steps.changes.outputs.should-build == 'false' && steps.cache-check.outputs.cache-hit == 'false')
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}/rist-bonding-dev
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=sha,prefix={{branch}}-
-            type=raw,value=latest,enable={{is_default_branch}}
+        run: |
+          # Convert repository name to lowercase
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "images=ghcr.io/${REPO_LOWER}/rist-bonding-dev" >> $GITHUB_OUTPUT
+          
+          # Generate tags
+          TAGS=""
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            TAGS="ghcr.io/${REPO_LOWER}/rist-bonding-dev:pr-${{ github.event.number }}"
+          else
+            TAGS="ghcr.io/${REPO_LOWER}/rist-bonding-dev:${{ github.ref_name }}"
+            TAGS="${TAGS},ghcr.io/${REPO_LOWER}/rist-bonding-dev:${{ github.ref_name }}-${{ github.sha }}"
+            if [ "${{ github.ref_name }}" = "main" ]; then
+              TAGS="${TAGS},ghcr.io/${REPO_LOWER}/rist-bonding-dev:latest"
+            fi
+          fi
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
       
       - name: Build and push Docker image
         if: steps.changes.outputs.should-build == 'true' || (steps.changes.outputs.should-build == 'false' && steps.cache-check.outputs.cache-hit == 'false')
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: |
-            type=gha
-            type=registry,ref=ghcr.io/${{ github.repository }}/rist-bonding-dev:buildcache
-          cache-to: |
-            type=gha,mode=max
-            type=registry,ref=ghcr.io/${{ github.repository }}/rist-bonding-dev:buildcache,mode=max
-          builder: ${{ steps.buildx.outputs.name }}
+        run: |
+          # Convert repository name to lowercase
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          
+          docker buildx build \
+            --push \
+            --tag "${{ steps.meta.outputs.tags }}" \
+            --cache-from "type=gha" \
+            --cache-from "type=registry,ref=ghcr.io/${REPO_LOWER}/rist-bonding-dev:buildcache" \
+            --cache-to "type=gha,mode=max" \
+            --cache-to "type=registry,ref=ghcr.io/${REPO_LOWER}/rist-bonding-dev:buildcache,mode=max" \
+            --builder "${{ steps.buildx.outputs.name }}" \
+            .
       
       - name: Output image reference
         id: image
         run: |
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           if [ "${{ steps.cache-check.outputs.image }}" != "" ]; then
             # Use the image determined by cache check (might be latest)
             echo "image=${{ steps.cache-check.outputs.image }}" >> $GITHUB_OUTPUT
           else
             # Use SHA-based image for new builds
-            echo "image=ghcr.io/${{ github.repository }}/rist-bonding-dev:${{ github.sha }}" >> $GITHUB_OUTPUT
+            echo "image=ghcr.io/${REPO_LOWER}/rist-bonding-dev:${{ github.sha }}" >> $GITHUB_OUTPUT
           fi
 
   docker-ci:
