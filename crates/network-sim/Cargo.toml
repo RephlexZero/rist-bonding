@@ -9,9 +9,9 @@ default = []
 docker = ["futures"]
 
 [dependencies]
-log = "0.4"
-netlink-packet-route = "0.17"
-netlink-sys = "0.8"
-tokio = { version = "1.0", features = ["full"] }
-thiserror = "1.0"
-futures = { version = "0.3", optional = true }
+log = "0.4.27"
+netlink-packet-route = "0.25.0"
+netlink-sys = "0.8.7"
+tokio = { version = "1.47.1", features = ["full"] }
+thiserror = "2.0.16"
+futures = { version = "0.3.31", optional = true }

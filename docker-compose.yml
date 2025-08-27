@@ -9,5 +9,8 @@ services:
     volumes:
       - .:/workspace
       - /lib/modules:/lib/modules:ro
+      - ${SSH_AUTH_SOCK}:/ssh-agent
+    environment:
+      - SSH_AUTH_SOCK=/ssh-agent
     working_dir: /workspace
     command: sleep infinity
