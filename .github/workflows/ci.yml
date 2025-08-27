@@ -190,6 +190,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       
+      - name: Set up Rust toolchain
+        run: |
+          echo "=== Setting up Rust toolchain ==="
+          rustup default stable
+          rustup component add clippy rustfmt
+          echo "Rust toolchain configured:"
+          rustc --version
+          cargo --version
+          rustup show
+      
       - name: Verify environment
         run: |
           echo "=== Environment Check ==="
