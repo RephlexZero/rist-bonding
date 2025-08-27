@@ -52,11 +52,13 @@ jobs:
           fi
       
       - name: Set up Docker Buildx
+        id: buildx
         if: steps.changes.outputs.should-build == 'true'
         uses: docker/setup-buildx-action@v3
         with:
           driver: docker-container
-          buildkitd-flags: --allow-insecure-entitlement security.insecure
+          driver-opts: |
+            image=moby/buildkit:buildx-stable-1
       
       - name: Log in to GitHub Container Registry
         if: steps.changes.outputs.should-build == 'true'
@@ -112,11 +114,12 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: |
-            type=registry,ref=ghcr.io/${{ github.repository }}/rist-bonding-dev:buildcache
             type=gha
+            type=registry,ref=ghcr.io/${{ github.repository }}/rist-bonding-dev:buildcache
           cache-to: |
-            type=registry,ref=ghcr.io/${{ github.repository }}/rist-bonding-dev:buildcache,mode=max
             type=gha,mode=max
+            type=registry,ref=ghcr.io/${{ github.repository }}/rist-bonding-dev:buildcache,mode=max
+          builder: ${{ steps.buildx.outputs.name }}
       
       - name: Output image reference
         id: image
