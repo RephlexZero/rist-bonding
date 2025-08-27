@@ -64,7 +64,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.PAT_TOKEN }}
       
       - name: Check if image exists (for non-Docker changes)
         id: cache-check
@@ -75,19 +75,22 @@ jobs:
           CURRENT_IMAGE="ghcr.io/${REPO_LOWER}/rist-bonding-dev:${{ github.sha }}"
           LATEST_IMAGE="ghcr.io/${REPO_LOWER}/rist-bonding-dev:latest"
           
-          docker login ghcr.io -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
+          echo "Checking for existing images..."
+          echo "Current SHA image: $CURRENT_IMAGE"
+          echo "Latest image: $LATEST_IMAGE"
           
           if docker manifest inspect $CURRENT_IMAGE >/dev/null 2>&1; then
             echo "cache-hit=true" >> $GITHUB_OUTPUT
             echo "✅ Found image for current SHA: $CURRENT_IMAGE"
+            echo "image=$CURRENT_IMAGE" >> $GITHUB_OUTPUT
           elif docker manifest inspect $LATEST_IMAGE >/dev/null 2>&1; then
             echo "cache-hit=true" >> $GITHUB_OUTPUT
-            echo "✅ Using latest image: $LATEST_IMAGE"
-            # Update the image output to use latest instead of SHA
+            echo "✅ Using latest image as fallback: $LATEST_IMAGE"
             echo "image=$LATEST_IMAGE" >> $GITHUB_OUTPUT
           else
             echo "cache-hit=false" >> $GITHUB_OUTPUT
             echo "❌ No suitable image found, forcing build"
+            # Force a build since no usable image exists
             echo "should-build=true" >> $GITHUB_OUTPUT
           fi
       
@@ -138,12 +141,25 @@ jobs:
         id: image
         run: |
           REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          
+          # Priority order for image selection:
+          # 1. Use cached image if found (from cache-check step)
+          # 2. Use SHA-based image for new builds
+          # 3. Fallback to latest as last resort
+          
           if [ "${{ steps.cache-check.outputs.image }}" != "" ]; then
-            # Use the image determined by cache check (might be latest)
             echo "image=${{ steps.cache-check.outputs.image }}" >> $GITHUB_OUTPUT
+            echo "Using cached image: ${{ steps.cache-check.outputs.image }}"
+          elif [ "${{ steps.changes.outputs.should-build }}" = "true" ] || [ "${{ steps.cache-check.outputs.cache-hit }}" = "false" ]; then
+            # We built a new image, use SHA-based tag
+            SHA_IMAGE="ghcr.io/${REPO_LOWER}/rist-bonding-dev:${{ github.sha }}"
+            echo "image=$SHA_IMAGE" >> $GITHUB_OUTPUT
+            echo "Using newly built image: $SHA_IMAGE"
           else
-            # Use SHA-based image for new builds
-            echo "image=ghcr.io/${REPO_LOWER}/rist-bonding-dev:${{ github.sha }}" >> $GITHUB_OUTPUT
+            # Last resort - use latest (this shouldn't normally happen)
+            LATEST_IMAGE="ghcr.io/${REPO_LOWER}/rist-bonding-dev:latest"
+            echo "image=$LATEST_IMAGE" >> $GITHUB_OUTPUT
+            echo "Using fallback latest image: $LATEST_IMAGE"
           fi
 
   docker-ci:
@@ -157,7 +173,7 @@ jobs:
       image: ${{ needs.build-and-push.outputs.image }}
       credentials:
         username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+        password: ${{ secrets.PAT_TOKEN }}
       options: --cap-add=NET_ADMIN
     steps:
       - name: Show build status

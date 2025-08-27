@@ -26,7 +26,8 @@
         "vadimcn.vscode-lldb",
         "tamasfe.even-better-toml",
         "usernamehw.errorlens",
-        "fill-labs.dependi"
+        "fill-labs.dependi",
+        "ms-azuretools.vscode-containers"
       ]
     }
   },
