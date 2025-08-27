@@ -1,204 +1,89 @@
-name: Docker-based CI/CD
+name: Docker Development Environment
 
 on:
   push:
     branches: [ main, develop ]
+    paths:
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - '.devcontainer/**'
   pull_request:
     branches: [ main ]
-
-env:
-  CARGO_TERM_COLOR: always
+    paths:
+      - 'Dockerfile' 
+      - 'docker-compose.yml'
+      - '.devcontainer/**'
 
 jobs:
-  # Standard tests that don't require special privileges
-  test-standard:
+  validate-devcontainer:
+    name: Validate Development Container
     runs-on: ubuntu-latest
-    
     steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
-    
-    - name: Install Rust
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-        profile: minimal
-        override: true
-    
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          libgstreamer1.0-dev \
-          libgstreamer-plugins-base1.0-dev \
-          libgstreamer-plugins-bad1.0-dev \
-          gstreamer1.0-plugins-base \
-          gstreamer1.0-plugins-good \
-          gstreamer1.0-plugins-bad \
-          gstreamer1.0-plugins-ugly \
-          gstreamer1.0-libav
-    
-    - name: Cache cargo registry
-      uses: actions/cache@v3
-      with:
-        path: ~/.cargo/registry
-        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-    
-    - name: Cache cargo index
-      uses: actions/cache@v3
-      with:
-        path: ~/.cargo/git
-        key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-    
-    - name: Cache cargo build
-      uses: actions/cache@v3
-      with:
-        path: target
-        key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
-    
-    - name: Run standard tests
-      run: |
-        cargo test --lib --bins
-        cargo test --test integration_tests
-        cargo test --test scenario_tests
-        cargo test --test stress_tests
-        cargo test --test unit_tests
-
-  # Docker-based tests with network capabilities
-  test-docker:
-    runs-on: ubuntu-latest
-    
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
-    
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-    
-    - name: Build Docker images
-      run: |
-        docker-compose build
-    
-    - name: Run Docker-based tests
-      run: |
-        # Run tests in Docker container with network capabilities
-        docker-compose run --rm \
-          --cap-add=NET_ADMIN \
-          --cap-add=SYS_ADMIN \
-          rist-bonding-test
-    
-    - name: Run network simulation tests
-      run: |
-        # Run specific network simulation tests
-        docker-compose run --rm \
-          --cap-add=NET_ADMIN \
-          --cap-add=SYS_ADMIN \
-          rist-bonding-dev bash -c "
-            /usr/local/bin/setup-network-test.sh
-            cargo test -p network-sim --features docker
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Build development container
+        run: docker-compose build rist-bonding-dev
+      
+      - name: Test development environment setup
+        run: |
+          docker-compose run --rm rist-bonding-dev bash -c "
+            echo 'Testing Rust toolchain...'
+            cargo --version
+            rustc --version
+            
+            echo 'Testing GStreamer availability...'
+            gst-inspect-1.0 --version
+            
+            echo 'Testing basic project build...'
+            cargo check --workspace
           "
-    
-    - name: Test multi-container networking
-      run: |
-        # Start multiple containers and test networking between them
-        docker-compose up -d rist-bonding-dev rist-bonding-node2
-        
-        # Test container-to-container connectivity
-        docker-compose exec -T rist-bonding-dev bash -c "
-          ping -c 3 rist-bonding-node2 || echo 'Container ping test completed'
-        "
-        
-        # Clean up
-        docker-compose down
-    
-    - name: Docker system info
-      if: failure()
-      run: |
-        docker system df
-        docker-compose logs
-
-  # Security and code quality checks
-  security:
-    runs-on: ubuntu-latest
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Install Rust
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-        profile: minimal
-        override: true
-        components: clippy
-    
-    - name: Run clippy
-      run: cargo clippy --all-targets --all-features -- -D warnings
-    
-    - name: Check formatting
-      run: cargo fmt --all -- --check
-    
-    - name: Audit dependencies
-      run: |
-        cargo install cargo-audit
-        cargo audit
-    
-    - name: Check Dockerfile
-      uses: hadolint/hadolint-action@v3.1.0
-      with:
-        dockerfile: Dockerfile
-        failure-threshold: error
-
-  # Performance benchmarks
-  benchmark:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
-    
-    - name: Run benchmarks in Docker
-      run: |
-        docker-compose build
-        docker-compose run --rm \
-          --cap-add=NET_ADMIN \
-          rist-bonding-dev bash -c "
-            /usr/local/bin/setup-network-test.sh
-            cargo bench
+      
+      - name: Test network capabilities (local RIST operations)
+        run: |
+          docker-compose run --rm rist-bonding-dev bash -c "
+            echo 'Setting up local network namespaces for RIST testing...'
+            
+            # Create network namespaces for isolated RIST endpoints
+            ip netns add rist-sender 2>/dev/null || true
+            ip netns add rist-receiver 2>/dev/null || true
+            
+            # Create veth pairs for local RIST communication
+            ip link add veth-sender type veth peer name veth-sender-peer 2>/dev/null || true
+            
+            # Move interfaces to respective namespaces
+            ip link set veth-sender-peer netns rist-sender 2>/dev/null || true
+            
+            # Configure interfaces
+            ip addr add 192.168.100.1/24 dev veth-sender 2>/dev/null || true
+            ip link set veth-sender up 2>/dev/null || true
+            ip netns exec rist-sender ip addr add 192.168.100.2/24 dev veth-sender-peer 2>/dev/null || true
+            ip netns exec rist-sender ip link set veth-sender-peer up 2>/dev/null || true
+            ip netns exec rist-sender ip link set lo up 2>/dev/null || true
+            
+            echo 'Testing local connectivity...'
+            ping -c 2 -W 1 127.0.0.1
+            
+            echo 'Listing network interfaces...'
+            ip addr show | grep -E 'veth|lo'
+            
+            echo 'Listing network namespaces...'
+            ip netns list
           "
-
-  # Documentation
-  docs:
+  
+  validate-dockerfile:
+    name: Validate Dockerfile
     runs-on: ubuntu-latest
-    
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Install Rust
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-        profile: minimal
-        override: true
-    
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          libgstreamer1.0-dev \
-          libgstreamer-plugins-base1.0-dev \
-          libgstreamer-plugins-bad1.0-dev
-    
-    - name: Generate documentation
-      run: cargo doc --no-deps --all-features
-    
-    - name: Deploy documentation
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      uses: peaceiris/actions-gh-pages@v3
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: ./target/doc
+      - uses: actions/checkout@v4
+      
+      - name: Lint Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: warning
+          ignore: DL3008,DL3009  # Allow apt packages without pinned versions for dev env

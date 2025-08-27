@@ -1,15 +1,8 @@
 {
-  "name": "RIST Bonding Development Environment",
+  "name": "RIST Bonding Development",
   "dockerComposeFile": "../docker-compose.yml",
   "service": "rist-bonding-dev",
   "workspaceFolder": "/workspace",
-  "shutdownAction": "stopCompose",
-
-  // Features to install in the container
-  "features": {
-    "ghcr.io/devcontainers/features/git:1": {},
-    "ghcr.io/devcontainers/features/github-cli:1": {}
-  },
 
   // Configure tool-specific properties
   "customizations": {
@@ -22,15 +15,9 @@
         "rust-analyzer.procMacro.enable": true,
         "rust-analyzer.cargo.allFeatures": true,
         "terminal.integrated.defaultProfile.linux": "bash",
-        "terminal.integrated.profiles.linux": {
-          "bash": {
-            "path": "/bin/bash"
-          }
-        },
         "files.watcherExclude": {
           "**/target/**": true,
           "**/.git/objects/**": true,
-          "**/.git/subtree-cache/**": true,
           "**/node_modules/*/**": true
         }
       },
@@ -39,45 +26,10 @@
         "vadimcn.vscode-lldb",
         "serayuzgur.crates",
         "tamasfe.even-better-toml",
-        "usernamehw.errorlens",
-        "formulahendry.code-runner",
-        "ms-vscode.test-adapter-converter",
-        "hbenl.vscode-test-explorer",
-        "ms-vscode.makefile-tools",
-        "ms-vscode-remote.remote-containers"
+        "usernamehw.errorlens"
       ]
     }
   },
 
-  // Use 'forwardPorts' to make a list of ports inside the container available locally
-  "forwardPorts": [
-    // Common RIST ports
-    1968,
-    1969,
-    1970,
-    1971,
-    // HTTP server for docs/monitoring
-    8080,
-    8081
-  ],
-
-  // Use 'postCreateCommand' to run commands after the container is created
-  "postCreateCommand": "bash -c 'echo \"Container setup complete!\" && echo \"Run ./scripts/docker-test.sh --help for testing commands\"'",
-
-  // Comment out to connect as root instead. More info: https://aka.ms/vscode-remote/containers/non-root
-  "remoteUser": "root",
-
-  // Mount docker socket for docker-in-docker operations if needed
-  "mounts": [
-    "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
-  ],
-
-  // Environment variables
-  "containerEnv": {
-    "RUST_LOG": "debug",
-    "RUST_BACKTRACE": "1"
-  },
-
-  // Lifecycle scripts
-  "initializeCommand": "docker-compose -f docker-compose.yml build rist-bonding-dev"
+  "remoteUser": "root"
 }

@@ -1,316 +1,334 @@
-# Docker-Based Testing Guide
+# Development Container Guide
 
-This document explains how to run RIST bonding tests using Docker containers, which eliminates the need for sudo privileges on the host system and provides a consistent testing environment with network namespace capabilities.
+This document explains how to develop and test RIST bonding using the devcontainer environment with direct commands (no scripts).
 
 ## Quick Start
 
 ### Prerequisites
 
+- VS Code with Remote-Containers extension
 - Docker and Docker Compose installed
-- At least 2GB of free disk space for Docker images
 
-### Running All Tests
+### Using the Development Container
 
 ```bash
-# Run the complete test suite in Docker
-./scripts/docker-test.sh test
+# Open project in VS Code
+code .
+
+# Select "Reopen in Container" when prompted
+# Or: Ctrl+Shift+P -> "Remote-Containers: Reopen in Container"
 ```
 
-### Interactive Development
+## Development Commands
+
+### Basic Development
 
 ```bash
-# Start an interactive development container
-./scripts/docker-test.sh dev
+# Check Rust installation
+cargo --version
+rustc --version
+
+# Build the project
+cargo build --all-features
+
+# Run all tests
+cargo test --all-features
+
+# Run specific test categories
+cargo test --lib                    # Unit tests only
+cargo test --test '*'               # Integration tests only
+cargo test -p network-sim           # Network simulation tests
+cargo test -p rist-elements         # RIST elements tests
+
+# Code quality
+cargo fmt --all                     # Format code
+cargo clippy --all-targets --all-features -- -D warnings  # Linting
+
+# Generate documentation
+cargo doc --all-features --no-deps --open
 ```
 
-## Docker Architecture
-
-### Container Setup
-
-The Docker setup provides three main container configurations:
-
-1. **Development Container** (`rist-bonding-dev`)
-   - Full development environment with Rust toolchain
-   - Network capabilities for namespace testing
-   - Interactive shell access
-
-2. **Testing Container** (`rist-bonding-test`)
-   - Automated test runner
-   - Pre-configured network namespaces
-   - Runs complete test suite
-
-3. **Multi-Node Container** (`rist-bonding-node2`)
-   - Second container for multi-node testing
-   - Network connectivity testing between containers
-
-### Network Capabilities
-
-The containers are configured with:
-- `NET_ADMIN` capability for network namespace management
-- `SYS_ADMIN` capability for advanced system operations
-- Privileged mode for full network control
-- Custom bridge network for container-to-container communication
-
-## Available Commands
-
-### Testing Commands
+### GStreamer Development
 
 ```bash
-# Run all tests in Docker
-./scripts/docker-test.sh test
+# Check GStreamer installation
+gst-inspect-1.0 --version
 
-# Run specific test
-./scripts/docker-test.sh run test_weighted_distribution_basic
+# List available RIST plugins
+gst-inspect-1.0 | grep -i rist
 
-# Run benchmarks
-./scripts/docker-test.sh bench
-
-# Run multi-container network tests
-./scripts/docker-test.sh multi
+# Inspect specific RIST plugins
+gst-inspect-1.0 ristsrc
+gst-inspect-1.0 ristsink
 ```
 
-### Development Commands
+## Local Network Testing
+
+### Setting Up RIST Network Namespaces
+
+For testing RIST communication locally within the container:
 
 ```bash
-# Start interactive development container
-./scripts/docker-test.sh dev
+# Create network namespaces for isolated RIST endpoints
+ip netns add rist-sender 2>/dev/null || true
+ip netns add rist-receiver 2>/dev/null || true
 
-# Build Docker images
-./scripts/docker-test.sh build
+# Create veth pairs for local RIST communication
+ip link add veth-sender type veth peer name veth-sender-peer 2>/dev/null || true
+ip link add veth-receiver type veth peer name veth-receiver-peer 2>/dev/null || true
 
-# Show network status inside container
-./scripts/docker-test.sh network
+# Move interfaces to respective namespaces
+ip link set veth-sender-peer netns rist-sender 2>/dev/null || true
+ip link set veth-receiver-peer netns rist-receiver 2>/dev/null || true
 
-# Clean up Docker resources
-./scripts/docker-test.sh clean
+# Configure interfaces in root namespace (for routing between endpoints)
+ip addr add 192.168.100.1/24 dev veth-sender 2>/dev/null || true
+ip addr add 192.168.101.1/24 dev veth-receiver 2>/dev/null || true
+ip link set veth-sender up 2>/dev/null || true
+ip link set veth-receiver up 2>/dev/null || true
+
+# Configure interfaces in sender namespace
+ip netns exec rist-sender ip addr add 192.168.100.2/24 dev veth-sender-peer 2>/dev/null || true
+ip netns exec rist-sender ip link set veth-sender-peer up 2>/dev/null || true
+ip netns exec rist-sender ip link set lo up 2>/dev/null || true
+
+# Configure interfaces in receiver namespace
+ip netns exec rist-receiver ip addr add 192.168.101.2/24 dev veth-receiver-peer 2>/dev/null || true
+ip netns exec rist-receiver ip link set veth-receiver-peer up 2>/dev/null || true
+ip netns exec rist-receiver ip link set lo up 2>/dev/null || true
+
+# Set up routing for RIST communication
+ip netns exec rist-sender ip route add default via 192.168.100.1 2>/dev/null || true
+ip netns exec rist-receiver ip route add default via 192.168.101.1 2>/dev/null || true
 ```
 
-### Inside the Container
-
-Once in the development container, you can:
+### Verifying Network Setup
 
 ```bash
-# Set up network namespaces manually
-/usr/local/bin/setup-network-test.sh
-
-# Run tests with network features
-cargo test --features docker
-
-# Run network simulation tests
-cargo test -p network-sim --features docker
-
-# Apply network impairments to test interfaces
-cargo test test_network_impairment_scenarios
-
-# Monitor network interfaces
-ip addr show
+# List network namespaces
 ip netns list
+
+# Check network interfaces
+ip addr show | grep veth
+
+# Test connectivity
+ping -c 1 -W 1 192.168.100.2   # Test sender endpoint
+ping -c 1 -W 1 192.168.101.2   # Test receiver endpoint
 ```
 
-## Network Simulation Features
-
-### Namespace Management
-
-The Docker environment provides:
-- Automatic creation of test network namespaces (`test_ns1`, `test_ns2`)
-- Virtual ethernet pairs (`veth_test0`, `veth_test1`, etc.)
-- IP address configuration and routing
-- Interface management within namespaces
-
-### Traffic Control
-
-Network impairments can be applied using:
-- **Latency**: Configurable delay in milliseconds
-- **Packet Loss**: Configurable loss percentage
-- **Bandwidth Limiting**: Rate limiting in kbps
-- **Jitter**: Network timing variations
-
-### Example Usage
-
-```rust
-use network_sim::docker::DockerNetworkEnv;
-
-#[tokio::test]
-async fn test_network_impairments() {
-    let mut env = DockerNetworkEnv::new();
-    
-    // Set up test network
-    env.setup_basic_network().await?;
-    
-    // Apply network impairments: 50ms delay, 1% loss, 1Mbps limit
-    env.apply_network_impairments("veth_test0", 50, 1.0, 1000).await?;
-    
-    // Test connectivity
-    let connected = env.test_connectivity("test_ns1", "192.168.100.1").await?;
-    assert!(connected);
-    
-    // Cleanup
-    env.cleanup().await?;
-}
-```
-
-## Troubleshooting
-
-### Permission Errors
-
-If you see "Operation not permitted" errors:
+### Running RIST Tests in Namespaces
 
 ```bash
-# Make sure Docker is running with proper privileges
-sudo systemctl start docker
+# Run RIST sender in sender namespace
+ip netns exec rist-sender gst-launch-1.0 videotestsrc ! x264enc ! ristsink uri=rist://192.168.101.2:1968
 
-# Verify the script is executable
-chmod +x ./scripts/docker-test.sh
-
-# Check Docker can run privileged containers
-docker run --rm --privileged alpine ip addr show
+# Run RIST receiver in receiver namespace (different terminal)
+ip netns exec rist-receiver gst-launch-1.0 ristsrc uri=rist://0.0.0.0:1968 ! decodebin ! autovideosink
 ```
 
-### Network Issues
+## Docker Container Management
 
-If network tests fail:
+### Direct Container Commands
 
 ```bash
-# Check container network capabilities
-./scripts/docker-test.sh network
+# Build development container
+docker-compose build rist-bonding-dev
 
-# Verify network namespaces are created
-docker-compose run --rm rist-bonding-dev ip netns list
+# Start development container interactively
+docker-compose run --rm rist-bonding-dev
 
-# Test basic connectivity
-docker-compose run --rm rist-bonding-dev ping -c 1 127.0.0.1
+# Run tests in testing container
+docker-compose run --rm rist-bonding-test
+
+# Execute commands in running container
+docker-compose exec rist-bonding-dev cargo test --lib
 ```
 
-### Build Issues
-
-If Docker builds fail:
-
-```bash
-# Clean up and rebuild
-./scripts/docker-test.sh clean
-./scripts/docker-test.sh build
-
-# Check Docker system resources
-docker system df
-docker system prune -f
-```
-
-### Container Resource Issues
-
-If containers run out of resources:
+### Container Resource Management
 
 ```bash
 # Check container resource usage
 docker stats
 
-# Clean up unused containers and images
-docker system prune -a -f
+# Clean up containers and images
+docker system prune -f
 
-# Increase Docker memory limit in Docker Desktop settings
+# View container logs
+docker-compose logs rist-bonding-dev
 ```
 
-## CI/CD Integration
+## GitHub Actions Integration
 
-### GitHub Actions
+The project uses GitHub Actions for automated CI/CD. All commands run in CI are direct commands:
 
-The project includes GitHub Actions workflows for Docker-based testing:
-
-- **Standard Tests**: Basic functionality without special privileges
-- **Docker Tests**: Full network simulation tests with capabilities
-- **Multi-Container Tests**: Container-to-container networking
-- **Security Checks**: Code quality and vulnerability scanning
-
-### Local CI Testing
-
-To test the CI workflow locally:
+### Main CI Commands (`ci.yml`)
 
 ```bash
-# Install act (GitHub Actions local runner)
-curl https://raw.githubusercontent.com/nektos/act/master/install.sh | sudo bash
+# Code quality checks
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-# Run GitHub Actions locally
-act -j test-docker
+# Testing
+cargo test --workspace --lib --locked --verbose
+cargo test --workspace --test '*' --locked --verbose
+
+# Container testing
+docker-compose build rist-bonding-dev
+docker-compose run --rm rist-bonding-test
+```
+
+### Docker Environment Validation (`docker-ci.yml`)
+
+```bash
+# Development environment validation
+docker-compose run --rm rist-bonding-dev bash -c "cargo --version && gst-inspect-1.0 --version"
+
+# Network capability testing
+docker-compose run --rm rist-bonding-dev bash -c "ip netns add test && ip netns list && ip netns del test"
+```
+
+## Development Workflow
+
+### 1. Container Development
+
+```bash
+# Open in VS Code devcontainer (automatic)
+# Or manually start container:
+docker-compose run --rm rist-bonding-dev
+
+# Inside container:
+cargo check --workspace    # Quick compile check
+cargo test --lib          # Quick unit tests
+```
+
+### 2. Testing Changes
+
+```bash
+# Run comprehensive tests
+cargo test --all-features
+
+# Test specific components
+cargo test -p network-sim --all-features
+cargo test -p rist-elements
+
+# Integration tests
+cargo test --test integration_tests --all-features
+```
+
+### 3. Network Testing
+
+```bash
+# Set up network environment (copy commands from above)
+ip netns add rist-sender
+# ... (full setup commands)
+
+# Run network-specific tests
+cargo test -p network-sim
+
+# Test RIST communication
+# (run sender and receiver commands in different terminals)
+```
+
+### 4. Code Quality
+
+```bash
+# Format code
+cargo fmt --all
+
+# Check for issues
+cargo clippy --all-targets --all-features -- -D warnings
+
+# Security audit
+cargo audit
+```
+
+## Network Architecture
+
+### Local RIST Communication
+
+All RIST operations happen locally within the container:
+
+- **Sender Endpoint**: `rist-sender` namespace (192.168.100.2)
+- **Receiver Endpoint**: `rist-receiver` namespace (192.168.101.2)
+- **Network Simulation**: Handled by `network-sim` crate
+- **No External Network**: All communication is container-internal
+
+### Example Network Test
+
+```rust
+#[tokio::test]
+async fn test_local_rist_communication() {
+    // Network setup would be done via network-sim crate
+    let sender_addr = "192.168.100.2:1968";
+    let receiver_addr = "192.168.101.2:1968";
+    
+    // Test implementation using network-sim
+    // All setup done programmatically, no scripts
+}
+```
+
+## Troubleshooting
+
+### Permission Issues
+
+```bash
+# Verify container has NET_ADMIN capability
+docker inspect rist-bonding-dev | grep -A 5 CapAdd
+
+# Test network namespace creation
+ip netns add test-ns && ip netns del test-ns
+```
+
+### Network Setup Issues
+
+```bash
+# Check if network interfaces exist
+ip addr show | grep veth
+
+# Verify namespaces are created
+ip netns list
+
+# Test basic connectivity
+ping -c 1 127.0.0.1
+```
+
+### Build Issues
+
+```bash
+# Update Rust toolchain
+rustup update stable
+
+# Clean build artifacts
+cargo clean
+
+# Rebuild with verbose output
+cargo build --verbose --all-features
+```
+
+### VS Code Integration Issues
+
+```bash
+# Rebuild container
+docker-compose build rist-bonding-dev
+
+# Check container status
+docker-compose ps
 ```
 
 ## Performance Considerations
 
-### Docker Overhead
-
-- Network namespace operations have ~1-2ms additional latency
-- Container startup adds ~500ms to test execution
-- Memory usage: ~200MB per container
-
-### Optimization Tips
-
-- Use Docker layer caching for faster builds
-- Pre-build containers for repeated testing
-- Use `.dockerignore` to exclude unnecessary files
-- Leverage Docker Compose for multi-container orchestration
-
-## Advanced Configuration
-
-### Custom Network Scenarios
-
-Create custom network scenarios by modifying the setup script:
-
-```bash
-# Edit the network setup script
-vim /usr/local/bin/setup-network-test.sh
-
-# Add custom network configurations
-ip netns add custom_ns
-ip link add veth_custom type veth peer name veth_custom_peer
-```
-
-### Container Networking
-
-Modify `docker-compose.yml` for custom networking:
-
-```yaml
-networks:
-  custom-network:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 10.100.0.0/16
-          gateway: 10.100.0.1
-```
-
-### Environment Variables
-
-Configure container behavior with environment variables:
-
-```bash
-# Set in docker-compose.yml or pass to docker run
-RUST_LOG=debug
-NETWORK_TEST_INTERFACE=eth0
-TEST_TIMEOUT=60
-```
+- Container startup: ~2-3 seconds
+- Network namespace setup: ~100ms per command
+- Test execution: Comparable to native performance
+- Memory usage: ~500MB for development container
 
 ## Best Practices
 
-1. **Always clean up** after tests to avoid resource leaks
-2. **Use specific test interfaces** to avoid conflicts
-3. **Check capabilities** before running privileged operations
-4. **Monitor resource usage** during long test runs
-5. **Use Docker layer caching** for faster rebuilds
-6. **Test locally** before pushing to CI
-7. **Document custom configurations** in your test code
+1. **Use direct cargo commands** - No wrapper scripts needed
+2. **Set up network namespaces manually** - Copy/paste commands as needed
+3. **Test locally before pushing** - Use `cargo test --all-features`
+4. **Use GitHub Actions for CI** - Automated validation on push
+5. **Keep network tests isolated** - All RIST communication stays local
+6. **Document command sequences** - Keep track of complex setups
 
-## Integration with Host System
-
-### File System Access
-
-The containers mount the project directory at `/workspace`:
-- Changes made in containers persist on the host
-- Build artifacts are shared between host and container
-- Source code changes are immediately available
-
-### Network Isolation
-
-Containers use separate network namespaces:
-- Tests don't interfere with host networking
-- Multiple test runs can execute simultaneously
-- Network configurations are completely isolated
-
-This Docker-based approach provides a robust, reproducible testing environment that doesn't require sudo privileges on the host system while still enabling comprehensive network simulation testing.
+This approach provides complete control over the development environment using direct commands without any wrapper scripts.

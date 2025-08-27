@@ -1,61 +1,40 @@
 # RIST Bonding
 
-A high-performance RIST (Reliable Internet Stream Transport) bonding implementation using GStreamer, designed for resilient video streaming over multiple network paths.
+A high-performance RIST (Reliable Internet Stream Transport) bonding implementation using GStreamer, designed for resilient video streaming over multiple network paths with local network simulation.
 
 ## Features
 
 - **Multi-path bonding**: Distribute traffic across multiple network links for increased throughput and reliability
 - **Dynamic load balancing**: Automatically adjust traffic distribution based on real-time network conditions
-- **Network simulation**: Built-in tools for testing under various network conditions (latency, packet loss, bandwidth)
+- **Local network simulation**: Built-in tools for testing under various network conditions within containers
 - **GStreamer integration**: Native GStreamer elements for seamless pipeline integration
-- **Docker-based testing**: Complete containerized testing environment with network namespace support
-- **VS Code devcontainer**: Ready-to-use development environment
+- **Devcontainer development**: Complete containerized development environment
+- **GitHub Actions CI**: Automated testing and validation
 
 ## Quick Start
 
-### Development Environment Options
+### Development Environment (Recommended: VS Code Devcontainer)
 
-#### Option 1: VS Code Devcontainer (Recommended)
-1. Install VS Code with the Remote-Containers extension
-2. Clone the repository
-3. Open in VS Code and select "Reopen in Container"
-4. Everything is pre-configured and ready to use!
+1. **Prerequisites**: VS Code with Remote-Containers extension, Docker
+2. **Setup**:
+   ```bash
+   git clone <repository-url>
+   cd rist-bonding
+   code .
+   # Select "Reopen in Container" when prompted
+   ```
+3. **Development**: Everything is pre-configured and ready to use!
 
-#### Option 2: Docker Development
+### Alternative: Docker Development
+
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd rist-bonding
+# Build and start development container
+docker-compose build rist-bonding-dev
+docker-compose run --rm rist-bonding-dev
 
-# Build and run tests
-./scripts/docker-test.sh test
-
-# Interactive development environment
-./scripts/docker-test.sh dev
-```
-
-#### Option 3: Local Development
-```bash
-# Install dependencies (Ubuntu/Debian)
-sudo apt update
-sudo apt install -y \
-    build-essential \
-    pkg-config \
-    libgstreamer1.0-dev \
-    libgstreamer-plugins-base1.0-dev \
-    libgstreamer-plugins-bad1.0-dev \
-    gstreamer1.0-plugins-base \
-    gstreamer1.0-plugins-good \
-    gstreamer1.0-plugins-bad \
-    gstreamer1.0-plugins-ugly \
-    gstreamer1.0-libav
-
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Build and test
-cargo build --all-features
-cargo test --all-features
+# Inside container
+./.devcontainer/dev-helper.sh setup
+./.devcontainer/dev-helper.sh test
 ```
 
 ## Project Structure
@@ -88,68 +67,86 @@ rist-bonding/
 
 ## Development Workflow
 
-### Using VS Code Devcontainer
+### Using VS Code Devcontainer (Recommended)
 1. Open the project in VS Code
 2. Click "Reopen in Container" when prompted
-3. Use the integrated tasks:
-   - `Ctrl+Shift+P` → "Tasks: Run Task" → "Docker: Run All Tests"
-   - `F5` to debug tests
-   - `Ctrl+Shift+P` → "Tasks: Run Task" → "Docker: Setup Network Test Environment"
+3. Use direct cargo commands:
+   ```bash
+   # Build project
+   cargo build --all-features
+   
+   # Run all tests
+   cargo test --all-features
+   
+   # Run specific tests
+   cargo test -p network-sim
+   cargo test --lib
+   
+   # Code quality
+   cargo fmt --all
+   cargo clippy --all-targets --all-features -- -D warnings
+   
+   # Generate documentation
+   cargo doc --all-features --no-deps --open
+   ```
 
-### Using Docker Scripts
+### Direct Container Development
 ```bash
-# Run all tests
-./scripts/docker-test.sh test
+# Start development container
+docker-compose run --rm rist-bonding-dev
 
-# Set up network simulation
-./scripts/docker-test.sh network
-
-# Interactive development
-./scripts/docker-test.sh dev
-
-# Build containers
-./scripts/docker-test.sh build
+# Inside container - use direct cargo commands
+cargo test --all-features
 ```
 
-### Using Development Helper (in devcontainer)
+### Local Network Testing
+Set up RIST network namespaces manually:
 ```bash
-# Initial setup
-./.devcontainer/dev-helper.sh setup
+# Create namespaces
+ip netns add rist-sender
+ip netns add rist-receiver
+
+# Create veth pairs
+ip link add veth-sender type veth peer name veth-sender-peer
+ip link add veth-receiver type veth peer name veth-receiver-peer
+
+# Configure interfaces (see documentation for full setup)
+ip netns exec rist-sender ip addr add 192.168.100.2/24 dev veth-sender-peer
+ip netns exec rist-receiver ip addr add 192.168.101.2/24 dev veth-receiver-peer
 
 # Run tests
-./.devcontainer/dev-helper.sh test
-
-# Check network capabilities
-./.devcontainer/dev-helper.sh network-check
-
-# Generate documentation
-./.devcontainer/dev-helper.sh docs
+cargo test -p network-sim --all-features
 ```
 
 ## Testing
 
-The project includes comprehensive testing at multiple levels:
-
-- **Unit Tests**: Test individual components in isolation
-- **Integration Tests**: Test component interactions and GStreamer pipelines
-- **Scenario Tests**: Test complete bonding scenarios under various conditions
-- **Stress Tests**: Performance and reliability testing under load
-- **Network Tests**: Docker-based network simulation tests
+The project uses GitHub Actions for automated testing with local development in devcontainers:
 
 ### Test Categories
 ```bash
-# Unit tests
+# Unit tests (in devcontainer)
 cargo test --lib
 
 # Integration tests  
 cargo test --test '*'
 
-# Network simulation tests
-cargo test -p network-sim --features docker
+# Network simulation tests (local RIST endpoints)
+cargo test -p network-sim --all-features
 
-# All tests via Docker
-./scripts/docker-test.sh test
+# All tests at once
+cargo test --all-features
 ```
+
+### Continuous Integration
+- **GitHub Actions**: Automated testing on push/PR
+- **Code Quality**: Formatting, linting, and security audits
+- **Container Validation**: Ensures devcontainer works correctly
+- **Local Network Testing**: All RIST operations tested within containers
+
+### Network Architecture
+- **Local RIST Endpoints**: Sender and receiver run in separate namespaces
+- **Container-Internal**: No external network dependencies
+- **Simulated Conditions**: Network-sim crate controls packet flow and conditions
 
 ## Configuration
 
@@ -196,24 +193,29 @@ gst-launch-1.0 \
 2. Create a feature branch
 3. Use the VS Code devcontainer for development
 4. Write tests for new functionality
-5. Ensure all tests pass: `./scripts/docker-test.sh test`
-6. Submit a pull request
+5. Ensure all tests pass: `cargo test --all-features`
+6. Push changes - GitHub Actions will validate your contribution
 
 ### Code Style
-- Run `cargo fmt` before committing
-- Use `cargo clippy` to catch common issues
+- Run `cargo fmt --all` before committing
+- Use `cargo clippy --all-targets --all-features -- -D warnings` to catch issues
 - Follow Rust naming conventions
 - Document public APIs with rustdoc
+
+### Local Development
+- All development should happen in the devcontainer
+- RIST operations are tested locally within the container using network namespaces
+- Use direct cargo commands - no wrapper scripts
+- GitHub Actions handle comprehensive CI/CD
 
 ## Documentation
 
 Generate and view documentation:
 ```bash
-# In devcontainer
-./.devcontainer/dev-helper.sh docs
+# Generate documentation
+cargo doc --all-features --no-deps --open
 
-# Or directly with cargo
-cargo doc --all-features --open
+# Documentation will be available in target/doc/
 ```
 
 ## License

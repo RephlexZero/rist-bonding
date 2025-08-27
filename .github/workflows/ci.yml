@@ -9,7 +9,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # Ensure pkg-config can find system .pc files on Ubuntu runners
   PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
 
 # Cancel in-progress runs of the same branch/PR to save CI minutes
@@ -18,7 +17,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  check:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      
+      - name: Cache cargo build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+      
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libgstreamer-plugins-bad1.0-dev
+      
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
   test:
+    name: Tests
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -27,25 +61,74 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          # Add common components; harmless if unused
-          components: clippy, rustfmt
 
       - name: Cache cargo build artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          # Cache keyed by Cargo.lock for reproducibility across workspace members
           workspaces: |
             . -> target
 
-      - name: Install system dependencies (GStreamer)
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             pkg-config \
             libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev
+            libgstreamer-plugins-base1.0-dev \
+            libgstreamer-plugins-bad1.0-dev \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            iproute2
 
-      # Directly run tests – this compiles first; no need for a separate build step
-      - name: Run tests (workspace)
-        run: cargo test --workspace --locked --verbose
+      - name: Run unit tests
+        run: cargo test --workspace --lib --locked --verbose
+
+      - name: Run integration tests
+        run: cargo test --workspace --test '*' --locked --verbose
+        env:
+          # Skip privileged network tests in CI
+          SKIP_NETWORK_NAMESPACE_TESTS: "1"
+
+  docker-test:
+    name: Docker Integration
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Build development container
+        run: docker-compose build rist-bonding-dev
+      
+      - name: Build testing container
+        run: docker-compose build rist-bonding-test
+      
+      - name: Run containerized tests
+        run: docker-compose run --rm rist-bonding-test
+      
+      - name: Test development environment
+        run: |
+          docker-compose run --rm rist-bonding-dev bash -c "
+            echo 'Testing development setup...'
+            cargo --version
+            gst-inspect-1.0 --version
+            cargo check --workspace
+          "
+
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install --force cargo-audit
+      - name: Run security audit
+        run: cargo audit

@@ -1,65 +1,13 @@
-version: '3.8'
-
 services:
   rist-bonding-dev:
     build:
       context: .
       dockerfile: Dockerfile
-      target: development
     container_name: rist-bonding-dev
-    privileged: true
     cap_add:
       - NET_ADMIN
-      - SYS_ADMIN
     volumes:
       - .:/workspace
       - /lib/modules:/lib/modules:ro
     working_dir: /workspace
-    networks:
-      - rist-network
-    command: bash
-
-  rist-bonding-test:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: testing
-    container_name: rist-bonding-test
-    privileged: true
-    cap_add:
-      - NET_ADMIN
-      - SYS_ADMIN
-    volumes:
-      - .:/workspace
-      - /lib/modules:/lib/modules:ro
-    working_dir: /workspace
-    networks:
-      - rist-network
-    command: /usr/local/bin/run-network-tests.sh
-
-  # Additional container for multi-node testing
-  rist-bonding-node2:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: development
-    container_name: rist-bonding-node2
-    privileged: true
-    cap_add:
-      - NET_ADMIN
-      - SYS_ADMIN
-    volumes:
-      - .:/workspace
-      - /lib/modules:/lib/modules:ro
-    working_dir: /workspace
-    networks:
-      - rist-network
-    command: bash
-
-networks:
-  rist-network:
-    driver: bridge
-    ipam:
-      driver: default
-      config:
-        - subnet: 172.20.0.0/16
+    command: sleep infinity
