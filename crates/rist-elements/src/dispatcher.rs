@@ -219,8 +219,17 @@ impl ObjectImpl for DispatcherImpl {
                         st.weights.len(),
                         srcpads_count
                     );
-                    // Extend with default weight of 1.0
+                    // Extend with default weight while preserving existing weights
                     st.weights.resize(srcpads_count, 1.0);
+                } else if st.weights.len() > srcpads_count {
+                    // Truncate weights if we have fewer pads than weights
+                    gst::debug!(
+                        CAT,
+                        "Truncating weights from {} to {} pads",
+                        st.weights.len(),
+                        srcpads_count
+                    );
+                    st.weights.truncate(srcpads_count);
                 }
 
                 if srcpads.is_empty() {

@@ -1,9 +1,7 @@
 [workspace]
 members = [
     "crates/rist-elements",
-    "crates/netns-testbench", 
-    "crates/scenarios",
-    "crates/demos",
+    "crates/network-sim", 
 ]
 
 resolver = "2"

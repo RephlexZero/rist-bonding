@@ -13,94 +13,42 @@ use crate::test_harness::RistStatsMock;
 use gst::prelude::*;
 use gstreamer as gst;
 
-/// Network simulation integration (requires the `netns-sim` feature)
-#[cfg(feature = "netns-sim")]
+/// Network simulation integration (requires the `network-sim` feature)
+#[cfg(feature = "network-sim")]
 pub mod network_sim {
-    use gstreamer::prelude::*;
-    use netns_testbench::{NetworkOrchestrator, TestScenario};
-    use std::future::Future;
-    use tokio::time::{timeout, Duration};
+    use network_sim::{apply_network_params, NetworkParams};
+    use network_sim::qdisc::QdiscManager;
 
-    /// Start a network simulation scenario for RIST testing
-    pub async fn setup_network_scenario(
-        scenario: TestScenario,
-        rx_port: u16,
-    ) -> Result<NetworkOrchestrator, Box<dyn std::error::Error>> {
-        // Create orchestrator and start scenario
-        let mut orchestrator = NetworkOrchestrator::new(42).await?;
-        let _handle = orchestrator.start_scenario(scenario, rx_port).await?;
-        Ok(orchestrator)
-    }
-
-    /// Setup dual-link bonding test environment
-    pub async fn setup_bonding_test(
-        rx_port: u16,
-    ) -> Result<NetworkOrchestrator, Box<dyn std::error::Error>> {
-        // Use bonding asymmetric scenario for bonding tests
-        let scenario = TestScenario::bonding_asymmetric();
-        setup_network_scenario(scenario, rx_port).await
-    }
-
-    /// Run a test with network simulation for a specific duration
-    pub async fn run_test_with_network<F, Fut>(
-        scenario: TestScenario,
-        rx_port: u16,
-        test_duration_secs: u64,
-        test_fn: F,
-    ) -> Result<(), Box<dyn std::error::Error>>
-    where
-        F: FnOnce() -> Fut + Send + 'static,
-        Fut: Future<Output = Result<(), String>> + Send + 'static,
-    {
-        let _orchestrator = setup_network_scenario(scenario, rx_port).await?;
-
-        // Run the test with a timeout
-        let test_future = test_fn();
-        let result = timeout(Duration::from_secs(test_duration_secs), test_future).await;
-
-        match result {
-            Ok(test_result) => test_result.map_err(|e| e.into()),
-            Err(_) => Err(format!("Test timed out after {} seconds", test_duration_secs).into()),
-        }
-    }
-
-    /// Create preset network scenarios for common test cases
-    pub fn get_test_scenarios() -> Vec<TestScenario> {
-        vec![
-            TestScenario::baseline_good(),
-            TestScenario::degrading_network(),
-            TestScenario::mobile_handover(),
-            TestScenario::bonding_asymmetric(),
-            TestScenario::nr_to_lte_handover(),
-        ]
-    }
-
-    /// Helper to test RIST dispatcher behavior under different network conditions
-    pub async fn test_dispatcher_with_network(
-        weights: Option<&[f64]>,
-        scenario: TestScenario,
-        rx_port: u16,
-        test_duration_secs: u64,
+    /// Apply network parameters to a test interface
+    pub async fn apply_test_network_params(
+        interface: &str,
+        params: NetworkParams,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let _orchestrator = setup_network_scenario(scenario, rx_port).await?;
+        let qdisc_manager = QdiscManager::default();
+        apply_network_params(&qdisc_manager, interface, &params)
+            .await
+            .map_err(|e| e.into())
+    }
 
-        // Initialize RIST elements
-        crate::testing::init_for_tests();
+    /// Apply typical network conditions for testing
+    pub async fn apply_typical_conditions(
+        interface: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        apply_test_network_params(interface, NetworkParams::typical()).await
+    }
 
-        let dispatcher = crate::testing::create_dispatcher_for_testing(weights);
+    /// Apply poor network conditions for testing
+    pub async fn apply_poor_conditions(
+        interface: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        apply_test_network_params(interface, NetworkParams::poor()).await
+    }
 
-        // Create a simple test pipeline
-        let pipeline = gstreamer::Pipeline::new();
-        let src = crate::testing::create_test_source();
-        let sink = crate::testing::create_fake_sink();
-
-        pipeline.add_many([&src, &dispatcher, &sink])?;
-        gstreamer::Element::link_many([&src, &dispatcher, &sink])?;
-
-        // Run the test
-        crate::testing::run_pipeline_for_duration(&pipeline, test_duration_secs)?;
-
-        Ok(())
+    /// Apply good network conditions for testing
+    pub async fn apply_good_conditions(
+        interface: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        apply_test_network_params(interface, NetworkParams::good()).await
     }
 }
 

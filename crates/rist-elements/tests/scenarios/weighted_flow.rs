@@ -15,7 +15,7 @@ fn test_weighted_distribution_basic() {
     println!("=== Basic Weighted Distribution Test ===");
 
     let source = create_test_source();
-    let dispatcher = create_dispatcher(Some(&[0.8, 0.2])); // 80% vs 20%
+    let dispatcher = create_dispatcher_for_testing(Some(&[0.8, 0.2])); // 80% vs 20%
     let counter1 = create_counter_sink();
     let counter2 = create_counter_sink();
 
@@ -74,7 +74,7 @@ fn test_equal_weights() {
     println!("=== Equal Weights Test ===");
 
     let source = create_test_source();
-    let dispatcher = create_dispatcher(Some(&[0.5, 0.5])); // Equal weights
+    let dispatcher = create_dispatcher_for_testing(Some(&[0.5, 0.5])); // Equal weights
     let counter1 = create_counter_sink();
     let counter2 = create_counter_sink();
 
