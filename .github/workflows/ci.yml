@@ -118,9 +118,15 @@ jobs:
           # Convert repository name to lowercase
           REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           
+          # Convert comma-separated tags to individual --tag arguments
+          TAG_ARGS=""
+          for tag in $(echo "${{ steps.meta.outputs.tags }}" | tr ',' ' '); do
+            TAG_ARGS="$TAG_ARGS --tag $tag"
+          done
+          
           docker buildx build \
             --push \
-            --tag "${{ steps.meta.outputs.tags }}" \
+            $TAG_ARGS \
             --cache-from "type=gha" \
             --cache-from "type=registry,ref=ghcr.io/${REPO_LOWER}/rist-bonding-dev:buildcache" \
             --cache-to "type=gha,mode=max" \
