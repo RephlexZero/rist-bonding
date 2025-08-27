@@ -101,23 +101,27 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       
-      - name: Build development container
-        run: docker-compose build rist-bonding-dev
+      - name: Start services with Docker Compose
+        run: |
+          docker compose up --build -d
       
-      - name: Build testing container
-        run: docker-compose build rist-bonding-test
+      - name: Wait for services to be ready
+        run: |
+          echo "Waiting for services to start..."
+          sleep 10
       
       - name: Run containerized tests
-        run: docker-compose run --rm rist-bonding-test
-      
-      - name: Test development environment
         run: |
-          docker-compose run --rm rist-bonding-dev bash -c "
+          docker compose exec -T rist-bonding-dev bash -c "
             echo 'Testing development setup...'
             cargo --version
             gst-inspect-1.0 --version
-            cargo check --workspace
+            cargo test --workspace --lib --verbose
           "
+      
+      - name: Tear down services
+        if: always()
+        run: docker compose down --volumes --remove-orphans
 
   security-audit:
     name: Security Audit
