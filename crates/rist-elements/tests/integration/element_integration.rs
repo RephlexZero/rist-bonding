@@ -57,10 +57,10 @@ fn create_test_pipeline() -> (gst::Pipeline, gst::Element, gst::Element, gst::El
     let sink = testing::create_fake_sink();
 
     pipeline.add_many([&src, &dispatcher, &sink]).unwrap();
-    
+
     // Link source to dispatcher (this works with sink pads)
     src.link(&dispatcher).unwrap();
-    
+
     // Note: dispatcher->sink linking must be done manually with request pads
     // Each test should request a src pad and link it to the sink as needed
 
@@ -78,13 +78,15 @@ async fn test_pad_creation_and_linking() -> Result<(), Box<dyn std::error::Error
     let src = testing::create_test_source();
     let dispatcher = testing::create_dispatcher(None);
     let sink = testing::create_fake_sink();
-    
+
     pipeline.add_many([&src, &dispatcher, &sink]).unwrap();
     // Don't link yet - test initial state
 
     // Check initial pad state
     let sink_pad = dispatcher.static_pad("sink").expect("Should have sink pad");
-    let src_pad = dispatcher.request_pad_simple("src_%u").expect("Should be able to request src pad");
+    let src_pad = dispatcher
+        .request_pad_simple("src_%u")
+        .expect("Should be able to request src pad");
 
     assert!(
         !sink_pad.is_linked(),
@@ -138,7 +140,7 @@ async fn test_caps_negotiation() -> Result<(), Box<dyn std::error::Error>> {
 
     let sink_pad = dispatcher.static_pad("sink").unwrap();
     let src_pad = dispatcher.request_pad_simple("src_%u").unwrap();
-    
+
     // Link the requested src pad to the sink
     let sink_sink_pad = _sink.static_pad("sink").unwrap();
     src_pad.link(&sink_sink_pad).unwrap();
@@ -180,11 +182,11 @@ async fn test_event_handling() -> Result<(), Box<dyn std::error::Error>> {
 
     // Set up event probe on dispatcher src pad
     let src_pad = dispatcher.request_pad_simple("src_%u").unwrap();
-    
+
     // Link the requested src pad to the sink
     let sink_sink_pad = _sink.static_pad("sink").unwrap();
     src_pad.link(&sink_sink_pad).unwrap();
-    
+
     let monitor_clone = monitor.clone();
 
     src_pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_pad, info| {
@@ -216,7 +218,10 @@ async fn test_event_handling() -> Result<(), Box<dyn std::error::Error>> {
     println!("Recorded events: {:?}", events);
 
     // Verify we got the basic pipeline events and EOS
-    assert!(monitor.has_event("StreamStart"), "Should have received StreamStart event");
+    assert!(
+        monitor.has_event("StreamStart"),
+        "Should have received StreamStart event"
+    );
     assert!(monitor.has_event("Caps"), "Should have received Caps event");
     assert!(monitor.has_event("Eos"), "Should have received EOS event");
     assert!(
@@ -534,11 +539,15 @@ async fn test_multithread_pad_safety() -> Result<(), Box<dyn std::error::Error>>
         for handle in handles {
             handle.await.unwrap();
         }
-    }).await;
+    })
+    .await;
 
     pipeline.set_state(gst::State::Null)?;
 
-    assert!(result.is_ok(), "Multi-threaded test should complete within timeout");
+    assert!(
+        result.is_ok(),
+        "Multi-threaded test should complete within timeout"
+    );
 
     let total_accesses = *access_count.lock().unwrap();
     println!("Total pad accesses: {}", total_accesses);

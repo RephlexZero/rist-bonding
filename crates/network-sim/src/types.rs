@@ -27,7 +27,7 @@ impl NetworkParams {
     pub fn good() -> Self {
         Self {
             delay_ms: 5,
-            loss_pct: 0.001, // 0.1%
+            loss_pct: 0.001,   // 0.1%
             rate_kbps: 10_000, // 10 Mbps
         }
     }
@@ -36,7 +36,7 @@ impl NetworkParams {
     pub fn typical() -> Self {
         Self {
             delay_ms: 20,
-            loss_pct: 0.01, // 1%
+            loss_pct: 0.01,   // 1%
             rate_kbps: 5_000, // 5 Mbps
         }
     }
@@ -45,7 +45,7 @@ impl NetworkParams {
     pub fn poor() -> Self {
         Self {
             delay_ms: 100,
-            loss_pct: 0.05, // 5%
+            loss_pct: 0.05,   // 5%
             rate_kbps: 1_000, // 1 Mbps
         }
     }

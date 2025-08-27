@@ -5,8 +5,8 @@
 //! according to loss rate and RTT, obeying step-size, bounds, deadband and
 //! rate limiting.
 
-use gstreamer as gst;
 use gst::prelude::*;
+use gstreamer as gst;
 
 use serial_test::serial;
 
@@ -182,7 +182,10 @@ fn test_rate_limiting_between_adjustments() {
     // Now wait sufficiently for a second change
     run_mainloop_ms(1600);
     let after_second: u32 = get_property(&encoder, "bitrate").unwrap();
-    assert!(after_second < after_first, "Should have decreased again after rate window");
+    assert!(
+        after_second < after_first,
+        "Should have decreased again after rate window"
+    );
     clean_shutdown(pipeline);
 }
 

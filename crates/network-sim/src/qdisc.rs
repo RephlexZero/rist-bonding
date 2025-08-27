@@ -61,7 +61,10 @@ impl QdiscManager {
         // 3. Apply qdisc configuration with netem
         // 4. Handle netlink responses
 
-        debug!("Would apply netem configuration to {}: {:?}", interface, config);
+        debug!(
+            "Would apply netem configuration to {}: {:?}",
+            interface, config
+        );
 
         // For now, just simulate success
         Ok(())

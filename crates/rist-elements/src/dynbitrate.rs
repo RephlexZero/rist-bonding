@@ -260,7 +260,9 @@ impl ObjectImpl for ControllerImpl {
             "min-kbps" => *self.inner.min_kbps.lock() = value.get::<u32>().unwrap_or(500),
             "max-kbps" => *self.inner.max_kbps.lock() = value.get::<u32>().unwrap_or(8000),
             "step-kbps" => *self.inner.step_kbps.lock() = value.get::<u32>().unwrap_or(250),
-            "target-loss-pct" => *self.inner.target_loss_pct.lock() = value.get::<f64>().unwrap_or(0.5),
+            "target-loss-pct" => {
+                *self.inner.target_loss_pct.lock() = value.get::<f64>().unwrap_or(0.5)
+            }
             "min-rtx-rtt-ms" => *self.inner.rtt_floor_ms.lock() = value.get::<u64>().unwrap_or(40),
             "dispatcher" => {
                 let disp = value.get::<Option<gst::Element>>().ok().flatten();
@@ -533,7 +535,9 @@ impl ControllerImpl {
         let structure = gst::Structure::builder("dynbitrate/current-bitrate")
             .field("bitrate-kbps", current_kbps)
             .build();
-        let msg = gst::message::Element::builder(structure).src(obj.upcast_ref::<gst::Object>()).build();
+        let msg = gst::message::Element::builder(structure)
+            .src(obj.upcast_ref::<gst::Object>())
+            .build();
         let _ = obj.post_message(msg);
 
         // Parse RIST stats and possibly drive dispatcher weights

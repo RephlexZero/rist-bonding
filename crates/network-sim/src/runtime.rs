@@ -30,7 +30,10 @@ pub async fn apply_network_params(
 
     info!(
         "Applied parameters to {}: {}ms delay, {}% loss, {} kbps rate",
-        interface, params.delay_ms, params.loss_pct * 100.0, params.rate_kbps
+        interface,
+        params.delay_ms,
+        params.loss_pct * 100.0,
+        params.rate_kbps
     );
 
     Ok(())
@@ -44,9 +47,9 @@ mod tests {
     async fn test_apply_network_params() {
         let qdisc_manager = QdiscManager::default();
         let params = NetworkParams::typical();
-        
+
         let result = apply_network_params(&qdisc_manager, "veth0", &params).await;
-        
+
         match result {
             Ok(()) => println!("Network params applied successfully"),
             Err(e) => println!("Expected error in test environment: {}", e),

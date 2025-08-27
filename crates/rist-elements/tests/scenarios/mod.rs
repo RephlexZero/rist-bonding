@@ -4,6 +4,6 @@
 //! that validate complete system behavior.
 
 mod recovery_scenarios;
-mod weighted_flow;
 mod rist_integration;
 mod stats_driven_rebalancing;
+mod weighted_flow;
