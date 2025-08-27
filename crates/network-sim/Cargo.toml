@@ -4,9 +4,14 @@ version = "0.1.0"
 edition = "2021"
 description = "Simple network simulation library for applying fixed network parameters"
 
+[features]
+default = []
+docker = ["futures"]
+
 [dependencies]
 log = "0.4"
 netlink-packet-route = "0.17"
 netlink-sys = "0.8"
 tokio = { version = "1.0", features = ["full"] }
 thiserror = "1.0"
+futures = { version = "0.3", optional = true }

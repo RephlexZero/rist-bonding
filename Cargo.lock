@@ -1025,6 +1025,7 @@ dependencies = [
 name = "network-sim"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "log",
  "netlink-packet-route",
  "netlink-sys",

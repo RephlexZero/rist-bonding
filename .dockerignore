@@ -1,0 +1,28 @@
+# Build artifacts
+target/
+Cargo.lock
+
+# IDE files
+.vscode/
+.idea/
+
+# Documentation
+docs/
+
+# Git
+.git/
+.gitignore
+
+# Cache directories
+.ruff_cache/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+
+# Logs
+*.log

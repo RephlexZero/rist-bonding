@@ -1,0 +1,194 @@
+{
+  "folders": [
+    {
+      "name": "RIST Bonding",
+      "path": "."
+    }
+  ],
+  "settings": {
+    "rust-analyzer.cargo.buildScripts.enable": true,
+    "rust-analyzer.cargo.features": "all",
+    "rust-analyzer.checkOnSave.command": "clippy",
+    "rust-analyzer.checkOnSave.extraArgs": [
+      "--all-targets",
+      "--all-features"
+    ],
+    "rust-analyzer.procMacro.enable": true,
+    "rust-analyzer.cargo.allFeatures": true,
+    "rust-analyzer.server.path": "rust-analyzer",
+    "terminal.integrated.defaultProfile.linux": "bash",
+    "files.watcherExclude": {
+      "**/target/**": true,
+      "**/.git/objects/**": true,
+      "**/.git/subtree-cache/**": true,
+      "**/gstreamer/build/**": true,
+      "**/gstreamer/builddir/**": true
+    },
+    "search.exclude": {
+      "**/target": true,
+      "**/gstreamer/build": true,
+      "**/gstreamer/builddir": true
+    },
+    "rust-analyzer.linkedProjects": [
+      "./Cargo.toml",
+      "./crates/rist-elements/Cargo.toml",
+      "./crates/network-sim/Cargo.toml",
+      "./crates/scenarios/Cargo.toml",
+      "./crates/demos/Cargo.toml"
+    ]
+  },
+  "launch": {
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "type": "lldb",
+        "request": "launch",
+        "name": "Debug unit tests in library 'rist-elements'",
+        "cargo": {
+          "args": [
+            "test",
+            "--no-run",
+            "--lib",
+            "--package=rist-elements"
+          ],
+          "filter": {
+            "name": "rist-elements",
+            "kind": "lib"
+          }
+        },
+        "args": [],
+        "cwd": "${workspaceFolder}"
+      },
+      {
+        "type": "lldb",
+        "request": "launch",
+        "name": "Debug network simulation tests",
+        "cargo": {
+          "args": [
+            "test",
+            "--no-run",
+            "--package=network-sim",
+            "--features=docker"
+          ],
+          "filter": {
+            "name": "network-sim",
+            "kind": "bin"
+          }
+        },
+        "args": [],
+        "cwd": "${workspaceFolder}"
+      },
+      {
+        "type": "lldb",
+        "request": "launch",
+        "name": "Debug scenario tests",
+        "cargo": {
+          "args": [
+            "test",
+            "--no-run",
+            "--package=scenarios"
+          ],
+          "filter": {
+            "name": "scenarios",
+            "kind": "bin"
+          }
+        },
+        "args": [],
+        "cwd": "${workspaceFolder}"
+      }
+    ]
+  },
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+      {
+        "type": "cargo",
+        "command": "build",
+        "group": "build",
+        "label": "cargo: build all",
+        "args": [
+          "--all-features",
+          "--all-targets"
+        ],
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "problemMatcher": "$rustc"
+      },
+      {
+        "type": "cargo",
+        "command": "test",
+        "group": "test",
+        "label": "cargo: test all",
+        "args": [
+          "--all-features",
+          "--all-targets"
+        ],
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "problemMatcher": "$rustc"
+      },
+      {
+        "type": "shell",
+        "label": "Docker: Run All Tests",
+        "command": "./scripts/docker-test.sh",
+        "args": ["test"],
+        "group": "test",
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "problemMatcher": "$rustc"
+      },
+      {
+        "type": "shell",
+        "label": "Docker: Setup Network Test Environment",
+        "command": "./scripts/docker-test.sh",
+        "args": ["network"],
+        "group": "build",
+        "options": {
+          "cwd": "${workspaceFolder}"
+        }
+      },
+      {
+        "type": "shell",
+        "label": "Docker: Interactive Development Shell",
+        "command": "./scripts/docker-test.sh",
+        "args": ["dev"],
+        "group": "build",
+        "options": {
+          "cwd": "${workspaceFolder}"
+        }
+      },
+      {
+        "type": "cargo",
+        "command": "clippy",
+        "group": "build",
+        "label": "cargo: clippy",
+        "args": [
+          "--all-features",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "options": {
+          "cwd": "${workspaceFolder}"
+        },
+        "problemMatcher": "$rustc"
+      }
+    ]
+  },
+  "extensions": {
+    "recommendations": [
+      "rust-lang.rust-analyzer",
+      "vadimcn.vscode-lldb",
+      "serayuzgur.crates",
+      "tamasfe.even-better-toml",
+      "usernamehw.errorlens",
+      "formulahendry.code-runner",
+      "ms-vscode.makefile-tools",
+      "ms-vscode-remote.remote-containers"
+    ]
+  }
+}
