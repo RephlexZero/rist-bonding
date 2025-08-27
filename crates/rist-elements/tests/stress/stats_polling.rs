@@ -264,13 +264,13 @@ fn test_multi_session_stats() {
             session_count += 1;
 
             let sent_original: u64 = retrieved
-                .get(&format!("{}.sent-original-packets", session_id))
+                .get(format!("{}.sent-original-packets", session_id))
                 .unwrap();
             let sent_retx: u64 = retrieved
-                .get(&format!("{}.sent-retransmitted-packets", session_id))
+                .get(format!("{}.sent-retransmitted-packets", session_id))
                 .unwrap();
             let rtt: f64 = retrieved
-                .get(&format!("{}.round-trip-time", session_id))
+                .get(format!("{}.round-trip-time", session_id))
                 .unwrap();
 
             let loss_rate = sent_retx as f64 / sent_original as f64 * 100.0;

@@ -238,7 +238,7 @@ fn test_dynbitrate_element_creation() {
 
     assert!(min_kbps > 0);
     assert!(max_kbps > min_kbps);
-    assert!(target_loss >= 0.0 && target_loss <= 100.0);
+    assert!((0.0..=100.0).contains(&target_loss));
 }
 
 #[test]
@@ -392,12 +392,9 @@ fn test_pipeline_error_recovery() {
         );
 
         if let Some(msg) = timeout_result {
-            match msg.view() {
-                gst::MessageView::Error(error_msg) => {
-                    println!("Expected error occurred: {}", error_msg.error().to_string());
-                    // This is expected behavior
-                }
-                _ => {}
+            if let gst::MessageView::Error(error_msg) = msg.view() {
+                println!("Expected error occurred: {}", error_msg.error());
+                // This is expected behavior
             }
         }
 

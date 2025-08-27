@@ -44,7 +44,7 @@ fn test_basic_property_access() {
     dispatcher.set_property("caps-any", true);
     let retrieved_caps_any: bool = get_property(&dispatcher, "caps-any").unwrap();
     println!("Set caps-any: true, Retrieved: {}", retrieved_caps_any);
-    assert_eq!(retrieved_caps_any, true);
+    assert!(retrieved_caps_any);
 
     // Test readonly property (current-weights should mirror weights)
     let current_weights: String = get_property(&dispatcher, "current-weights").unwrap();

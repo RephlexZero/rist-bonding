@@ -24,9 +24,8 @@ fn debug_counter_sink_properties() {
     }
 
     // Try to get the count property and see what type it actually returns
-    match counter.property_value("count").type_() {
-        t => println!("count property actual GType: {:?}", t),
-    }
+    let t = counter.property_value("count").type_();
+    println!("count property actual GType: {:?}", t);
 
     // Try to get it as different types to see what works
     match counter.property_value("count").get::<bool>() {
@@ -63,9 +62,8 @@ fn debug_dynbitrate_properties() {
     }
 
     // Try to get the target-loss-pct property and see what type it actually returns
-    match dynbitrate.property_value("target-loss-pct").type_() {
-        t => println!("target-loss-pct property actual GType: {:?}", t),
-    }
+    let t = dynbitrate.property_value("target-loss-pct").type_();
+    println!("target-loss-pct property actual GType: {:?}", t);
 
     // Try to get it as different types
     match dynbitrate.property_value("target-loss-pct").get::<f64>() {

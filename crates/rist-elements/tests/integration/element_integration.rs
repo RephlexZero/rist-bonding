@@ -107,7 +107,7 @@ async fn test_pad_creation_and_linking() -> Result<(), Box<dyn std::error::Error
 
     // Wait for state change
     let (state_return, _, _) = pipeline.state(Some(gst::ClockTime::from_seconds(5)));
-    assert!(matches!(state_return, Ok(_)), "State change should succeed");
+    assert!(state_return.is_ok(), "State change should succeed");
 
     // Check pads are now linked
     assert!(
@@ -361,7 +361,7 @@ async fn test_buffer_flow_integrity() -> Result<(), Box<dyn std::error::Error>> 
     });
 
     // Configure source for limited buffers
-    _src.set_property("num-buffers", &100i32);
+    _src.set_property("num-buffers", 100i32);
 
     // Start pipeline
     pipeline.set_state(gst::State::Playing)?;

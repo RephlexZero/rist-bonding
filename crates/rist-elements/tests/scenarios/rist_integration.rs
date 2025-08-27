@@ -133,7 +133,7 @@ fn test_bonding_configuration() {
 
     assert_eq!(interval, 100);
     assert_eq!(strategy, "ewma");
-    assert_eq!(auto_balance, true);
+    assert!(auto_balance);
 
     println!(
         "Bonding configuration - Interval: {}ms, Strategy: {}, Auto-balance: {}",

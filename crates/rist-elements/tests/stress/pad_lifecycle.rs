@@ -24,7 +24,7 @@ fn stress_pad_lifecycle() {
         // Request a pad
         if let Some(pad) = dispatcher.request_pad_simple("src_%u") {
             // Verify pad is valid
-            assert!(pad.name().len() > 0, "Pad should have a valid name");
+            assert!(!pad.name().is_empty(), "Pad should have a valid name");
 
             // Release the pad
             dispatcher.release_request_pad(&pad);
@@ -36,7 +36,7 @@ fn stress_pad_lifecycle() {
     // Final sanity check: request a pad and ensure dispatcher still responds
     if let Some(pad) = dispatcher.request_pad_simple("src_%u") {
         assert!(
-            pad.name().len() > 0,
+            !pad.name().is_empty(),
             "Failed to request pad after stress test"
         );
         dispatcher.release_request_pad(&pad);

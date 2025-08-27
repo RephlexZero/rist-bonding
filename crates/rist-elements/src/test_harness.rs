@@ -267,12 +267,9 @@ pub mod encoder_stub {
         }
 
         fn set_property(&self, _id: usize, value: &glib::Value, pspec: &glib::ParamSpec) {
-            match pspec.name() {
-                "bitrate" => {
-                    let v = value.get::<u32>().unwrap_or(3000);
-                    *self.inner.bitrate_kbps.lock().unwrap() = v;
-                }
-                _ => {}
+            if pspec.name() == "bitrate" {
+                let v = value.get::<u32>().unwrap_or(3000);
+                *self.inner.bitrate_kbps.lock().unwrap() = v;
             }
         }
 
@@ -492,14 +489,14 @@ pub mod riststats_mock {
                 let prefix = format!("session-{}.", i);
                 builder = builder
                     .field(
-                        &format!("{}sent-original-packets", prefix),
+                        format!("{}sent-original-packets", prefix),
                         sess.sent_original,
                     )
                     .field(
-                        &format!("{}sent-retransmitted-packets", prefix),
+                        format!("{}sent-retransmitted-packets", prefix),
                         sess.sent_retrans,
                     )
-                    .field(&format!("{}round-trip-time", prefix), sess.rtt_ms as f64);
+                    .field(format!("{}round-trip-time", prefix), sess.rtt_ms as f64);
 
                 total_original = total_original.saturating_add(sess.sent_original);
                 total_retrans = total_retrans.saturating_add(sess.sent_retrans);

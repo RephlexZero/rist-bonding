@@ -24,6 +24,12 @@ pub struct DockerNetworkEnv {
     pub interfaces: Vec<String>,
 }
 
+impl Default for DockerNetworkEnv {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DockerNetworkEnv {
     /// Create a new Docker network environment
     pub fn new() -> Self {
@@ -75,7 +81,7 @@ impl DockerNetworkEnv {
     /// Create a network namespace
     pub async fn create_namespace(&mut self, name: &str) -> Result<(), DockerNetworkError> {
         let output = Command::new("ip")
-            .args(&["netns", "add", name])
+            .args(["netns", "add", name])
             .output()
             .map_err(|e| {
                 DockerNetworkError::CommandFailed(format!(
@@ -106,7 +112,7 @@ impl DockerNetworkEnv {
         if2: &str,
     ) -> Result<(), DockerNetworkError> {
         let output = Command::new("ip")
-            .args(&["link", "add", if1, "type", "veth", "peer", "name", if2])
+            .args(["link", "add", if1, "type", "veth", "peer", "name", if2])
             .output()
             .map_err(|e| {
                 DockerNetworkError::CommandFailed(format!("Failed to create veth pair: {}", e))
@@ -135,7 +141,7 @@ impl DockerNetworkEnv {
         namespace: &str,
     ) -> Result<(), DockerNetworkError> {
         let output = Command::new("ip")
-            .args(&["link", "set", interface, "netns", namespace])
+            .args(["link", "set", interface, "netns", namespace])
             .output()
             .map_err(|e| {
                 DockerNetworkError::CommandFailed(format!("Failed to move interface: {}", e))
@@ -159,7 +165,7 @@ impl DockerNetworkEnv {
         addr: &str,
     ) -> Result<(), DockerNetworkError> {
         let output = Command::new("ip")
-            .args(&["addr", "add", addr, "dev", interface])
+            .args(["addr", "add", addr, "dev", interface])
             .output()
             .map_err(|e| {
                 DockerNetworkError::CommandFailed(format!("Failed to configure interface: {}", e))
@@ -187,7 +193,7 @@ impl DockerNetworkEnv {
         addr: &str,
     ) -> Result<(), DockerNetworkError> {
         let output = Command::new("ip")
-            .args(&[
+            .args([
                 "netns", "exec", namespace, "ip", "addr", "add", addr, "dev", interface,
             ])
             .output()
@@ -215,7 +221,7 @@ impl DockerNetworkEnv {
     /// Bring interface up
     pub async fn bring_up_interface(&self, interface: &str) -> Result<(), DockerNetworkError> {
         let output = Command::new("ip")
-            .args(&["link", "set", interface, "up"])
+            .args(["link", "set", interface, "up"])
             .output()
             .map_err(|e| {
                 DockerNetworkError::CommandFailed(format!("Failed to bring up interface: {}", e))
@@ -239,7 +245,7 @@ impl DockerNetworkEnv {
         interface: &str,
     ) -> Result<(), DockerNetworkError> {
         let output = Command::new("ip")
-            .args(&[
+            .args([
                 "netns", "exec", namespace, "ip", "link", "set", interface, "up",
             ])
             .output()
@@ -268,7 +274,7 @@ impl DockerNetworkEnv {
         to_ip: &str,
     ) -> Result<bool, DockerNetworkError> {
         let output = Command::new("ip")
-            .args(&[
+            .args([
                 "netns", "exec", from_ns, "ping", "-c", "1", "-W", "1", to_ip,
             ])
             .output()
@@ -289,7 +295,7 @@ impl DockerNetworkEnv {
     ) -> Result<(), DockerNetworkError> {
         // Delete existing qdisc (ignore errors)
         let _ = Command::new("tc")
-            .args(&["qdisc", "del", "dev", interface, "root"])
+            .args(["qdisc", "del", "dev", interface, "root"])
             .output();
 
         // Add netem qdisc with impairments
@@ -298,7 +304,7 @@ impl DockerNetworkEnv {
         let rate_str = format!("{}kbit", rate_kbps);
 
         let output = Command::new("tc")
-            .args(&[
+            .args([
                 "qdisc", "add", "dev", interface, "root", "handle", "1:", "netem", "delay",
                 &delay_str, "loss", &loss_str, "rate", &rate_str,
             ])
@@ -325,14 +331,12 @@ impl DockerNetworkEnv {
     pub async fn cleanup(&mut self) -> Result<(), DockerNetworkError> {
         // Delete namespaces (this also cleans up interfaces in them)
         for ns in &self.namespaces {
-            let _ = Command::new("ip").args(&["netns", "del", ns]).output();
+            let _ = Command::new("ip").args(["netns", "del", ns]).output();
         }
 
         // Delete interfaces in root namespace
         for interface in &self.interfaces {
-            let _ = Command::new("ip")
-                .args(&["link", "del", interface])
-                .output();
+            let _ = Command::new("ip").args(["link", "del", interface]).output();
         }
 
         self.namespaces.clear();

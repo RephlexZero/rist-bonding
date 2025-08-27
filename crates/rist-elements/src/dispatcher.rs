@@ -25,6 +25,7 @@ static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
 // - rebalance-interval-ms: how often to recompute weights from stats
 // - strategy: "aimd" | "ewma" (affects weight updates)
 
+#[derive(Default)]
 pub struct State {
     // Selected output index at the time a packet arrives
     next_out: usize,
@@ -47,25 +48,6 @@ pub struct State {
     // Keyframe duplication state
     dup_budget_used: u32, // Duplications used this second
     dup_budget_reset_time: Option<std::time::Instant>, // When to reset the budget
-}
-
-impl Default for State {
-    fn default() -> Self {
-        Self {
-            next_out: 0,
-            weights: Vec::new(),
-            swrr_counters: Vec::new(),
-            cached_stream_start: None,
-            cached_caps: None,
-            cached_segment: None,
-            cached_tags: Vec::new(),
-            link_stats: Vec::new(),
-            last_switch_time: None,
-            link_health_timers: Vec::new(),
-            dup_budget_used: 0,
-            dup_budget_reset_time: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -147,15 +129,11 @@ impl Default for DispatcherInner {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Strategy {
     Aimd,
+    #[default]
     Ewma,
-}
-impl Default for Strategy {
-    fn default() -> Self {
-        Strategy::Ewma
-    }
 }
 
 // Public wrapper type so GStreamer can instantiate it
@@ -285,7 +263,7 @@ impl ObjectImpl for DispatcherImpl {
 
                         let can_dup = if should_duplicate {
                             let mut st = inner.state.lock();
-                            Self::can_duplicate_keyframe(&inner, &mut *st)
+                            Self::can_duplicate_keyframe(&inner, &mut st)
                         } else {
                             false
                         };
@@ -648,7 +626,7 @@ impl ObjectImpl for DispatcherImpl {
                 }
             }
             2 => {
-                let interval = value.get::<u64>().unwrap_or(500).max(100).min(10000);
+                let interval = value.get::<u64>().unwrap_or(500).clamp(100, 10000);
                 *self.inner.rebalance_interval_ms.lock() = interval;
                 gst::debug!(CAT, "Set rebalance interval: {} ms", interval);
 
@@ -707,7 +685,7 @@ impl ObjectImpl for DispatcherImpl {
                 gst::debug!(CAT, "Set min-hold-ms: {}", min_hold);
             }
             9 => {
-                let threshold = value.get::<f64>().unwrap_or(1.2).max(1.0).min(10.0);
+                let threshold = value.get::<f64>().unwrap_or(1.2).clamp(1.0, 10.0);
                 *self.inner.switch_threshold.lock() = threshold;
                 gst::debug!(CAT, "Set switch-threshold: {:.2}", threshold);
             }
@@ -1718,6 +1696,7 @@ impl DispatcherImpl {
 }
 
 // Smooth Weighted Round Robin (SWRR) selection with hysteresis
+#[allow(clippy::too_many_arguments)]
 fn pick_output_index_swrr_with_hysteresis(
     weights: &[f64],
     swrr_counters: &mut Vec<f64>,
