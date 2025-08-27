@@ -1,0 +1,16 @@
+services:
+  rist-bonding-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rist-bonding-dev-ci
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - .:/workspace
+      - /lib/modules:/lib/modules:ro
+    working_dir: /workspace
+    command: sleep infinity
+    # Enable interactive mode for CI
+    stdin_open: true
+    tty: true

@@ -103,7 +103,7 @@ jobs:
       
       - name: Start services with Docker Compose
         run: |
-          docker compose up --build -d
+          docker compose -f docker-compose.ci.yml up --build -d
       
       - name: Wait for services to be ready
         run: |
@@ -112,7 +112,7 @@ jobs:
       
       - name: Run containerized tests
         run: |
-          docker compose exec -T rist-bonding-dev bash -c "
+          docker compose -f docker-compose.ci.yml exec -T rist-bonding-dev bash -c "
             echo 'Testing development setup...'
             cargo --version
             gst-inspect-1.0 --version
@@ -121,7 +121,7 @@ jobs:
       
       - name: Tear down services
         if: always()
-        run: docker compose down --volumes --remove-orphans
+        run: docker compose -f docker-compose.ci.yml down --volumes --remove-orphans
 
   security-audit:
     name: Security Audit
