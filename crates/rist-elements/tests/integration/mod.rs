@@ -5,6 +5,7 @@
 
 mod dynbitrate_behavior;
 mod element_integration;
+mod error_recovery;
 mod keyframe_duplication;
 mod metrics_debug;
 mod metrics_export;
