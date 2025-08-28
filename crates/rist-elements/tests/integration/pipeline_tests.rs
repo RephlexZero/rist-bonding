@@ -611,7 +611,7 @@ fn test_buffer_flow_and_timing() {
 
     // Use identity element to observe buffer flow
     let identity = gst::ElementFactory::make("identity")
-        .property("dump", true)
+        .property("dump", false)
         .build()
         .expect("Failed to create identity");
 
