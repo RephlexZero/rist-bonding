@@ -9,6 +9,7 @@ mod edge_case_coverage;
 mod element_integration;
 mod error_recovery;
 mod keyframe_duplication;
+mod metrics_accuracy;
 mod metrics_debug;
 mod metrics_export;
 mod network_integration;
