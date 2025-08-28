@@ -12,3 +12,4 @@ mod network_integration;
 mod pad_removal_simple;
 mod pipeline_tests;
 mod property_debug;
+mod thread_safety;
