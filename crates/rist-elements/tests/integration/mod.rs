@@ -14,6 +14,7 @@ mod error_recovery;
 mod extended_rebalancing;
 mod hysteresis_warmup;
 mod keyframe_duplication;
+mod lifecycle_state_management;
 mod metrics_accuracy;
 mod metrics_debug;
 mod metrics_export;
