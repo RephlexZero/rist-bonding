@@ -8,12 +8,17 @@
   "customizations": {
     "vscode": {
       "settings": {
-        "rust-analyzer.cargo.buildScripts.enable": true,
-        "rust-analyzer.cargo.features": "all",
-        "rust-analyzer.checkOnSave.command": "clippy",
-        "rust-analyzer.checkOnSave.extraArgs": ["--all-targets", "--all-features"],
-        "rust-analyzer.procMacro.enable": true,
+        "rust-analyzer.checkOnSave": true,
+        "rust-analyzer.check": {
+          "command": "clippy",
+          "allTargets": true
+        },
         "rust-analyzer.cargo.allFeatures": true,
+
+        "rust-analyzer.cargo.buildScripts.enable": true,
+        "rust-analyzer.procMacro.enable": true,
+
+        // ---- terminal & watcher ----
         "terminal.integrated.defaultProfile.linux": "bash",
         "files.watcherExclude": {
           "**/target/**": true,
@@ -23,11 +28,9 @@
       },
       "extensions": [
         "rust-lang.rust-analyzer",
-        "vadimcn.vscode-lldb",
         "tamasfe.even-better-toml",
         "usernamehw.errorlens",
-        "fill-labs.dependi",
-        "ms-azuretools.vscode-containers"
+        "fill-labs.dependi"
       ]
     }
   },
