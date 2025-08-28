@@ -41,6 +41,18 @@ gst::plugin_define!(
 // Static registration helper for tests: directly register elements without a Plugin
 #[cfg(feature = "test-plugin")]
 pub fn register_for_tests() {
+    // Suppress GStreamer debug output including buffer memory dumps
+    if std::env::var("GST_DEBUG").is_err() {
+        std::env::set_var("GST_DEBUG", "0");
+    }
+    // Suppress additional GStreamer debugging features
+    if std::env::var("GST_DEBUG_DUMP_DOT_DIR").is_err() {
+        std::env::set_var("GST_DEBUG_DUMP_DOT_DIR", "");
+    }
+    if std::env::var("GST_DEBUG_NO_COLOR").is_err() {
+        std::env::set_var("GST_DEBUG_NO_COLOR", "1");
+    }
+    
     let _ = gst::init();
     // Register main elements with None plugin handle
     let _ = dispatcher::register_static();

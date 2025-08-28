@@ -287,6 +287,43 @@ gst-inspect-1.0 ristdispatcher
 GST_PLUGIN_PATH=target/release gst-inspect-1.0 ristdispatcher
 ```
 
+## Testing
+
+The crate includes comprehensive integration and performance tests:
+
+```bash
+# Run all tests
+cargo test
+
+# Run tests with clean output (suppresses GStreamer debug hex dumps)
+./scripts/test-clean.sh
+
+# Run specific test categories
+cargo test integration
+cargo test performance_benchmarks
+cargo test thread_safety
+
+# Run individual test with output
+cargo test test_memory_usage_under_load -- --nocapture
+```
+
+### Suppressing GStreamer Debug Output
+
+When running tests, you may see large hex dumps from GStreamer's internal buffer debugging. To suppress these:
+
+```bash
+# Use environment variables
+export GST_DEBUG=0
+export GST_DEBUG_DUMP_DOT_DIR=""
+export GST_DEBUG_NO_COLOR=1
+cargo test
+
+# Or use the provided clean test script
+./scripts/test-clean.sh integration
+```
+
+The hex dumps are harmless but can make test output verbose. They typically appear during high-load performance tests or when multiple tests run concurrently.
+
 ## Advanced Features
 
 ### Network-Aware Load Balancing
