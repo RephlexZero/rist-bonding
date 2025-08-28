@@ -11,6 +11,7 @@ mod keyframe_duplication;
 mod metrics_debug;
 mod metrics_export;
 mod network_integration;
+mod network_simulation;
 mod pad_removal_simple;
 mod performance_benchmarks;
 mod pipeline_tests;
