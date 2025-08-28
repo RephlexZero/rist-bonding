@@ -1,0 +1,12 @@
+[package]
+name = "metrics_debug"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "metrics_debug"
+path = "main.rs"
+
+[dependencies]
+gstreamer = "0.24"
+gstristelements = { path = "crates/rist-elements" }
