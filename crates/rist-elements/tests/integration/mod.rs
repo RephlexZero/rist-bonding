@@ -5,6 +5,7 @@
 
 mod cross_element_integration;
 mod dynbitrate_behavior;
+mod edge_case_coverage;
 mod element_integration;
 mod error_recovery;
 mod keyframe_duplication;
