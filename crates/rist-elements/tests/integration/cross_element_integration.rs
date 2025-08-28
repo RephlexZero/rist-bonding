@@ -314,7 +314,6 @@ fn test_complex_pipeline_integration() {
     let dynbitrate1 = create_dynbitrate();
     let dynbitrate2 = create_dynbitrate();
     let dynbitrate3 = create_dynbitrate();
-    let dynbitrate3 = create_dynbitrate();
 
     // Set different bitrate ranges
     dynbitrate1.set_property("min-kbps", 500u32); // 0.5 Mbps

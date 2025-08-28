@@ -75,8 +75,8 @@ fn test_dispatcher_extreme_pad_counts() {
 
     // Release half the pads
     let release_count = pads.len() / 2;
-    for i in 0..release_count {
-        dispatcher.release_request_pad(&pads[i]);
+    for (i, pad) in pads.iter().enumerate().take(release_count) {
+        dispatcher.release_request_pad(pad);
         println!("  Released pad {}", i + 1);
     }
 
@@ -195,7 +195,7 @@ fn test_dynbitrate_invalid_configurations() {
         assert!(actual_min >= 100, "min-kbps should be within valid range");
         assert!(actual_step >= 50, "step-kbps should be within valid range");
         assert!(
-            actual_target >= 0.0 && actual_target <= 10.0,
+            (0.0..=10.0).contains(&actual_target),
             "target-loss-pct should be within valid range"
         );
 

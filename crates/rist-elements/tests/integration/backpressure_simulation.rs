@@ -1,8 +1,8 @@
 use gstreamer::{prelude::*, Element, Pipeline};
 use gstristelements::testing::*;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
-    Arc, Barrier, Mutex,
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -64,7 +64,7 @@ fn test_slow_sink_backpressure() {
     let sink2_delay_clone = sink2_delay.clone();
 
     // Monitor sink2 pad and introduce delay
-    let sink2_pad_clone = sink2_pad.clone();
+    let _sink2_pad_clone = sink2_pad.clone();
     thread::spawn(move || {
         // Simulate sink2 becoming slow after initial period
         thread::sleep(Duration::from_millis(800));
@@ -145,7 +145,7 @@ fn test_blocked_output_handling() {
     switch_events.lock().unwrap().clear();
 
     // Simulate output blocking scenarios
-    let blocking_scenarios = vec![
+    let blocking_scenarios = [
         ("[1.0, 0.0, 1.0]", "Output 1 completely blocked"),
         ("[1.0, 1.0, 0.0]", "Output 2 completely blocked"),
         ("[0.0, 1.0, 1.0]", "Output 0 completely blocked"),

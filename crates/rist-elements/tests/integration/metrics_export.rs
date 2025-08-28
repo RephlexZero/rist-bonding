@@ -169,16 +169,13 @@ fn test_metrics_bus_message_structure() {
 
     // Install bus watch
     let _watch_id = bus.add_watch(move |_bus, message| {
-        match message.type_() {
-            gst::MessageType::Application => {
-                if let Some(structure) = message.structure() {
-                    if structure.name() == "rist-dispatcher-metrics" {
-                        println!("Received metrics message: {}", structure.to_string());
-                        messages_clone.lock().unwrap().push(structure.to_owned());
-                    }
+        if message.type_() == gst::MessageType::Application {
+            if let Some(structure) = message.structure() {
+                if structure.name() == "rist-dispatcher-metrics" {
+                    println!("Received metrics message: {}", structure);
+                    messages_clone.lock().unwrap().push(structure.to_owned());
                 }
             }
-            _ => {}
         }
         glib::ControlFlow::Continue
     });
@@ -209,7 +206,7 @@ fn test_metrics_bus_message_structure() {
 
     // We should have at least one metrics message
     assert!(
-        collected_messages.len() > 0,
+        !collected_messages.is_empty(),
         "Should have received at least one metrics message"
     );
 

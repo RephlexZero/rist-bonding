@@ -52,7 +52,7 @@ pub fn register_for_tests() {
     if std::env::var("GST_DEBUG_NO_COLOR").is_err() {
         std::env::set_var("GST_DEBUG_NO_COLOR", "1");
     }
-    
+
     let _ = gst::init();
     // Register main elements with None plugin handle
     let _ = dispatcher::register_static();

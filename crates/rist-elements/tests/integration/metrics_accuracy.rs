@@ -111,7 +111,7 @@ fn test_metrics_export_interval_timing() {
         // Check that we got multiple messages within the expected timeframe
         println!("Collected {} metrics messages", collected_messages.len());
         assert!(
-            collected_messages.len() >= 1,
+            !collected_messages.is_empty(),
             "Should receive at least one metrics message"
         );
     } else {

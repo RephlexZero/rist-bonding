@@ -65,7 +65,7 @@ fn test_high_throughput_performance() {
     pipeline.set_state(gst::State::Playing).unwrap();
 
     // Wait for processing completion with timeout
-    let mut processed_count = 0u64;
+    let processed_count;
     let timeout = Duration::from_secs(30);
     let test_start = Instant::now();
 
@@ -171,7 +171,7 @@ fn test_dynamic_rebalancing_performance() {
     });
 
     // Monitor processing
-    let mut final_count = 0u64;
+    let final_count;
     let timeout = Duration::from_secs(30);
     let test_start = Instant::now();
 
@@ -519,7 +519,7 @@ fn test_algorithmic_performance_comparison() {
         pipeline.set_state(gst::State::Playing).unwrap();
 
         // Wait for completion
-        let mut final_count = 0u64;
+        let final_count;
         let timeout = Duration::from_secs(20);
         let test_start = Instant::now();
 

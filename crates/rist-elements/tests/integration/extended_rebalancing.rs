@@ -153,7 +153,7 @@ fn test_weight_adaptation_over_time() {
     weight_snapshots.lock().unwrap().clear();
 
     // Simulate gradual degradation of output 1, requiring adaptation
-    let adaptation_sequence = vec![
+    let adaptation_sequence = [
         "[1.0, 1.0]", // Equal initially
         "[1.0, 0.9]", // Slight degradation
         "[1.0, 0.7]", // More degradation
@@ -229,7 +229,7 @@ fn test_rapid_oscillation_handling() {
     *oscillation_count.lock().unwrap() = 0;
 
     // Rapid oscillations between different "best" outputs
-    let oscillation_pattern = vec![
+    let oscillation_pattern = [
         "[2.0, 1.0, 1.0]", // Output 0 best
         "[1.0, 2.2, 1.0]", // Output 1 best
         "[1.0, 1.0, 1.9]", // Output 2 best
@@ -314,7 +314,7 @@ fn test_long_term_rebalancing_stability() {
     let test_start = Instant::now();
 
     // Simulate long-term conditions with gradual changes
-    let long_term_conditions = vec![
+    let long_term_conditions = [
         ("[1.2, 1.0]", Duration::from_millis(600)), // Slight preference
         ("[1.0, 1.3]", Duration::from_millis(700)), // Shift preference
         ("[0.9, 1.0]", Duration::from_millis(500)), // Small degradation

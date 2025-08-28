@@ -65,19 +65,16 @@ fn test_metrics_debug() {
 
     // Watch pipeline bus
     let _watch1 = pipeline_bus.add_watch(move |_bus, message| {
-        match message.type_() {
-            gst::MessageType::Application => {
-                if let Some(structure) = message.structure() {
-                    if structure.name() == "rist-dispatcher-metrics" {
-                        println!("🎉 Received metrics message on PIPELINE bus!");
-                        msg_clone1
-                            .lock()
-                            .unwrap()
-                            .push(format!("pipeline: {}", structure.to_string()));
-                    }
+        if message.type_() == gst::MessageType::Application {
+            if let Some(structure) = message.structure() {
+                if structure.name() == "rist-dispatcher-metrics" {
+                    println!("🎉 Received metrics message on PIPELINE bus!");
+                    msg_clone1
+                        .lock()
+                        .unwrap()
+                        .push(format!("pipeline: {}", structure));
                 }
             }
-            _ => {}
         }
         glib::ControlFlow::Continue
     });
@@ -86,19 +83,16 @@ fn test_metrics_debug() {
     let _watch2 = if let Some(elem_bus) = element_bus {
         println!("Also watching element bus");
         Some(elem_bus.add_watch(move |_bus, message| {
-            match message.type_() {
-                gst::MessageType::Application => {
-                    if let Some(structure) = message.structure() {
-                        if structure.name() == "rist-dispatcher-metrics" {
-                            println!("🎉 Received metrics message on ELEMENT bus!");
-                            msg_clone2
-                                .lock()
-                                .unwrap()
-                                .push(format!("element: {}", structure.to_string()));
-                        }
+            if message.type_() == gst::MessageType::Application {
+                if let Some(structure) = message.structure() {
+                    if structure.name() == "rist-dispatcher-metrics" {
+                        println!("🎉 Received metrics message on ELEMENT bus!");
+                        msg_clone2
+                            .lock()
+                            .unwrap()
+                            .push(format!("element: {}", structure));
                     }
                 }
-                _ => {}
             }
             glib::ControlFlow::Continue
         }))

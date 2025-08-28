@@ -37,7 +37,7 @@ fn test_runtime_weight_updates() {
     let test_start = Instant::now();
 
     // Series of runtime weight changes
-    let weight_sequences = vec![
+    let weight_sequences = [
         "[2.0, 1.0, 1.0]", // Favor output 0
         "[1.0, 3.0, 1.0]", // Favor output 1
         "[1.0, 1.0, 2.5]", // Favor output 2

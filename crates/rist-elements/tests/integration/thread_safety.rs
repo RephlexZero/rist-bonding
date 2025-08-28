@@ -6,7 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 /// Pump the GLib main loop for the specified duration
-fn run_mainloop_ms(ms: u64) {
+fn _run_mainloop_ms(ms: u64) {
     let ctx = glib::MainContext::default();
     let _guard = ctx.acquire().expect("acquire main context");
     let end = std::time::Instant::now() + Duration::from_millis(ms);
@@ -38,7 +38,7 @@ fn test_concurrent_weight_updates() {
                 barrier.wait();
 
                 // Each thread tries different weight combinations
-                let weight_sets = vec![
+                let weight_sets = [
                     "[0.4, 0.3, 0.3]",
                     "[0.6, 0.2, 0.2]",
                     "[0.33, 0.33, 0.34]",
@@ -108,7 +108,7 @@ fn test_concurrent_pad_management() {
 
     // Each thread manages its own pads concurrently
     let handles: Vec<_> = (0..num_threads)
-        .map(|i| {
+        .map(|_i| {
             let dispatcher = dispatcher.clone();
             let pipeline = pipeline.clone();
             let barrier = barrier.clone();
@@ -295,7 +295,7 @@ fn test_pipeline_state_transitions_concurrent() {
                     1 => {
                         // Thread 1: Weight updates during state changes
                         let weights = ["[0.6, 0.4]", "[0.4, 0.6]", "[0.7, 0.3]"];
-                        for (j, weight) in weights.iter().enumerate() {
+                        for weight in weights.iter() {
                             dispatcher.set_property("weights", *weight);
                             thread::sleep(Duration::from_millis(30));
                         }
