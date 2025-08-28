@@ -8,6 +8,7 @@ mod dynbitrate_behavior;
 mod edge_case_coverage;
 mod element_integration;
 mod error_recovery;
+mod extended_rebalancing;
 mod hysteresis_warmup;
 mod keyframe_duplication;
 mod metrics_accuracy;
