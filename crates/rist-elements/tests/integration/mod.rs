@@ -7,6 +7,7 @@ mod backpressure_simulation;
 mod cross_element_integration;
 mod dynbitrate_behavior;
 mod dynbitrate_keyframes;
+mod dynbitrate_stats_edge_cases;
 mod edge_case_coverage;
 mod element_integration;
 mod error_recovery;
