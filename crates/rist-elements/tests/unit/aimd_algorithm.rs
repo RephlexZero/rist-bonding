@@ -73,10 +73,7 @@ fn test_aimd_basic_functionality() {
     println!("  Path 2: {} buffers", count2);
 
     // Basic sanity check that we got traffic
-    assert!(
-        count1 + count2 > 0,
-        "Should receive at least some traffic"
-    );
+    assert!(count1 + count2 > 0, "Should receive at least some traffic");
 
     println!("✅ AIMD basic functionality test completed");
 }
@@ -120,7 +117,7 @@ fn test_aimd_weight_adaptation_under_loss() {
     // For AIMD testing, we focus on the algorithmic behavior rather than stats integration
     // The stats integration is tested separately
     println!("Testing AIMD weight adaptation behavior by simulating network conditions");
-    
+
     // Create a sample stats structure to verify the dispatcher accepts the format
     let test_stats_builder = gst::Structure::builder("application/x-rist-stats")
         .field("session-0.sent-original-packets", 1000u64)
@@ -129,7 +126,7 @@ fn test_aimd_weight_adaptation_under_loss() {
         .field("session-1.sent-original-packets", 1000u64)
         .field("session-1.sent-retransmitted-packets", 20u64) // 2% loss
         .field("session-1.round-trip-time", 50.0f64);
-    
+
     let _test_stats = test_stats_builder.build();
 
     pipeline
@@ -147,13 +144,13 @@ fn test_aimd_weight_adaptation_under_loss() {
 
     // Test weight property setting to simulate adaptation
     println!("Testing AIMD-style weight adjustments");
-    
+
     // Simulate AIMD multiplicative decrease on path 2 (high loss scenario)
     // In real AIMD, path with >5% loss would get multiplicatively decreased
     let aimd_weights = vec![0.7, 0.3]; // Path 1 gets more weight due to path 2 having high loss
     let weights_json = serde_json::to_string(&aimd_weights).unwrap();
     dispatcher.set_property("weights", &weights_json);
-    
+
     std::thread::sleep(Duration::from_millis(400)); // Allow traffic distribution to adapt
 
     let count1_phase2: u64 = get_property(&counter1, "count").unwrap();
@@ -172,7 +169,7 @@ fn test_aimd_weight_adaptation_under_loss() {
     let recovery_weights = vec![0.6, 0.4]; // Both paths get additive increase
     let recovery_json = serde_json::to_string(&recovery_weights).unwrap();
     dispatcher.set_property("weights", &recovery_json);
-    
+
     std::thread::sleep(Duration::from_millis(400));
 
     pipeline
@@ -201,12 +198,15 @@ fn test_aimd_weight_adaptation_under_loss() {
     );
 
     // Check that dispatcher responded to the weight adjustments
-    // This simulates what real AIMD would do: multiplicative decrease for high loss, 
+    // This simulates what real AIMD would do: multiplicative decrease for high loss,
     // then additive increase during good conditions
     if delta1 > 0 {
-        println!("AIMD simulation successful: Path 1 received {} buffers during adjustment phase", delta1);
+        println!(
+            "AIMD simulation successful: Path 1 received {} buffers during adjustment phase",
+            delta1
+        );
     }
-    
+
     // Verify we can read the current weights
     let current_weights: String = get_property(&dispatcher, "current-weights").unwrap();
     println!("Final dispatcher weights: {}", current_weights);
@@ -246,13 +246,19 @@ fn test_aimd_vs_ewma_strategies() {
     assert!(auto_balance_ewma, "EWMA dispatcher should auto-balance");
 
     println!("Strategy configurations:");
-    println!("  AIMD: strategy={}, auto-balance={}", strategy_aimd, auto_balance_aimd);
-    println!("  EWMA: strategy={}, auto-balance={}", strategy_ewma, auto_balance_ewma);
+    println!(
+        "  AIMD: strategy={}, auto-balance={}",
+        strategy_aimd, auto_balance_aimd
+    );
+    println!(
+        "  EWMA: strategy={}, auto-balance={}",
+        strategy_ewma, auto_balance_ewma
+    );
 
     // Test that both accept weight updates (basic functional test)
     let test_weights = vec![0.6, 0.4];
     let test_json = serde_json::to_string(&test_weights).unwrap();
-    
+
     // Both dispatchers should accept weight updates without error
     dispatcher_aimd.set_property("weights", &test_json);
     dispatcher_ewma.set_property("weights", &test_json);
@@ -276,11 +282,14 @@ fn test_aimd_parameter_tuning() {
 
     // Test various rebalance intervals
     let test_intervals = [100u64, 200u64, 500u64];
-    
+
     for &interval in &test_intervals {
         dispatcher.set_property("rebalance-interval-ms", interval);
         let actual_interval: u64 = get_property(&dispatcher, "rebalance-interval-ms").unwrap();
-        assert_eq!(actual_interval, interval, "Rebalance interval should be set correctly");
+        assert_eq!(
+            actual_interval, interval,
+            "Rebalance interval should be set correctly"
+        );
         println!("  Interval {} ms configured successfully", interval);
     }
 
@@ -380,7 +389,9 @@ fn test_aimd_convergence_behavior() {
 
     // With AIMD convergence simulation, both paths should have gotten more balanced distribution
     if delta1 > 0 && delta2 > 0 {
-        println!("AIMD convergence simulation successful: both paths active during good conditions");
+        println!(
+            "AIMD convergence simulation successful: both paths active during good conditions"
+        );
     }
 
     println!("✅ AIMD convergence behavior test completed");

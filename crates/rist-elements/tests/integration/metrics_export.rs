@@ -34,7 +34,10 @@ fn test_metrics_export_disabled_by_default() {
     let default_interval: u64 = get_property(&dispatcher, "metrics-export-interval-ms").unwrap();
     println!("Default metrics export interval: {}ms", default_interval);
 
-    assert_eq!(default_interval, 0, "Default metrics export should be disabled (0ms)");
+    assert_eq!(
+        default_interval, 0,
+        "Default metrics export should be disabled (0ms)"
+    );
 
     println!("✅ Metrics export disabled by default test completed");
 }
@@ -48,29 +51,37 @@ fn test_metrics_export_properties() {
     let dispatcher = create_dispatcher_for_testing(Some(&[0.5, 0.5]));
 
     println!("Testing property ranges and defaults...");
-    
+
     // Test default value
     let default_interval: u64 = get_property(&dispatcher, "metrics-export-interval-ms").unwrap();
     println!("Default metrics export interval: {}ms", default_interval);
 
     // Test setting different intervals individually with error handling
     let test_intervals = [100u64, 500u64, 1000u64, 5000u64];
-    
+
     for &interval in &test_intervals {
         println!("Attempting to set metrics interval to: {}ms", interval);
-        
+
         match std::panic::catch_unwind(|| {
             dispatcher.set_property("metrics-export-interval-ms", interval);
             get_property::<u64>(&dispatcher, "metrics-export-interval-ms").unwrap_or(0)
         }) {
             Ok(actual_interval) => {
                 println!("  Successfully set to: {}ms", actual_interval);
-                assert_eq!(actual_interval, interval, "Should be able to set interval to {}", interval);
+                assert_eq!(
+                    actual_interval, interval,
+                    "Should be able to set interval to {}",
+                    interval
+                );
             }
             Err(_) => {
-                println!("  Failed to set interval {}, checking if property exists", interval);
+                println!(
+                    "  Failed to set interval {}, checking if property exists",
+                    interval
+                );
                 // Try to read the property to confirm it exists
-                if let Ok(current) = get_property::<u64>(&dispatcher, "metrics-export-interval-ms") {
+                if let Ok(current) = get_property::<u64>(&dispatcher, "metrics-export-interval-ms")
+                {
                     println!("  Property exists with current value: {}", current);
                 } else {
                     println!("  Property may not exist!");
@@ -91,17 +102,23 @@ fn test_metrics_export_properties() {
 
     // Test value rejection for out-of-range (should fail to set, not clamp)
     let before_invalid = get_property::<u64>(&dispatcher, "metrics-export-interval-ms").unwrap();
-    
+
     let invalid_result = std::panic::catch_unwind(|| {
         dispatcher.set_property("metrics-export-interval-ms", 70000u64);
     });
-    
+
     // The property set should fail for out-of-range values
-    assert!(invalid_result.is_err(), "Should reject out-of-range value 70000");
-    
+    assert!(
+        invalid_result.is_err(),
+        "Should reject out-of-range value 70000"
+    );
+
     // Property should retain its previous value
     let after_invalid = get_property::<u64>(&dispatcher, "metrics-export-interval-ms").unwrap();
-    assert_eq!(after_invalid, before_invalid, "Property should retain previous value after invalid set");
+    assert_eq!(
+        after_invalid, before_invalid,
+        "Property should retain previous value after invalid set"
+    );
 
     println!("Final metrics export interval: {}ms", after_invalid);
     println!("✅ Metrics export properties test completed");
@@ -130,14 +147,14 @@ fn test_metrics_bus_message_structure() {
 
     source.link(&dispatcher).expect("Failed to link source");
     println!("Successfully linked source to dispatcher");
-    
+
     // Verify the sinkpad was created
     if let Some(sinkpad) = dispatcher.static_pad("sink") {
         println!("Dispatcher has sink pad: {}", sinkpad.name());
     } else {
         println!("WARNING: Dispatcher has no sink pad!");
     }
-    
+
     src_0
         .link(&counter1.static_pad("sink").unwrap())
         .expect("Failed to link src_0");
@@ -174,7 +191,7 @@ fn test_metrics_bus_message_structure() {
 
     // Give pipeline time to start up
     std::thread::sleep(Duration::from_millis(100));
-    
+
     // THEN enable metrics export with short interval
     dispatcher.set_property("metrics-export-interval-ms", 500u64);
 
@@ -191,17 +208,30 @@ fn test_metrics_bus_message_structure() {
     println!("Collected {} metrics messages", collected_messages.len());
 
     // We should have at least one metrics message
-    assert!(collected_messages.len() > 0, "Should have received at least one metrics message");
+    assert!(
+        collected_messages.len() > 0,
+        "Should have received at least one metrics message"
+    );
 
     // Check structure of first message
     if let Some(first_message) = collected_messages.first() {
         println!("Analyzing first metrics message structure:");
-        
+
         // Check expected fields
-        let expected_fields = ["timestamp", "current-weights", "buffers-processed", "src-pad-count", "selected-index"];
-        
+        let expected_fields = [
+            "timestamp",
+            "current-weights",
+            "buffers-processed",
+            "src-pad-count",
+            "selected-index",
+        ];
+
         for field in &expected_fields {
-            assert!(first_message.has_field(*field), "Metrics message should have '{}' field", field);
+            assert!(
+                first_message.has_field(*field),
+                "Metrics message should have '{}' field",
+                field
+            );
             println!("  ✓ Found field: {}", field);
         }
 
@@ -214,7 +244,10 @@ fn test_metrics_bus_message_structure() {
         if let Ok(weights) = first_message.get::<String>("current-weights") {
             println!("  ✓ Current weights: {}", weights);
             // Should be valid JSON array
-            assert!(weights.starts_with('[') && weights.ends_with(']'), "Weights should be JSON array format");
+            assert!(
+                weights.starts_with('[') && weights.ends_with(']'),
+                "Weights should be JSON array format"
+            );
         }
 
         if let Ok(pad_count) = first_message.get::<u32>("src-pad-count") {
@@ -276,7 +309,7 @@ fn test_metrics_export_timing() {
 
     println!("Testing metrics timing with 300ms interval");
     let start_time = std::time::Instant::now();
-    
+
     pipeline
         .set_state(gst::State::Playing)
         .expect("Failed to start pipeline");
@@ -293,23 +326,42 @@ fn test_metrics_export_timing() {
 
     // Check timing
     let times = message_times.lock().unwrap();
-    println!("Collected {} messages over {:?}", times.len(), total_duration);
+    println!(
+        "Collected {} messages over {:?}",
+        times.len(),
+        total_duration
+    );
 
     // Should have received approximately 1100ms / 300ms = 3-4 messages
-    assert!(times.len() >= 2, "Should have received at least 2 messages in ~1.1s with 300ms interval");
-    assert!(times.len() <= 6, "Should not have too many messages (got {})", times.len());
+    assert!(
+        times.len() >= 2,
+        "Should have received at least 2 messages in ~1.1s with 300ms interval"
+    );
+    assert!(
+        times.len() <= 6,
+        "Should not have too many messages (got {})",
+        times.len()
+    );
 
     // Check intervals between messages (should be roughly 300ms)
     if times.len() >= 2 {
         for i in 1..times.len() {
-            let interval = times[i].duration_since(times[i-1]);
+            let interval = times[i].duration_since(times[i - 1]);
             println!("  Interval {}: {:?}", i, interval);
-            
+
             // Allow some tolerance (200ms - 500ms range)
-            assert!(interval >= Duration::from_millis(200), 
-                    "Interval {} should be at least 200ms, got {:?}", i, interval);
-            assert!(interval <= Duration::from_millis(500), 
-                    "Interval {} should be at most 500ms, got {:?}", i, interval);
+            assert!(
+                interval >= Duration::from_millis(200),
+                "Interval {} should be at least 200ms, got {:?}",
+                i,
+                interval
+            );
+            assert!(
+                interval <= Duration::from_millis(500),
+                "Interval {} should be at most 500ms, got {:?}",
+                i,
+                interval
+            );
         }
     }
 
@@ -381,13 +433,30 @@ fn test_metrics_export_enable_disable() {
 
     println!("Message counts:");
     println!("  Disabled phase: {}", count_disabled);
-    println!("  Enabled phase: {} (delta: {})", count_enabled, count_enabled - count_disabled);
-    println!("  Disabled again: {} (delta: {})", count_disabled_again, count_disabled_again - count_enabled);
+    println!(
+        "  Enabled phase: {} (delta: {})",
+        count_enabled,
+        count_enabled - count_disabled
+    );
+    println!(
+        "  Disabled again: {} (delta: {})",
+        count_disabled_again,
+        count_disabled_again - count_enabled
+    );
 
     // Validate behavior
-    assert_eq!(count_disabled, 0, "Should receive no messages when disabled");
-    assert!(count_enabled > count_disabled, "Should receive messages when enabled");
-    assert_eq!(count_disabled_again, count_enabled, "Should stop receiving messages when disabled again");
+    assert_eq!(
+        count_disabled, 0,
+        "Should receive no messages when disabled"
+    );
+    assert!(
+        count_enabled > count_disabled,
+        "Should receive messages when enabled"
+    );
+    assert_eq!(
+        count_disabled_again, count_enabled,
+        "Should stop receiving messages when disabled again"
+    );
 
     println!("✅ Metrics export enable/disable test completed");
 }
@@ -463,19 +532,25 @@ fn test_metrics_with_dynamic_weights() {
     // Check weight changes were captured in metrics
     let captured_weights = weight_changes.lock().unwrap();
     println!("Captured {} weight snapshots:", captured_weights.len());
-    
+
     for (i, weights) in captured_weights.iter().enumerate() {
         println!("  Snapshot {}: {}", i, weights);
     }
 
-    assert!(captured_weights.len() >= 2, "Should have captured at least 2 weight snapshots");
+    assert!(
+        captured_weights.len() >= 2,
+        "Should have captured at least 2 weight snapshots"
+    );
 
     // Should have initial weights and changed weights
     let initial_weights = &captured_weights[0];
     let final_weights = captured_weights.last().unwrap();
 
     // Verify weight change was captured
-    assert_ne!(initial_weights, final_weights, "Should have captured weight change in metrics");
+    assert_ne!(
+        initial_weights, final_weights,
+        "Should have captured weight change in metrics"
+    );
 
     println!("✅ Metrics with dynamic weights test completed");
 }
