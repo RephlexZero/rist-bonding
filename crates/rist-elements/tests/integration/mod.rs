@@ -19,4 +19,5 @@ mod pad_removal_simple;
 mod performance_benchmarks;
 mod pipeline_tests;
 mod property_debug;
+mod runtime_updates;
 mod thread_safety;
