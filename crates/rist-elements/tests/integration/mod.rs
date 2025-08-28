@@ -10,6 +10,7 @@ mod dynbitrate_keyframes;
 mod dynbitrate_stats_edge_cases;
 mod edge_case_coverage;
 mod element_integration;
+mod error_misuse_scenarios;
 mod error_recovery;
 mod extended_rebalancing;
 mod hysteresis_warmup;
