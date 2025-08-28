@@ -3,6 +3,7 @@
 //! Tests that involve GStreamer pipelines, element interactions,
 //! and cross-component system behavior.
 
+mod cross_element_integration;
 mod dynbitrate_behavior;
 mod element_integration;
 mod error_recovery;
