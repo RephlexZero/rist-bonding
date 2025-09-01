@@ -12,6 +12,10 @@ The testing system is designed around several key principles:
 - **Container-based consistency**: All tests run in controlled Docker environments
 - **Automated validation**: GitHub Actions for continuous integration
 
+### Note on Bonding and Recombination
+
+When using packet-level bonding, a single elementary stream (e.g., TS-over-RTP) is split across multiple paths. No individual path contains the full stream. Tests and demos must therefore recombine all bonded outputs before decoding or writing to disk. Our performance test uses an RTP-aware `rtpfunnel` aggregator to merge all `ristdispatcher` src pads into a single RTP flow, then a single `rtpjitterbuffer` and depayloader to ensure in-order delivery and proper recovery. Recording a single branch directly will result in incomplete/corrupt content and is not representative of a real bonded receiver.
+
 ## Prerequisites
 
 ### System Requirements

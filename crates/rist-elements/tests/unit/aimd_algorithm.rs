@@ -114,8 +114,8 @@ fn test_aimd_weight_adaptation_under_loss() {
         .link(&counter2.static_pad("sink").unwrap())
         .expect("Failed to link src_1");
 
-    // For AIMD testing, we focus on the algorithmic behavior rather than stats integration
-    // The stats integration is tested separately
+    // For AIMD testing, we focus on property-driven simulation of behavior rather than
+    // full stats integration (which is exercised in integration tests).
     println!("Testing AIMD weight adaptation behavior by simulating network conditions");
 
     // Create a sample stats structure to verify the dispatcher accepts the format
@@ -197,9 +197,9 @@ fn test_aimd_weight_adaptation_under_loss() {
         "Should receive reasonable traffic"
     );
 
-    // Check that dispatcher responded to the weight adjustments
-    // This simulates what real AIMD would do: multiplicative decrease for high loss,
-    // then additive increase during good conditions
+    // Check that dispatcher responded to the weight adjustments. This simulates what real
+    // AIMD would do (multiplicative decrease then additive increase) without asserting
+    // quantitative adaptation beyond the fact that traffic is flowing.
     if delta1 > 0 {
         println!(
             "AIMD simulation successful: Path 1 received {} buffers during adjustment phase",

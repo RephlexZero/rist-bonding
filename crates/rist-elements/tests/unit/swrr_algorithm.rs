@@ -171,7 +171,12 @@ fn test_weighted_distribution_pipeline() {
 
     // Create elements
     let source = create_test_source();
+    // Configure dispatcher for pure SWRR behavior to make distribution deterministic
     let dispatcher = create_dispatcher(Some(&[0.8, 0.2])); // Heavily favor first output
+    dispatcher.set_property("auto-balance", false);
+    dispatcher.set_property("min-hold-ms", 0u64);
+    dispatcher.set_property("switch-threshold", 1.0f64);
+    dispatcher.set_property("health-warmup-ms", 0u64);
     let counter1 = create_counter_sink();
     let counter2 = create_counter_sink();
 
@@ -196,8 +201,8 @@ fn test_weighted_distribution_pipeline() {
         .link(&counter2.static_pad("sink").unwrap())
         .expect("Failed to link dispatcher src_1");
 
-    // Run the pipeline
-    run_pipeline_for_duration(&pipeline, 1).expect("Pipeline run failed");
+    // Run the pipeline a bit longer to allow distribution to manifest
+    run_pipeline_for_duration(&pipeline, 2).expect("Pipeline run failed");
 
     // Check distribution
     let count1: u64 = get_property(&counter1, "count").unwrap();
@@ -206,10 +211,18 @@ fn test_weighted_distribution_pipeline() {
     println!("Counter 1: {} buffers (weight 0.8)", count1);
     println!("Counter 2: {} buffers (weight 0.2)", count2);
 
-    // With 0.8/0.2 weights, we should see more buffers on the first output
+    // With 0.8/0.2 weights, we should see buffers on both outputs, dominated by counter1
     assert!(count1 > 0, "Counter 1 should receive buffers");
-    // Note: Counter 2 might receive 0 buffers with SWRR due to the discrete nature
-    // and the short test duration, so we don't assert it must be > 0
+    assert!(count2 > 0, "Counter 2 should receive some buffers for 0.2 weight");
+
+    let total = count1 + count2;
+    if total > 0 {
+        let ratio1 = count1 as f64 / total as f64;
+        let ratio2 = count2 as f64 / total as f64;
+        // Allow generous tolerance due to discrete SWRR and startup effects
+        assert!(ratio1 > 0.55, "Expected majority on path1 (~0.8), got {:.2}", ratio1);
+        assert!(ratio2 < 0.45, "Expected minority on path2 (~0.2), got {:.2}", ratio2);
+    }
 
     println!("✅ Weighted distribution pipeline test passed");
 }

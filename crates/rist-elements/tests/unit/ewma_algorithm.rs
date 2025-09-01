@@ -85,9 +85,10 @@ fn test_ewma_with_mock_statistics() {
         count2, quality2, rtt2
     );
 
-    // For now, just verify the basic setup works and we can read properties
-    // The actual EWMA adaptation logic would require hooking the stats_mock
-    // into the dispatcher's statistics gathering mechanism
+    // For now, just verify the basic setup works and we can read properties.
+    // We are not asserting adaptation deltas here because wiring stats_mocks into
+    // the dispatcher's feedback loop is covered elsewhere. This prevents false
+    // positives from implying adaptation guarantees we don't assert yet.
     assert_eq!(quality1, 95.0, "Quality 1 should match initial value");
     assert_eq!(quality2, 50.0, "Quality 2 should match initial value");
     assert_eq!(rtt1, 10, "RTT 1 should match initial value");
@@ -192,7 +193,8 @@ fn test_ewma_adaptation_over_time() {
         delta1_recovery, delta2_recovery
     );
 
-    // For now, just verify the stats properties can be changed and read
+    // For now, verify the stats properties can be changed and read. We avoid asserting
+    // specific traffic shifts since this test doesn't fully wire stats into adaptation.
     let final_quality2: f64 = get_property(&stats_mock2, "quality").unwrap();
     let final_rtt2: u32 = get_property(&stats_mock2, "rtt").unwrap();
 

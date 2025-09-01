@@ -203,21 +203,25 @@ fn test_dispatcher_dynamic_pad_addition() {
         .link(&counter2.static_pad("sink").unwrap())
         .expect("Failed to link src_1");
 
-    // Continue running
-    thread::sleep(Duration::from_secs(2));
+    // Continue running a bit longer to give the new pad a chance to receive data
+    thread::sleep(Duration::from_secs(3));
 
     pipeline
         .set_state(gst::State::Null)
         .expect("Failed to stop pipeline");
 
-    // Both counters should have received data
+    // Counter1 should have received data; Counter2 may be zero if added late.
+    // This test focuses on ensuring no crash and that dynamic pad can be linked while running.
     let count1: u64 = get_property(&counter1, "count").expect("Failed to get count1");
     let count2: u64 = get_property(&counter2, "count").expect("Failed to get count2");
 
     println!("Dynamic pad test: Counter1={}, Counter2={}", count1, count2);
 
     assert!(count1 > 0, "Counter1 should have received data");
-    // Counter2 might be 0 if added too late, but should not cause errors
+    // Soft check: it's good if Counter2 got some data, but it's not required for pass
+    if count2 == 0 {
+        eprintln!("Note: Second counter received no data (added late) - acceptable for this test");
+    }
 }
 
 #[test]
@@ -520,9 +524,11 @@ fn test_pad_removal_and_cleanup() {
 
     // Unlink and remove one pad
     let _result = src_1.unlink(&counter2.static_pad("sink").unwrap());
-    pipeline
-        .remove(&counter2)
-        .expect("Failed to remove counter2");
+    // Ensure proper lifecycle cleanup before removal
+    counter2
+        .set_state(gst::State::Null)
+        .expect("Failed to set counter2 to NULL state");
+    pipeline.remove(&counter2).expect("Failed to remove counter2");
     dispatcher.release_request_pad(&src_1);
 
     // Resume and verify single output still works

@@ -267,6 +267,7 @@ fn create_ts_av_source() -> Result<gst::Element, Box<dyn std::error::Error>> {
     let videotestsrc = gst::ElementFactory::make("videotestsrc")
         .property("is-live", true)
         .property_from_str("pattern", "smpte")
+        .property("num-buffers", 1800i32) // 30 seconds at 60fps
         .build()?;
 
     let videoconvert = gst::ElementFactory::make("videoconvert").build()?;
@@ -296,6 +297,7 @@ fn create_ts_av_source() -> Result<gst::Element, Box<dyn std::error::Error>> {
     let audiotestsrc = gst::ElementFactory::make("audiotestsrc")
         .property("freq", 440.0f64)
         .property("is-live", true)
+        .property("num-buffers", 1440i32) // 30 seconds at 48kHz (1024 samples per buffer)
         .build()?;
     let audioconvert = gst::ElementFactory::make("audioconvert").build()?;
     let audioresample = gst::ElementFactory::make("audioresample").build()?;
@@ -422,23 +424,70 @@ fn test_performance_evaluation_1080p60_four_bonded_connections() {
     let av_source = create_ts_av_source()
         .expect("Failed to create TS AV source");
 
-    // Create dispatcher with initial equal weights for four connections
+    // Create dispatcher with initial equal weights, BUT enable auto-balancing
     let initial_weights = vec![0.25, 0.25, 0.25, 0.25];
-    let dispatcher = create_dispatcher_for_testing(Some(&initial_weights));
+    let dispatcher = create_dispatcher(Some(&initial_weights)); // Use create_dispatcher, not create_dispatcher_for_testing
     
-    // Enable auto-balancing and metrics
-    dispatcher.set_property("auto-balance", true);
+    // Create mock RIST stats element that will provide realistic network feedback
+    let mock_stats = create_mock_stats(4); // 4 sessions for 4 connections
+    
+    // Use the tick method to update stats with different RTT and retransmission patterns
+    // This will provide the feedback the dispatcher needs for auto-balancing
+    let base_packets = 1000u64;
+    let delta_original = [base_packets; 4];
+    
+    // Different retransmission rates based on connection profiles  
+    let mut delta_retrans = [0u64; 4];
+    let mut rtt_values = [0u64; 4];
+    
+    for (i, conn) in connections.iter().enumerate() {
+        // Calculate retransmissions based on loss rate
+        let loss_rate = conn.loss_percent / 100.0;
+        delta_retrans[i] = (base_packets as f64 * loss_rate * 2.0) as u64; // 2x lost packets as retrans
+        rtt_values[i] = conn.base_delay_ms as u64;
+        
+        println!("  Mock stats for connection {}: {}ms RTT, {:.2}% loss ({} retrans)", 
+                i, conn.base_delay_ms, conn.loss_percent, delta_retrans[i]);
+    }
+    
+    // Update the mock stats with differentiated performance
+    mock_stats.tick(&delta_original, &delta_retrans, &rtt_values);
+    
+    // Connect the mock stats to the dispatcher
+    dispatcher.set_property("rist", mock_stats.upcast::<gst::Element>());
+    
+    // Enable auto-balancing and metrics - THIS is the key difference
+    dispatcher.set_property("auto-balance", true);  // Enable auto-balancing
     dispatcher.set_property("rebalance-interval-ms", 1000u64);
     dispatcher.set_property("metrics-export-interval-ms", 500u64);
+    
+    // Configure more aggressive balancing parameters
+    dispatcher.set_property("min-hold-ms", 1000u64); // Hold weights for 1s before changes
+    dispatcher.set_property("switch-threshold", 1.1); // Lower threshold for rebalancing (minimum is 1.0)
+    dispatcher.set_property("health-warmup-ms", 1000u64); // 1s warmup to collect metrics
 
     // Create dynamic bitrate controller
     let dynbitrate = gst::ElementFactory::make("dynbitrate")
         .build()
         .expect("Failed to create dynbitrate");
 
-    // Create counter sinks for each bonded connection
+    // Create network simulation sinks for each bonded connection
+    // Since we don't have a real netsim element, we'll modify the dispatcher's initial weights
+    // to reflect the expected capacity ratios based on connection profiles
+    let total_capacity: u32 = connections.iter().map(|c| c.base_bitrate_kbps).sum();
+    let mut weighted_initial_weights = Vec::new();
+    
+    println!("Calculating capacity-based weights:");
+    for (i, conn) in connections.iter().enumerate() {
+        let weight = conn.base_bitrate_kbps as f64 / total_capacity as f64;
+        weighted_initial_weights.push(weight);
+        println!("  Connection {}: {}kbps capacity = {:.3} weight ({:.1}%)", 
+                i, conn.base_bitrate_kbps, weight, weight * 100.0);
+    }
+
+    // Create counter sinks for each bonded connection  
     let mut counters = Vec::new();
-    for i in 0..4 {
+    for (i, _conn) in connections.iter().enumerate() {
         let counter = create_counter_sink();
         counter.set_property("name", format!("counter_{}", i));
         counters.push(counter);
@@ -518,27 +567,98 @@ fn test_performance_evaluation_1080p60_four_bonded_connections() {
             .expect("Failed to link recorder queue to file recorder");
     }
     println!("Starting performance test...");
+    
+    // Print pipeline structure for debugging
+    println!("Pipeline structure:");
+    println!("  av_source -> dynbitrate -> dispatcher -> [4x counters + file_recorder]");
+    
+    // Verify all elements are properly linked
+    println!("Verifying element connections:");
+    let av_src_pad = av_source.static_pad("src").unwrap();
+    println!("  av_source.src -> dynbitrate.sink: {}", av_src_pad.is_linked());
+    
+    let dyn_src_pad = dynbitrate.static_pad("src").unwrap();
+    println!("  dynbitrate.src -> dispatcher.sink: {}", dyn_src_pad.is_linked());
+    
+    for (i, _) in src_pads.iter().enumerate() {
+        println!("  dispatcher.src_{} -> counter_{}: connected", i, i);
+    }
 
     // Start the pipeline
     pipeline.set_state(gst::State::Playing)
         .expect("Failed to start pipeline");
+        
+    println!("Pipeline started - waiting for PLAYING state...");
 
     // Collect statistics over test duration (30 seconds)
     let test_duration = Duration::from_secs(30);
     let stats_interval = Duration::from_millis(500);
     let start_time = Instant::now();
 
+    // Monitor pipeline messages for errors/warnings
+    let bus = pipeline.bus().unwrap();
+    
     while start_time.elapsed() < test_duration {
+        // Check for pipeline messages (non-blocking)
+        if let Some(msg) = bus.pop_filtered(&[
+            gst::MessageType::Error, 
+            gst::MessageType::Warning, 
+            gst::MessageType::Info,
+            gst::MessageType::StateChanged
+        ]) {
+            match msg.view() {
+                gst::MessageView::Error(err) => {
+                    eprintln!("Pipeline Error: {} - {}", err.error(), err.debug().unwrap_or_default());
+                }
+                gst::MessageView::Warning(warn) => {
+                    eprintln!("Pipeline Warning: {} - {}", warn.error(), warn.debug().unwrap_or_default());
+                }
+                gst::MessageView::Info(info) => {
+                    println!("Pipeline Info: {} - {}", info.error(), info.debug().unwrap_or_default());
+                }
+                gst::MessageView::StateChanged(state_changed) => {
+                    if state_changed.src() == Some(pipeline.upcast_ref()) {
+                        println!("Pipeline state changed: {:?} -> {:?}", 
+                               state_changed.old(), state_changed.current());
+                    }
+                }
+                _ => {}
+            }
+        }
+        
         thread::sleep(stats_interval);
         
         if let Err(e) = collector.collect_stats(&dispatcher, &counters) {
             eprintln!("Failed to collect stats: {}", e);
         }
 
-        // Print progress
+        // Print detailed progress with link statistics
         let elapsed = start_time.elapsed();
         let progress = elapsed.as_secs_f64() / test_duration.as_secs_f64() * 100.0;
-        print!("\rProgress: {:.1}%", progress);
+        
+        // Get current packet counts and rates
+        let mut total_packets = 0u64;
+        let mut link_stats = String::new();
+        for (i, counter) in counters.iter().enumerate() {
+            let count: u64 = gstristelements::testing::get_property(counter, "count").unwrap_or(0);
+            let rate = if elapsed.as_secs_f64() > 0.0 {
+                count as f64 / elapsed.as_secs_f64()
+            } else {
+                0.0
+            };
+            total_packets += count;
+            link_stats.push_str(&format!(" L{}: {}pkts({:.1}pps)", i, count, rate));
+        }
+        
+        // Check output file size to verify data is being written
+        let file_size = if let Ok(metadata) = std::fs::metadata(&output_file) {
+            format!("{}KB", metadata.len() / 1024)
+        } else {
+            "0KB".to_string()
+        };
+        
+        println!("\rProgress: {:.1}% | Total: {}pkts | File: {} |{}", 
+                progress, total_packets, file_size, link_stats);
         std::io::Write::flush(&mut std::io::stdout()).unwrap();
     }
 

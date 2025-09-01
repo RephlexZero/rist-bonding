@@ -103,6 +103,10 @@ pub struct DispatcherInner {
     // RIST stats polling
     rist_element: Mutex<Option<gst::Element>>,
     stats_timeout_id: Mutex<Option<glib::SourceId>>,
+    // Tunables for RTX/RTT penalties and AIMD threshold
+    ewma_rtx_penalty: Mutex<f64>,   // alpha coefficient for RTX penalty (default 0.1)
+    ewma_rtt_penalty: Mutex<f64>,   // beta coefficient for RTT penalty (default 0.05)
+    aimd_rtx_threshold: Mutex<f64>, // RTX threshold for AIMD decrease (default 0.05)
 }
 
 impl Default for DispatcherInner {
@@ -125,6 +129,9 @@ impl Default for DispatcherInner {
             metrics_timeout_id: Mutex::new(None),
             rist_element: Mutex::new(None),
             stats_timeout_id: Mutex::new(None),
+            ewma_rtx_penalty: Mutex::new(0.1),
+            ewma_rtt_penalty: Mutex::new(0.05),
+            aimd_rtx_threshold: Mutex::new(0.05),
         }
     }
 }
@@ -570,6 +577,28 @@ impl ObjectImpl for DispatcherImpl {
                     .maximum(60000)
                     .default_value(0)
                     .build(),
+                // Tunables for RTX/RTT penalties and AIMD threshold
+                glib::ParamSpecDouble::builder("ewma-rtx-penalty")
+                    .nick("EWMA RTX penalty coefficient")
+                    .blurb("Alpha coefficient for retransmission-rate penalty in EWMA weighting")
+                    .minimum(0.0)
+                    .maximum(10.0)
+                    .default_value(0.1)
+                    .build(),
+                glib::ParamSpecDouble::builder("ewma-rtt-penalty")
+                    .nick("EWMA RTT penalty coefficient")
+                    .blurb("Beta coefficient for RTT penalty in EWMA weighting")
+                    .minimum(0.0)
+                    .maximum(10.0)
+                    .default_value(0.05)
+                    .build(),
+                glib::ParamSpecDouble::builder("aimd-rtx-threshold")
+                    .nick("AIMD RTX threshold")
+                    .blurb("RTX rate threshold for multiplicative decrease in AIMD strategy")
+                    .minimum(0.0)
+                    .maximum(1.0)
+                    .default_value(0.05)
+                    .build(),
             ]
         });
         PROPS.as_ref()
@@ -722,6 +751,21 @@ impl ObjectImpl for DispatcherImpl {
                     self.stop_metrics_timer();
                 }
             }
+            14 => {
+                let v = value.get::<f64>().unwrap_or(0.1).clamp(0.0, 10.0);
+                *self.inner.ewma_rtx_penalty.lock() = v;
+                gst::debug!(CAT, "Set ewma-rtx-penalty: {:.4}", v);
+            }
+            15 => {
+                let v = value.get::<f64>().unwrap_or(0.05).clamp(0.0, 10.0);
+                *self.inner.ewma_rtt_penalty.lock() = v;
+                gst::debug!(CAT, "Set ewma-rtt-penalty: {:.4}", v);
+            }
+            16 => {
+                let v = value.get::<f64>().unwrap_or(0.05).clamp(0.0, 1.0);
+                *self.inner.aimd_rtx_threshold.lock() = v;
+                gst::debug!(CAT, "Set aimd-rtx-threshold: {:.4}", v);
+            }
             _ => {}
         }
     }
@@ -789,6 +833,18 @@ impl ObjectImpl for DispatcherImpl {
             13 => {
                 gst::debug!(CAT, "Returning metrics_export_interval_ms");
                 self.inner.metrics_export_interval_ms.lock().to_value()
+            }
+            14 => {
+                gst::debug!(CAT, "Returning ewma-rtx-penalty");
+                self.inner.ewma_rtx_penalty.lock().to_value()
+            }
+            15 => {
+                gst::debug!(CAT, "Returning ewma-rtt-penalty");
+                self.inner.ewma_rtt_penalty.lock().to_value()
+            }
+            16 => {
+                gst::debug!(CAT, "Returning aimd-rtx-threshold");
+                self.inner.aimd_rtx_threshold.lock().to_value()
             }
             _ => {
                 gst::debug!(CAT, "Unknown property id: {}, returning default", id);
@@ -858,9 +914,9 @@ impl ElementImpl for DispatcherImpl {
     }
 
     fn request_new_pad(
-        &self,
-        templ: &gst::PadTemplate,
-        name: Option<&str>,
+    &self,
+    templ: &gst::PadTemplate,
+    _name: Option<&str>,
         _caps: Option<&gst::Caps>,
     ) -> Option<gst::Pad> {
         if templ.direction() != gst::PadDirection::Src {
@@ -868,19 +924,65 @@ impl ElementImpl for DispatcherImpl {
         }
 
         let mut srcpads = self.inner.srcpads.lock();
+
+        // If a specific name was requested and a pad with that name already exists,
+        // return the existing pad instead of creating a new one. This mirrors
+        // common GStreamer element behavior and avoids warnings about duplicate names.
+        if let Some(requested) = _name {
+            if let Some(existing) = srcpads.iter().find(|p| p.name() == requested) {
+                gst::debug!(
+                    CAT,
+                    "request_new_pad: returning existing src pad '{}' by name request",
+                    requested
+                );
+                return Some(existing.clone());
+            }
+        }
         // The vector index for this new pad (position in `srcpads`)
         let idx = srcpads.len();
 
         // Use a monotonic counter to generate unique pad names so that
         // removed pads don't cause name collisions when new pads are created.
-        let mut counter = self.inner.srcpad_counter.lock();
-        let generated_idx = *counter;
-        *counter = counter.wrapping_add(1);
-        drop(counter);
+    let mut counter = self.inner.srcpad_counter.lock();
+    *counter = counter.wrapping_add(1);
+    drop(counter);
 
-        let pad_name = name
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("src_{}", generated_idx));
+    // Determine pad name:
+    // - If a specific name was requested and is unused, honor it
+    // - Otherwise, generate the lowest available name using the template prefix "src_"
+    let requested_name = _name.map(|s| s.to_string());
+
+        // Collect existing names for uniqueness checks
+        let existing_names: std::collections::HashSet<String> = srcpads
+            .iter()
+            .map(|p| p.name().to_string())
+            .collect();
+
+        let pad_name = if let Some(name) = requested_name {
+            if !existing_names.contains(&name) {
+                name
+            } else {
+                // Find the lowest available index for src_*
+                let mut idx = 0usize;
+                loop {
+                    let candidate = format!("src_{}", idx);
+                    if !existing_names.contains(&candidate) {
+                        break candidate;
+                    }
+                    idx += 1;
+                }
+            }
+        } else {
+            // No specific name requested (e.g., request_pad_simple): choose lowest available src_%u
+            let mut idx = 0usize;
+            loop {
+                let candidate = format!("src_{}", idx);
+                if !existing_names.contains(&candidate) {
+                    break candidate;
+                }
+                idx += 1;
+            }
+        };
 
         // Get sink pad for upstream forwarding
         let sinkpad = self.inner.sinkpad.lock().clone();
@@ -1132,6 +1234,8 @@ impl DispatcherImpl {
                 None => return glib::ControlFlow::Break,
             };
 
+            gst::debug!(CAT, "Rebalancer timer fired, polling RIST stats...");
+            
             // Poll RIST stats and update weights
             Self::poll_rist_stats_and_update_weights(&inner);
 
@@ -1236,7 +1340,10 @@ impl DispatcherImpl {
         let buffers_processed = 0u64; // We don't track this currently, but tests expect it
         let src_pad_count = weights.len() as u32; // Use weights length as proxy for pad count
 
-        let current_weights_json = serde_json::to_string(&weights).unwrap_or_default();
+    let current_weights_json = serde_json::to_string(&weights).unwrap_or_default();
+    let ewma_rtx_penalty = *inner.ewma_rtx_penalty.lock();
+    let ewma_rtt_penalty = *inner.ewma_rtt_penalty.lock();
+    let aimd_rtx_threshold = *inner.aimd_rtx_threshold.lock();
 
         // Emit bus message if we can get the dispatcher element
         if let Some(sinkpad) = inner.sinkpad.lock().as_ref() {
@@ -1254,6 +1361,9 @@ impl DispatcherImpl {
                                     .field("src-pad-count", src_pad_count)
                                     .field("selected-index", selected_index as u32)
                                     .field("encoder-bitrate", encoder_bitrate)
+                                    .field("ewma-rtx-penalty", ewma_rtx_penalty)
+                                    .field("ewma-rtt-penalty", ewma_rtt_penalty)
+                                    .field("aimd-rtx-threshold", aimd_rtx_threshold)
                                     .build();
                                 let message = gst::message::Application::builder(structure)
                                     .src(&dispatcher)
@@ -1278,6 +1388,9 @@ impl DispatcherImpl {
                                 .field("src-pad-count", src_pad_count)
                                 .field("selected-index", selected_index as u32)
                                 .field("encoder-bitrate", encoder_bitrate)
+                                .field("ewma-rtx-penalty", ewma_rtx_penalty)
+                                .field("ewma-rtt-penalty", ewma_rtt_penalty)
+                                .field("aimd-rtx-threshold", aimd_rtx_threshold)
                                 .build();
                             let message = gst::message::Application::builder(structure)
                                 .src(&dispatcher)
@@ -1305,21 +1418,42 @@ impl DispatcherImpl {
     }
 
     fn poll_rist_stats_and_update_weights(inner: &DispatcherInner) {
+        gst::debug!(CAT, "Polling RIST stats...");
+        
         let rist_element = inner.rist_element.lock().clone();
         if let Some(rist) = rist_element {
+            gst::debug!(CAT, "Found RIST element, getting stats property...");
+            
             // Get stats from ristsink "stats" property -> GstStructure
             let stats_value: glib::Value = rist.property("stats");
+            gst::debug!(CAT, "Got stats value type: {}", stats_value.type_().name());
+            
+            // Try Option<gst::Structure> first (real RIST elements)
             if let Ok(Some(structure)) = stats_value.get::<Option<gst::Structure>>() {
-                gst::trace!(CAT, "Got RIST stats structure: {}", structure.to_string());
+                gst::debug!(CAT, "Got RIST stats structure (Option): {}", structure.to_string());
                 Self::update_weights_from_stats(inner, &structure);
             }
+            // Fall back to direct gst::Structure (test mocks)
+            else if let Ok(structure) = stats_value.get::<gst::Structure>() {
+                gst::debug!(CAT, "Got RIST stats structure (direct): {}", structure.to_string());
+                Self::update_weights_from_stats(inner, &structure);
+            }
+            else {
+                gst::debug!(CAT, "Failed to get RIST stats structure from element");
+            }
+        } else {
+            gst::debug!(CAT, "No RIST element set");
         }
     }
 
     fn update_weights_from_stats(inner: &DispatcherInner, stats: &gst::Structure) {
+        gst::debug!(CAT, "Updating weights from stats: {}", stats.to_string());
+        
         let strategy = *inner.strategy.lock();
         let mut state = inner.state.lock();
         let now = std::time::Instant::now();
+
+        gst::debug!(CAT, "Strategy: {:?}, current link_stats count: {}", strategy, state.link_stats.len());
 
         // Parse session-stats array from ristsink (correct format)
         if let Ok(sess_stats_value) = stats.get::<glib::Value>("session-stats") {
@@ -1328,9 +1462,6 @@ impl DispatcherImpl {
                 let num_sessions = sess_array.len();
                 while state.link_stats.len() < num_sessions {
                     state.link_stats.push(LinkStats::default());
-                }
-                while state.weights.len() < num_sessions {
-                    state.weights.push(1.0);
                 }
 
                 // Process each session's stats
@@ -1401,8 +1532,8 @@ impl DispatcherImpl {
 
         // Calculate new weights based on strategy
         let weights_changed = match strategy {
-            Strategy::Ewma => Self::calculate_ewma_weights(&mut state),
-            Strategy::Aimd => Self::calculate_aimd_weights(&mut state),
+            Strategy::Ewma => Self::calculate_ewma_weights(inner, &mut state),
+            Strategy::Aimd => Self::calculate_aimd_weights(inner, &mut state),
         };
 
         // Emit signal if weights changed
@@ -1431,6 +1562,8 @@ impl DispatcherImpl {
         while state.link_stats.len() < num_links {
             state.link_stats.push(LinkStats::default());
         }
+        
+        gst::debug!(CAT, "Legacy stats processing for {} links", num_links);
 
         // Process per-session stats using old format
         for (link_idx, link_stats) in state.link_stats.iter_mut().enumerate() {
@@ -1450,6 +1583,9 @@ impl DispatcherImpl {
                     .get::<f64>(&format!("{}.round-trip-time", session_key))
                     .or_else(|_| stats.get::<f64>("round-trip-time"))
                     .unwrap_or(50.0);
+
+                gst::debug!(CAT, "Session {}: sent_orig={}, sent_retx={}, rtt={:.1}ms", 
+                          link_idx, sent_original, sent_retrans, rtt_ms);
 
                 // Calculate deltas
                 let delta_time = now.duration_since(link_stats.prev_timestamp).as_secs_f64();
@@ -1475,21 +1611,28 @@ impl DispatcherImpl {
                     link_stats.ewma_rtt =
                         link_stats.alpha * rtt_ms + (1.0 - link_stats.alpha) * link_stats.ewma_rtt;
 
+                    gst::debug!(CAT, "Session {} EWMA: goodput={:.3}pps, rtx_rate={:.4}, rtt={:.1}ms", 
+                              link_idx, link_stats.ewma_goodput, link_stats.ewma_rtx_rate, link_stats.ewma_rtt);
+
                     // Update previous values
                     link_stats.prev_sent_original = sent_original;
                     link_stats.prev_sent_retransmitted = sent_retrans;
                     link_stats.prev_timestamp = now;
                 }
+            } else {
+                gst::debug!(CAT, "No stats found for session {}", link_idx);
             }
         }
     }
 
-    fn calculate_ewma_weights(state: &mut State) -> bool {
+    fn calculate_ewma_weights(inner: &DispatcherInner, state: &mut State) -> bool {
         // EWMA goodput strategy from the roadmap
         let mut new_weights = vec![0.0; state.weights.len()];
         let mut total_weight = 0.0;
         let mut changed = false;
 
+        gst::debug!(CAT, "Calculating EWMA weights for {} connections", state.weights.len());
+        
         for (i, stats) in state.link_stats.iter().enumerate() {
             if i >= new_weights.len() {
                 break;
@@ -1499,11 +1642,11 @@ impl DispatcherImpl {
             let mut weight = stats.ewma_goodput.max(0.1); // minimum floor
 
             // Penalty for loss: scale by 1 / (1 + α × RTX_rate)
-            let alpha_rtx = 0.1; // penalty coefficient from roadmap
+            let alpha_rtx = *inner.ewma_rtx_penalty.lock();
             weight *= 1.0 / (1.0 + alpha_rtx * stats.ewma_rtx_rate);
 
             // Optional RTT normalization (prefer lower RTT)
-            let beta_rtt = 0.05; // RTT penalty coefficient
+            let beta_rtt = *inner.ewma_rtt_penalty.lock();
             let normalized_rtt = (stats.ewma_rtt / 100.0).max(0.1); // normalize to ~100ms baseline
             weight /= 1.0 + beta_rtt * normalized_rtt;
 
@@ -1512,6 +1655,9 @@ impl DispatcherImpl {
 
             new_weights[i] = weight;
             total_weight += weight;
+            
+            gst::debug!(CAT, "Connection {}: goodput={:.3}, rtx_rate={:.4}, rtt={:.1}ms, weight={:.3}", 
+                      i, stats.ewma_goodput, stats.ewma_rtx_rate, stats.ewma_rtt, weight);
         }
 
         // Normalize weights to sum to 1
@@ -1532,15 +1678,19 @@ impl DispatcherImpl {
             if changed {
                 state.weights = new_weights;
                 gst::debug!(CAT, "Updated EWMA weights: {:?}", state.weights);
+            } else {
+                gst::debug!(CAT, "EWMA weights unchanged (below 1% threshold): {:?}", state.weights);
             }
+        } else {
+            gst::warning!(CAT, "Total weight is zero, cannot normalize");
         }
 
         changed
     }
 
-    fn calculate_aimd_weights(state: &mut State) -> bool {
+    fn calculate_aimd_weights(inner: &DispatcherInner, state: &mut State) -> bool {
         // AIMD per-link strategy (TCP-like fairness)
-        let rtx_threshold = 0.05; // 5% RTX rate threshold
+        let rtx_threshold = *inner.aimd_rtx_threshold.lock(); // default 5%
         let additive_increase = 0.1;
         let multiplicative_decrease = 0.5;
         let mut changed = false;

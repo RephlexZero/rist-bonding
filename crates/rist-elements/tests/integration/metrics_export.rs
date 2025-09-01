@@ -56,39 +56,21 @@ fn test_metrics_export_properties() {
     let default_interval: u64 = get_property(&dispatcher, "metrics-export-interval-ms").unwrap();
     println!("Default metrics export interval: {}ms", default_interval);
 
-    // Test setting different intervals individually with error handling
+    // Test setting different intervals using explicit error handling
     let test_intervals = [100u64, 500u64, 1000u64, 5000u64];
 
     for &interval in &test_intervals {
         println!("Attempting to set metrics interval to: {}ms", interval);
-
-        match std::panic::catch_unwind(|| {
-            dispatcher.set_property("metrics-export-interval-ms", interval);
-            get_property::<u64>(&dispatcher, "metrics-export-interval-ms").unwrap_or(0)
-        }) {
-            Ok(actual_interval) => {
-                println!("  Successfully set to: {}ms", actual_interval);
-                assert_eq!(
-                    actual_interval, interval,
-                    "Should be able to set interval to {}",
-                    interval
-                );
-            }
-            Err(_) => {
-                println!(
-                    "  Failed to set interval {}, checking if property exists",
-                    interval
-                );
-                // Try to read the property to confirm it exists
-                if let Ok(current) = get_property::<u64>(&dispatcher, "metrics-export-interval-ms")
-                {
-                    println!("  Property exists with current value: {}", current);
-                } else {
-                    println!("  Property may not exist!");
-                }
-                panic!("Failed to set metrics-export-interval-ms to {}", interval);
-            }
-        }
+        // set_property may log internally if invalid, but we only accept values within range
+        dispatcher.set_property("metrics-export-interval-ms", interval);
+        let actual_interval: u64 = get_property(&dispatcher, "metrics-export-interval-ms")
+            .expect("metrics-export-interval-ms should be readable");
+        println!("  Successfully set to: {}ms", actual_interval);
+        assert_eq!(
+            actual_interval, interval,
+            "Should be able to set interval to {}",
+            interval
+        );
     }
 
     // Test boundary values
@@ -103,14 +85,18 @@ fn test_metrics_export_properties() {
     // Test value rejection for out-of-range (should fail to set, not clamp)
     let before_invalid = get_property::<u64>(&dispatcher, "metrics-export-interval-ms").unwrap();
 
-    let invalid_result = std::panic::catch_unwind(|| {
+    // Try an out-of-range value; the underlying API panics on invalid sets.
+    // To avoid panic-like logs polluting test output, temporarily silence the panic hook.
+    let old_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| { /* suppress panic output for this check */ }));
+    let set_res = std::panic::catch_unwind(|| {
         dispatcher.set_property("metrics-export-interval-ms", 70000u64);
     });
-
-    // The property set should fail for out-of-range values
+    // Restore the original panic hook
+    std::panic::set_hook(old_hook);
     assert!(
-        invalid_result.is_err(),
-        "Should reject out-of-range value 70000"
+        set_res.is_err(),
+        "Out-of-range value should be rejected (panic caught)"
     );
 
     // Property should retain its previous value
