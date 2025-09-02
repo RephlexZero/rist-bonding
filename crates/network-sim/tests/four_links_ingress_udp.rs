@@ -8,6 +8,7 @@ use network_sim::{
 };
 use std::time::Duration;
 use tokio::{net::UdpSocket, time::timeout};
+use futures::future::try_join_all;
 
 /// Helper: run a command and return Output
 async fn run_cmd(cmd: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
@@ -126,15 +127,17 @@ async fn test_four_links_udp_flow_with_ingress() {
         guards.push(guard);
     }
 
-    // Bring up receivers and send packets on all links concurrently
-    let mut handles = Vec::with_capacity(links.len());
+    // Bring up receivers and send packets on all links concurrently (aggregated with try_join_all)
+    let mut tasks = Vec::with_capacity(links.len());
     for l in &links {
         let recv_addr = format!("{}:{}", l.rx_ip, l.port);
         let sender_bind = format!("{}:0", l.tx_ip);
         let tx_name = l.tx.clone();
         let rx_name = l.rx.clone();
-        let h = tokio::spawn(async move {
-            let socket_recv = UdpSocket::bind(&recv_addr).await.expect("bind rx");
+        let fut = async move {
+            let socket_recv = UdpSocket::bind(&recv_addr)
+                .await
+                .map_err(|e| format!("bind rx {}: {}", rx_name, e))?;
             // Spawn receiver for one datagram
             let recv_once = tokio::spawn(async move {
                 let mut buf = [0u8; 1500];
@@ -143,24 +146,26 @@ async fn test_four_links_udp_flow_with_ingress() {
             });
 
             // Sender side
-            let socket_tx = UdpSocket::bind(&sender_bind).await.expect("bind tx");
-            let _ = socket_tx.send_to(b"hello", &recv_addr).await.expect("send");
+            let socket_tx = UdpSocket::bind(&sender_bind)
+                .await
+                .map_err(|e| format!("bind tx {}: {}", tx_name, e))?;
+            socket_tx
+                .send_to(b"hello", &recv_addr)
+                .await
+                .map_err(|e| format!("send {}->{}: {}", tx_name, rx_name, e))?;
 
-            match recv_once.await.expect("join receiver child") {
+            match recv_once
+                .await
+                .map_err(|e| format!("receiver join error on {}->{}: {}", tx_name, rx_name, e))? {
                 Ok(Ok(())) => Ok::<(), String>(()),
                 Ok(Err(e)) => Err(format!("receive failed on {}->{}: {}", tx_name, rx_name, e)),
-                Err(join_err) => Err(format!("receiver join error on {}->{}: {}", tx_name, rx_name, join_err)),
+                Err(e) => Err(format!("receive timeout/error on {}->{}: {}", tx_name, rx_name, e)),
             }
-        });
-        handles.push(h);
+        };
+        tasks.push(fut);
     }
 
-    // Await all concurrently started tasks. Even if we await sequentially here, they ran concurrently above.
-    for h in handles {
-        if let Err(e) = h.await.expect("join top-level task") {
-            panic!("{}", e);
-        }
-    }
+    try_join_all(tasks).await.expect("concurrent UDP flow across all links");
 
     // Explicit cleanup via guards to ensure awaited teardown; Drop handles best-effort on panic
     for g in &mut guards {
