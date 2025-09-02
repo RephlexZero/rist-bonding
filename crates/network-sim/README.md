@@ -50,16 +50,14 @@ use network_sim::NetworkParams;
 
 // Create custom network conditions
 let custom_params = NetworkParams {
-    delay_ms: 50,        // 50ms one-way delay
-    loss_percent: 2.5,   // 2.5% packet loss
-    rate_mbps: Some(3.0), // 3 Mbps bandwidth limit
+    delay_ms: 50,         // 50ms one-way delay
+    loss_pct: 0.025,      // 2.5% packet loss (0.0..1.0)
+    rate_kbps: 3_000,     // 3 Mbps bandwidth limit
+    jitter_ms: 5,         // ±5ms jitter
+    reorder_pct: 0.0,     // 0%
+    duplicate_pct: 0.0,   // 0%
+    loss_corr_pct: 0.0,   // 0%
 };
-
-// Or use builder pattern (if implemented)
-let params = NetworkParams::new()
-    .with_delay(25)      // 25ms delay
-    .with_loss(1.5)      // 1.5% loss
-    .with_rate(8.0);     // 8 Mbps limit
 ```
 
 ### Working with Network Namespaces
@@ -101,27 +99,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### Integration with RIST Testing
+### Integration with RIST testing
 
 ```rust
-// Example: Tests automatically manage network setup
+use network_sim::{apply_network_params, NetworkParams, QdiscManager};
+
 #[tokio::test]
 async fn test_rist_with_network_simulation() -> Result<(), Box<dyn std::error::Error>> {
-    // Network setup is handled automatically by test framework
-    let test_env = RistTestEnvironment::new().await?;
-    
-    // Apply network conditions through the test environment
-    test_env.apply_conditions(NetworkParams::poor()).await?;
-    
-    // Run RIST streaming tests - all setup is automatic
-    test_env.run_streaming_test(Duration::from_secs(30)).await?;
-    
-    // Cleanup is automatic when test_env is dropped
+    let qdisc_manager = QdiscManager::default();
+
+    // Apply asymmetric network conditions to sender/receiver paths
+    apply_network_params(&qdisc_manager, "veth-sender", &NetworkParams::typical()).await?;
+    apply_network_params(&qdisc_manager, "veth-receiver", &NetworkParams::poor()).await?;
+
+    // Run your RIST tests here ...
+
+    // Clean up after
+    network_sim::remove_network_params(&qdisc_manager, "veth-sender").await?;
+    network_sim::remove_network_params(&qdisc_manager, "veth-receiver").await?;
     Ok(())
 }
 ```
-
-The network-sim crate integrates seamlessly with the test framework to provide automated network condition testing without manual interface manipulation.
 ```
 
 ## Network Profiles
@@ -180,50 +178,50 @@ Network Interface (veth, eth, etc.)
 
 ## Error Handling
 
-The library provides comprehensive error types for different failure scenarios:
+The library provides clear errors via `RuntimeError` and `QdiscError`:
 
 ```rust
-use network_sim::{apply_network_params, NetworkParams, QdiscManager, NetworkSimError};
+use network_sim::{apply_network_params, NetworkParams, QdiscManager, RuntimeError};
+use network_sim::qdisc::QdiscError;
 
 #[tokio::main]
 async fn main() {
     let qdisc_manager = QdiscManager::default();
     let params = NetworkParams::typical();
-    
+
     match apply_network_params(&qdisc_manager, "nonexistent-iface", &params).await {
         Ok(_) => println!("Network parameters applied successfully"),
-        Err(NetworkSimError::InterfaceNotFound(iface)) => {
+        Err(RuntimeError::Qdisc(QdiscError::InterfaceNotFound(iface))) => {
             eprintln!("Interface '{}' not found", iface);
         },
-        Err(NetworkSimError::InsufficientPermissions) => {
+        Err(RuntimeError::Qdisc(QdiscError::PermissionDenied)) => {
             eprintln!("Need CAP_NET_ADMIN capability to modify network interfaces");
         },
-        Err(NetworkSimError::InvalidParameters { param, reason }) => {
-            eprintln!("Invalid parameter '{}': {}", param, reason);
+        Err(RuntimeError::InvalidParams(msg)) => {
+            eprintln!("Invalid parameters: {}", msg);
         },
-        Err(err) => eprintln!("Other error: {}", err),
+        Err(e) => eprintln!("Other error: {}", e),
     }
 }
 ```
 
 ### Error Types
 - `InterfaceNotFound`: Specified network interface doesn't exist
-- `InsufficientPermissions`: Missing required capabilities (CAP_NET_ADMIN)
+- `PermissionDenied`: Missing required capabilities (CAP_NET_ADMIN)
 - `InvalidParameters`: Parameter validation failed (negative delay, etc.)
-- `NetlinkError`: Low-level netlink communication error
-- `QdiscOperationFailed`: Traffic control operation failed
+- `CommandFailed`: Underlying `tc`/`ip` command failed (stderr included)
 
 ## Requirements and Compatibility
 
 ### System Requirements
 - **Operating System**: Linux with Traffic Control support (kernel 2.6+)
 - **Capabilities**: `CAP_NET_ADMIN` for interface modification
-- **Dependencies**: No external binaries required (uses netlink directly)
+- **Dependencies**: iproute2 tools (`tc` and `ip`) available on PATH
 
 ### Rust Requirements
 - **MSRV**: Rust 1.70+
 - **Runtime**: Tokio 1.0+ for async operations
-- **Platform**: Linux only (uses Linux-specific netlink and TC features)
+- **Platform**: Linux only (uses Linux-specific TC features)
 
 ### Container Environment
 Works seamlessly in Docker containers with appropriate capabilities:
@@ -287,7 +285,20 @@ async fn temporary_network_test() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Monitoring Applied Conditions
 
-Use `QdiscManager::get_interface_stats` to fetch basic counters by parsing `tc -s qdisc show` output.
+```rust
+use network_sim::qdisc::QdiscManager;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let qdisc_manager = QdiscManager::default();
+    let iface = "veth0";
+    let desc = qdisc_manager.describe_interface_qdisc(iface).await?;
+    println!("qdisc tree for {}:\n{}", iface, desc);
+    let stats = qdisc_manager.get_interface_stats(iface).await?;
+    println!("sent={}B pkts={} dropped={}", stats.sent_bytes, stats.sent_packets, stats.dropped);
+    Ok(())
+}
+```
 
 ### Custom Qdisc Configuration
 
@@ -348,7 +359,7 @@ This library is intentionally focused on simplicity and specific use cases:
 
 - **Static parameters only**: No support for time-varying network conditions
 - **Linux-specific**: Uses Linux Traffic Control, not portable to other operating systems  
-- **Basic qdisc support**: Focused on netem and TBF, doesn't expose full TC functionality
+- **Basic qdisc support**: Focused on netem and HTB, doesn't expose full TC functionality
 - **No complex scenarios**: For advanced network simulation, consider ns-3, mininet, or direct TC usage
 - **Container-focused**: Designed for containerized testing, not production traffic shaping
 
