@@ -434,28 +434,33 @@ impl ObjectImpl for DispatcherImpl {
                     // Handle specific queries, otherwise forward downstream
                     match query.view_mut() {
                         gst::QueryViewMut::Caps(caps_query) => {
-                            // Only handle caps query manually if caps-any=true
+                            // Robust handling: if caps-any=true answer ANY; otherwise try proxy and
+                            // fall back to template caps when no linked src pads are available.
                             let use_any_caps = *inner.caps_any.lock();
                             if use_any_caps {
                                 let caps = gst::Caps::new_any();
                                 caps_query.set_result(&caps);
-                                true
-                            } else {
-                                // Use proxy behavior - forward to first linked src pad
-                                let srcpads = inner.srcpads.lock();
-                                for srcpad in srcpads.iter() {
-                                    if srcpad.is_linked() {
-                                        gst::trace!(
-                                            CAT,
-                                            "Proxying caps query to src pad {}",
-                                            srcpad.name()
-                                        );
-                                        return srcpad.peer_query(query);
-                                    }
-                                }
-                                // Fall back to default if no linked pads
-                                gst::Pad::query_default(pad, parent, query)
+                                return true;
                             }
+
+                            // Try proxying to the first linked src pad
+                            let srcpads = inner.srcpads.lock();
+                            for srcpad in srcpads.iter() {
+                                if srcpad.is_linked() {
+                                    gst::trace!(
+                                        CAT,
+                                        "Proxying caps query to src pad {}",
+                                        srcpad.name()
+                                    );
+                                    return srcpad.peer_query(query);
+                                }
+                            }
+
+                            // No linked pads yet: answer with our template caps to keep negotiation going
+                            let tmpl_caps = pad.pad_template_caps();
+                            gst::debug!(CAT, "No linked src pads; returning template caps: {:?}", tmpl_caps);
+                            caps_query.set_result(&tmpl_caps);
+                            true
                         }
                         _ => {
                             // Forward downstream queries to a linked src pad
@@ -521,7 +526,7 @@ impl ObjectImpl for DispatcherImpl {
                 glib::ParamSpecBoolean::builder("caps-any")
                     .nick("Use ANY caps")
                     .blurb("Use ANY caps instead of application/x-rtp for broader compatibility")
-                    .default_value(false)
+                    .default_value(true)
                     .build(),
                 glib::ParamSpecBoolean::builder("auto-balance")
                     .nick("Auto balance")
