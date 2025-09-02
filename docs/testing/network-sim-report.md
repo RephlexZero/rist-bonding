@@ -41,7 +41,7 @@ The network-sim crate now applies real traffic shaping via Linux tc, replacing t
 - No way to specify reorder/duplicate from `NetworkParams`.
 
 7) Test coverage and execution environment
-- Integration tests depend on capabilities rarely present in CI; there’s no built-in skip/guard to mark them ignored unless `NET_ADMIN` is available.
+- Integration tests depend on capabilities rarely present in CI; there’s no built-in skip/guard to mark them ignored unless `NET_ADMIN` is available. NOTE FROM USER: This is incorrect as the containerized environment used for testing has the necessary capabilities.
 - No smoke test to assert that `tc` commands succeed and that applied qdiscs show up.
 
 ## Risks and edge cases

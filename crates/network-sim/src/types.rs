@@ -20,6 +20,14 @@ pub struct NetworkParams {
     pub loss_pct: f32,
     /// Rate limit in kilobits per second
     pub rate_kbps: u32,
+    /// Optional jitter in milliseconds
+    pub jitter_ms: u32,
+    /// Optional reordering probability (0.0 to 1.0)
+    pub reorder_pct: f32,
+    /// Optional duplicate probability (0.0 to 1.0)
+    pub duplicate_pct: f32,
+    /// Optional loss correlation percentage (0.0 to 1.0)
+    pub loss_corr_pct: f32,
 }
 
 impl NetworkParams {
@@ -29,6 +37,10 @@ impl NetworkParams {
             delay_ms: 5,
             loss_pct: 0.001,   // 0.1%
             rate_kbps: 10_000, // 10 Mbps
+            jitter_ms: 0,
+            reorder_pct: 0.0,
+            duplicate_pct: 0.0,
+            loss_corr_pct: 0.0,
         }
     }
 
@@ -38,6 +50,10 @@ impl NetworkParams {
             delay_ms: 20,
             loss_pct: 0.01,   // 1%
             rate_kbps: 5_000, // 5 Mbps
+            jitter_ms: 0,
+            reorder_pct: 0.0,
+            duplicate_pct: 0.0,
+            loss_corr_pct: 0.0,
         }
     }
 
@@ -47,6 +63,10 @@ impl NetworkParams {
             delay_ms: 100,
             loss_pct: 0.05,   // 5%
             rate_kbps: 1_000, // 1 Mbps
+            jitter_ms: 0,
+            reorder_pct: 0.0,
+            duplicate_pct: 0.0,
+            loss_corr_pct: 0.0,
         }
     }
 }

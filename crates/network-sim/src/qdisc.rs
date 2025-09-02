@@ -4,6 +4,7 @@ use log::{debug, info, warn};
 use std::fmt;
 use thiserror::Error;
 use tokio::process::Command;
+use std::process::Output;
 
 #[derive(Error, Debug)]
 pub enum QdiscError {
@@ -15,6 +16,12 @@ pub enum QdiscError {
 
     #[error("Permission denied (requires root privileges)")]
     PermissionDenied,
+
+    #[error("Command failed: {0}")]
+    CommandFailed(String),
+
+    #[error("Invalid arguments: {0}")]
+    InvalidArgs(String),
 }
 
 /// Network emulation configuration
@@ -47,6 +54,31 @@ impl QdiscManager {
         Self {}
     }
 
+    async fn run_tc(&self, args: &[&str]) -> Result<Output, QdiscError> {
+        debug!("tc {:?}", args);
+        let out = Command::new("tc").args(args).output().await?;
+        Ok(out)
+    }
+
+    async fn run_ip(&self, args: &[&str]) -> Result<Output, QdiscError> {
+        debug!("ip {:?}", args);
+        let out = Command::new("ip").args(args).output().await?;
+        Ok(out)
+    }
+
+    async fn interface_exists(&self, interface: &str) -> Result<bool, QdiscError> {
+        let out = self.run_ip(&["-o", "link", "show", "dev", interface]).await?;
+        if out.status.success() {
+            return Ok(true);
+        }
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        if stderr.contains("Cannot find device") || stderr.contains("does not exist") {
+            return Ok(false);
+        }
+        // If ip failed for other reasons, surface it
+        Err(QdiscError::CommandFailed(stderr))
+    }
+
     /// Configure network interface with traffic control parameters
     pub async fn configure_interface(
         &self,
@@ -55,55 +87,61 @@ impl QdiscManager {
     ) -> Result<(), QdiscError> {
         info!("Configuring interface {} with {}", interface, config);
 
-        // Best-effort: delete existing root qdisc (ignore failure)
-        let del_status = Command::new("tc")
-            .args(["qdisc", "del", "dev", interface, "root"])
-            .status()
-            .await;
-        match del_status {
-            Ok(status) if !status.success() => {
-                debug!("No existing qdisc to delete or delete failed with status: {}", status);
-            }
-            Ok(_) => debug!("Deleted existing root qdisc on {}", interface),
-            Err(e) => warn!("Failed to run tc delete on {}: {}", interface, e),
+        // Validate interface presence early
+        if !self.interface_exists(interface).await? {
+            return Err(QdiscError::InterfaceNotFound(interface.to_string()));
         }
 
-        // If rate limiting is requested, create a TBF as root and attach netem as child.
+        // Best-effort: delete existing root qdisc (ignore failure)
+        let del_out = self
+            .run_tc(&["qdisc", "del", "dev", interface, "root"])
+            .await;
+        if let Ok(out) = del_out {
+            if out.status.success() {
+                debug!("Deleted existing root qdisc on {}", interface);
+            } else {
+                debug!("Delete existing qdisc returned {}", out.status);
+            }
+        } else if let Err(e) = del_out {
+            warn!("Failed to run tc delete on {}: {}", interface, e);
+        }
+
+        // If rate limiting is requested, use HTB root + class, then attach netem under the class.
         // Otherwise, apply netem directly as root.
-        let apply_netem_as_child = config.rate_bps > 0;
+        let use_htb = config.rate_bps > 0;
 
-        if apply_netem_as_child {
+        if use_htb {
             let rate_kbit = (config.rate_bps / 1000).max(1); // kbit/s
-            // Sensible defaults for burst/latency
-            let burst_bytes = 32 * 1024; // 32KB
-            let latency_ms = 50u32; // 50ms
+            let out = self
+                .run_tc(&["qdisc", "add", "dev", interface, "root", "handle", "1:", "htb", "default", "10"])
+                .await?;
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                if stderr.contains("Operation not permitted") {
+                    return Err(QdiscError::PermissionDenied);
+                }
+                return Err(QdiscError::CommandFailed(stderr.to_string()));
+            }
 
-            let tbf_args = [
-                "qdisc", "add", "dev", interface, "root", "handle", "1:", "tbf",
-                "rate",
-                &format!("{}kbit", rate_kbit),
-                "burst",
-                &format!("{}b", burst_bytes),
-                "latency",
-                &format!("{}ms", latency_ms),
+            let class_args = [
+                "class", "add", "dev", interface, "parent", "1:", "classid", "1:10", "htb",
+                "rate", &format!("{}kbit", rate_kbit), "ceil", &format!("{}kbit", rate_kbit),
             ];
-
-            let status = Command::new("tc").args(tbf_args).status().await?;
-            if !status.success() {
-                return Err(QdiscError::PermissionDenied);
+            let out = self.run_tc(&class_args).await?;
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                if stderr.contains("Operation not permitted") {
+                    return Err(QdiscError::PermissionDenied);
+                }
+                return Err(QdiscError::CommandFailed(stderr.to_string()));
             }
         }
 
         // Build netem arguments
-        let mut netem_args: Vec<String> = vec![
-            "qdisc".into(),
-            "add".into(),
-            "dev".into(),
-            interface.into(),
-        ];
+        let mut netem_args: Vec<String> = vec!["qdisc".into(), "add".into(), "dev".into(), interface.into()];
 
-        if apply_netem_as_child {
-            netem_args.extend(["parent".into(), "1:1".into(), "handle".into(), "10:".into()]);
+        if use_htb {
+            netem_args.extend(["parent".into(), "1:10".into(), "handle".into(), "10:".into()]);
         } else {
             netem_args.extend(["root".into(), "handle".into(), "10:".into()]);
         }
@@ -142,9 +180,18 @@ impl QdiscManager {
         }
 
         debug!("Applying netem with args: {:?}", netem_args);
-        let status = Command::new("tc").args(&netem_args).status().await?;
-        if !status.success() {
-            return Err(QdiscError::PermissionDenied);
+        let out = self
+            .run_tc(&netem_args.iter().map(|s| s.as_str()).collect::<Vec<_>>())
+            .await?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if stderr.contains("Operation not permitted") {
+                return Err(QdiscError::PermissionDenied);
+            }
+            if stderr.contains("Cannot find device") {
+                return Err(QdiscError::InterfaceNotFound(interface.to_string()));
+            }
+            return Err(QdiscError::CommandFailed(stderr.to_string()));
         }
 
         Ok(())
@@ -152,14 +199,87 @@ impl QdiscManager {
 
     /// Remove any qdisc configuration from the interface (restore defaults)
     pub async fn clear_interface(&self, interface: &str) -> Result<(), QdiscError> {
-        let status = Command::new("tc")
-            .args(["qdisc", "del", "dev", interface, "root"])
-            .status()
+        let out = self
+            .run_tc(&["qdisc", "del", "dev", interface, "root"])
             .await?;
-        if !status.success() {
+        if !out.status.success() {
             debug!("No qdisc to delete on {} or insufficient permissions", interface);
         }
         Ok(())
+    }
+
+    /// Return raw `tc qdisc show dev <iface>` output for inspection
+    pub async fn describe_interface_qdisc(&self, interface: &str) -> Result<String, QdiscError> {
+        let out = self.run_tc(&["qdisc", "show", "dev", interface]).await?;
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        if out.status.success() {
+            Ok(stdout)
+        } else {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if stderr.contains("Operation not permitted") {
+                return Err(QdiscError::PermissionDenied);
+            }
+            if stderr.contains("Cannot find device") {
+                return Err(QdiscError::InterfaceNotFound(interface.to_string()));
+            }
+            Err(QdiscError::CommandFailed(stderr.to_string()))
+        }
+    }
+
+    /// Parse basic counters from `tc -s qdisc show dev <iface>`
+    pub async fn get_interface_stats(&self, interface: &str) -> Result<InterfaceStats, QdiscError> {
+        let out = self
+            .run_tc(&["-s", "qdisc", "show", "dev", interface])
+            .await?;
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if stderr.contains("Operation not permitted") {
+                return Err(QdiscError::PermissionDenied);
+            }
+            if stderr.contains("Cannot find device") {
+                return Err(QdiscError::InterfaceNotFound(interface.to_string()));
+            }
+            return Err(QdiscError::CommandFailed(stderr.to_string()));
+        }
+
+        // Very simple parsing: look for "Sent X bytes Y pkt" and "dropped Z"
+        let mut sent_bytes = 0u64;
+        let mut sent_pkts = 0u64;
+        let mut dropped = 0u64;
+        for line in stdout.lines() {
+            let l = line.trim();
+            if l.contains("Sent") && l.contains("bytes") && l.contains("pkt") {
+                // Example: "Sent 12345 bytes 67 pkt (dropped 1, overlimits 0 requeues 0)"
+                let toks: Vec<&str> = l.split_whitespace().collect();
+                for (i, t) in toks.iter().enumerate() {
+                    if *t == "Sent" {
+                        if let Some(vs) = toks.get(i + 1) {
+                            if let Ok(v) = vs.parse::<u64>() { sent_bytes = v; }
+                        }
+                    }
+                    if *t == "pkt" && i > 0 {
+                        if let Ok(v) = toks[i - 1].parse::<u64>() { sent_pkts = v; }
+                    }
+                    if t.contains("dropped") {
+                        if let Some(next) = toks.get(i + 1) {
+                            let cleaned = next.trim_end_matches([',', ')']);
+                            if let Ok(v) = cleaned.parse::<u64>() { dropped = v; }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(InterfaceStats { sent_bytes, sent_packets: sent_pkts, dropped })
+    }
+
+    /// Heuristic check whether tc can be used (indicates NET_ADMIN or equivalent capability)
+    pub async fn has_net_admin(&self) -> bool {
+        match self.run_tc(&["qdisc", "show"]).await {
+            Ok(out) => out.status.success(),
+            Err(_) => false,
+        }
     }
 }
 
@@ -167,4 +287,12 @@ impl Default for QdiscManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Basic interface statistics derived from `tc -s` output
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InterfaceStats {
+    pub sent_bytes: u64,
+    pub sent_packets: u64,
+    pub dropped: u64,
 }

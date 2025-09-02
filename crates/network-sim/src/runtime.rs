@@ -15,13 +15,13 @@ pub async fn apply_network_params(
     params: &NetworkParams,
 ) -> Result<(), RuntimeError> {
     let netem_config = NetemConfig {
-        delay_us: params.delay_ms * 1000,
-        jitter_us: 0,
-        loss_percent: params.loss_pct * 100.0,
-        loss_correlation: 0.0,
-        reorder_percent: 0.0,
-        duplicate_percent: 0.0,
-        rate_bps: params.rate_kbps as u64 * 1000,
+    delay_us: params.delay_ms * 1000,
+    jitter_us: params.jitter_ms * 1000,
+    loss_percent: params.loss_pct * 100.0,
+    loss_correlation: params.loss_corr_pct * 100.0,
+    reorder_percent: params.reorder_pct * 100.0,
+    duplicate_percent: params.duplicate_pct * 100.0,
+    rate_bps: params.rate_kbps as u64 * 1000,
     };
 
     qdisc_manager

@@ -12,7 +12,7 @@ This library provides a "set and forget" approach to network simulation, focusin
 
 - **Static network parameter application**: Apply fixed delay, packet loss, and rate limiting to network interfaces
 - **Predefined network profiles**: Pre-configured "good", "typical", and "poor" network conditions
-- **Linux Traffic Control integration**: Uses kernel qdisc for realistic network behavior
+- **Linux Traffic Control integration**: Uses `tc` to configure kernel qdisc for realistic network behavior
 - **Clean async API**: Built with Tokio for non-blocking network operations
 - **Structured error handling**: Comprehensive error types for different failure modes
 - **Container-friendly**: Designed for use in Docker containers and network namespaces
@@ -159,12 +159,11 @@ let params = NetworkParams::poor();
 
 ### Linux Traffic Control Integration
 
-The library uses Linux's Traffic Control (TC) system through netlink sockets to apply network conditions:
+The library uses Linux's Traffic Control (TC) via the `tc` command to apply network conditions:
 
 - **Qdisc Management**: Creates and manages queueing disciplines on network interfaces
 - **Netem Integration**: Uses Network Emulation (netem) qdisc for realistic network behavior
-- **Token Bucket Filtering**: Applies rate limiting using TBF qdisc when bandwidth limits are specified
-- **Netlink Communication**: Direct kernel communication for efficient parameter application
+- **HTB Classful Shaping**: Applies rate limiting using an HTB root and class, attaching netem as a child under the class
 
 ### Architecture
 
@@ -174,9 +173,6 @@ Application Code
 network-sim API
      ↓
 QdiscManager
-     ↓ 
-netlink-packet-route
-     ↓
 Linux Kernel (TC subsystem)
      ↓
 Network Interface (veth, eth, etc.)
@@ -291,43 +287,11 @@ async fn temporary_network_test() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Monitoring Applied Conditions
 
-```rust
-use network_sim::{get_interface_stats, QdiscManager};
-
-async fn monitor_interface(interface: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let qdisc_manager = QdiscManager::default();
-    
-    let stats = get_interface_stats(&qdisc_manager, interface).await?;
-    
-    println!("Interface: {}", interface);
-    println!("Packets sent: {}", stats.tx_packets);
-    println!("Packets dropped: {}", stats.tx_dropped);
-    println!("Bytes transmitted: {}", stats.tx_bytes);
-    
-    Ok(())
-}
-```
+Use `QdiscManager::get_interface_stats` to fetch basic counters by parsing `tc -s qdisc show` output.
 
 ### Custom Qdisc Configuration
 
-```rust
-use network_sim::{QdiscManager, QdiscConfig};
-
-async fn advanced_qdisc_setup() -> Result<(), Box<dyn std::error::Error>> {
-    let qdisc_manager = QdiscManager::default();
-    
-    // Create custom qdisc configuration
-    let config = QdiscConfig::new("netem")
-        .with_delay(30) // 30ms delay
-        .with_jitter(5) // ±5ms jitter
-        .with_loss_correlation(25.0) // 25% loss correlation
-        .with_reorder(10.0, 50.0); // 10% reorder probability, 50% correlation
-    
-    apply_custom_qdisc(&qdisc_manager, "veth0", &config).await?;
-    
-    Ok(())
-}
-```
+Advanced builders are not yet available. Prefer `NetworkParams` fields to control delay, loss, jitter, reorder, duplicate, and rate.
 
 ## Integration Examples
 
