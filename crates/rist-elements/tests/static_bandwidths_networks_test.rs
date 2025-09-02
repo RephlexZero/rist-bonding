@@ -10,7 +10,11 @@ use gstristelements::testing::*;
 use std::time::Duration;
 
 #[cfg(feature = "network-sim")]
-use ::network_sim::{qdisc::QdiscManager, types::NetworkParams, runtime::apply_network_params};
+use ::network_sim::{
+    qdisc::QdiscManager,
+    types::NetworkParams,
+    runtime::{apply_network_params, apply_ingress_params, remove_network_params, remove_ingress_params},
+};
 
 #[cfg(feature = "network-sim")]
 use std::sync::Arc;
@@ -28,19 +32,81 @@ use std::path::PathBuf;
 #[derive(Debug, Clone)]
 struct StaticProfile {
     name: &'static str,
-    interface: &'static str,
+    // sender and receiver ends of a veth pair
+    veth_tx: String,
+    veth_rx: String,
+    // IPs assigned to veth ends
+    tx_ip: String,
+    rx_ip: String,
     delay_ms: u32,
     loss_pct: f32,
     rate_kbps: u32,
 }
 
 impl StaticProfile {
-    fn new(name: &'static str, interface: &'static str, delay_ms: u32, loss_pct: f32, rate_kbps: u32) -> Self {
-        Self { name, interface, delay_ms, loss_pct, rate_kbps }
+    fn new(index: usize, name: &'static str, delay_ms: u32, loss_pct: f32, rate_kbps: u32) -> Self {
+        let veth_tx = format!("veths{}", index);
+        let veth_rx = format!("vethr{}", index);
+        // Use a /30 per profile to avoid overlaps: 10.200.<idx>.0/30
+        let octet = 100 + index as u8; // avoid very low subnets
+        let tx_ip = format!("10.200.{}.1", octet);
+        let rx_ip = format!("10.200.{}.2", octet);
+        Self { name, veth_tx, veth_rx, tx_ip, rx_ip, delay_ms, loss_pct, rate_kbps }
     }
 
     #[cfg(feature = "network-sim")]
-    fn to_params(&self) -> NetworkParams { NetworkParams { delay_ms: self.delay_ms, loss_pct: self.loss_pct, rate_kbps: self.rate_kbps } }
+    fn to_params(&self) -> NetworkParams {
+        NetworkParams {
+            delay_ms: self.delay_ms,
+            loss_pct: self.loss_pct,
+            rate_kbps: self.rate_kbps,
+            jitter_ms: 0,
+            reorder_pct: 0.0,
+            duplicate_pct: 0.0,
+            loss_corr_pct: 0.0,
+        }
+    }
+}
+
+#[cfg(feature = "network-sim")]
+async fn has_net_admin() -> bool {
+    QdiscManager::default().has_net_admin().await
+}
+
+#[cfg(feature = "network-sim")]
+async fn run_cmd(cmd: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
+    use tokio::process::Command;
+    Command::new(cmd).args(args).output().await
+}
+
+#[cfg(feature = "network-sim")]
+async fn setup_veth_pair(tx: &str, rx: &str, tx_ip: &str, rx_ip: &str) -> std::io::Result<()> {
+    // Delete pre-existing
+    let _ = run_cmd("ip", &["link", "del", "dev", tx]).await;
+    let _ = run_cmd("ip", &["link", "del", "dev", rx]).await;
+
+    // Create veth pair
+    let out = run_cmd("ip", &["link", "add", tx, "type", "veth", "peer", "name", rx]).await?;
+    if !out.status.success() { return Err(std::io::Error::new(std::io::ErrorKind::Other, String::from_utf8_lossy(&out.stderr).to_string())); }
+    // Assign IPs (/30)
+    let _ = run_cmd("ip", &["addr", "flush", "dev", tx]).await;
+    let _ = run_cmd("ip", &["addr", "flush", "dev", rx]).await;
+    let out = run_cmd("ip", &["addr", "add", &format!("{}/30", tx_ip), "dev", tx]).await?;
+    if !out.status.success() { return Err(std::io::Error::new(std::io::ErrorKind::Other, String::from_utf8_lossy(&out.stderr).to_string())); }
+    let out = run_cmd("ip", &["addr", "add", &format!("{}/30", rx_ip), "dev", rx]).await?;
+    if !out.status.success() { return Err(std::io::Error::new(std::io::ErrorKind::Other, String::from_utf8_lossy(&out.stderr).to_string())); }
+    // Bring up
+    let out = run_cmd("ip", &["link", "set", "dev", tx, "up"]).await?;
+    if !out.status.success() { return Err(std::io::Error::new(std::io::ErrorKind::Other, String::from_utf8_lossy(&out.stderr).to_string())); }
+    let out = run_cmd("ip", &["link", "set", "dev", rx, "up"]).await?;
+    if !out.status.success() { return Err(std::io::Error::new(std::io::ErrorKind::Other, String::from_utf8_lossy(&out.stderr).to_string())); }
+    Ok(())
+}
+
+#[cfg(feature = "network-sim")]
+async fn cleanup_veth_pair(tx: &str, rx: &str) {
+    let _ = run_cmd("ip", &["link", "del", "dev", tx]).await;
+    let _ = run_cmd("ip", &["link", "del", "dev", rx]).await;
 }
 
 #[cfg(feature = "network-sim")]
@@ -63,29 +129,43 @@ async fn test_static_bandwidths_convergence() {
 
     println!("=== End-to-End RIST Network Convergence Test ===");
 
+    // Require NET_ADMIN for link setup; otherwise skip test
+    if !has_net_admin().await {
+        println!("ℹ️ Skipping: requires NET_ADMIN to create veth and configure qdisc");
+        return;
+    }
+
     // Fixed capacities for four links with different UDP port assignments
     let profiles = vec![
-        (StaticProfile::new("5G-Good",   "lo", 15, 0.0005, 4000), 5000),
-        (StaticProfile::new("4G-Good",   "lo", 25, 0.0010, 2000), 5002), 
-        (StaticProfile::new("4G-Typical","lo", 40, 0.0050, 1200), 5004),
-        (StaticProfile::new("5G-Poor",   "lo", 60, 0.0100,  800), 5006),
+        (StaticProfile::new(0, "5G-Good",    15, 0.0005, 4000), 5000),
+        (StaticProfile::new(1, "4G-Good",    25, 0.0010, 2000), 5002), 
+        (StaticProfile::new(2, "4G-Typical", 40, 0.0050, 1200), 5004),
+        (StaticProfile::new(3, "5G-Poor",    60, 0.0100,  800), 5006),
     ];
 
     // Expected capacity-proportional weights
     let total_capacity: u32 = profiles.iter().map(|(p, _)| p.rate_kbps).sum();
     let expected_weights: Vec<f64> = profiles.iter().map(|(p, _)| p.rate_kbps as f64 / total_capacity as f64).collect();
 
-    println!("Profiles (fixed) with UDP ports:");
+    println!("Profiles (fixed) with UDP ports and veth pairs:");
     for (i, (p, port)) in profiles.iter().enumerate() {
-        println!("  {}: {} - {}ms, {:.2}% loss, {} kbps -> UDP port {}", 
-                i, p.name, p.delay_ms, p.loss_pct*100.0, p.rate_kbps, port);
+        println!(
+            "  {}: {} - {}ms, {:.2}% loss, {} kbps -> UDP port {}, tx={}({}), rx={}({})",
+            i, p.name, p.delay_ms, p.loss_pct*100.0, p.rate_kbps, port, p.veth_tx, p.tx_ip, p.veth_rx, p.rx_ip
+        );
     }
 
-    // Apply static network constraints (using loopback for simplicity in testing)
+    // Create links and apply static network constraints
     let qdisc = Arc::new(QdiscManager::new());
-    println!("\nApplying static constraints to loopback...");
+    println!("\nCreating veth pairs and applying constraints...");
     for (p, _) in &profiles {
-        let _ = apply_network_params(&qdisc, p.interface, &p.to_params()).await;
+        if let Err(e) = setup_veth_pair(&p.veth_tx, &p.veth_rx, &p.tx_ip, &p.rx_ip).await {
+            println!("⚠️ Failed to setup {}-{}: {}", p.veth_tx, p.veth_rx, e);
+            return;
+        }
+        // Egress shaping on sender side, ingress on receiver side
+        let _ = apply_network_params(&qdisc, &p.veth_tx, &p.to_params()).await;
+        let _ = apply_ingress_params(&qdisc, &p.veth_rx, &p.to_params()).await;
     }
 
     // Create sender pipeline with real RIST sinks
@@ -137,11 +217,14 @@ async fn test_static_bandwidths_convergence() {
 
     // Create single RIST sink with bonding addresses and custom dispatcher
     let sender_bonding_addresses = profiles.iter()
-        .map(|(_, port)| format!("127.0.0.1:{}", port))
+        .map(|(p, port)| format!("{}:{}", p.rx_ip, port))
         .collect::<Vec<_>>()
         .join(",");
     
     let rist_sink = gst::ElementFactory::make("ristsink")
+        // Set primary destination as first profile; bonding will include all
+        .property("address", &profiles[0].0.rx_ip)
+        .property("port", profiles[0].1 as u32)
         .property("bonding-addresses", &sender_bonding_addresses)
         .property("dispatcher", &dispatcher)  // Use our custom EWMA dispatcher
         .property("sender-buffer", 1000u32)
@@ -165,13 +248,13 @@ async fn test_static_bandwidths_convergence() {
     
     // RIST source configured for bonding - listens on all sender ports
     let bonding_addresses = profiles.iter()
-        .map(|(_, port)| format!("127.0.0.1:{}", port))
+        .map(|(p, port)| format!("{}:{}", p.rx_ip, port))
         .collect::<Vec<_>>()
         .join(",");
     
     let rist_src = gst::ElementFactory::make("ristsrc")
-        .property("address", "0.0.0.0") 
-        .property("port", profiles[0].1 as u32)  // Primary port
+        .property("address", "0.0.0.0")
+        .property("port", profiles[0].1 as u32)
         .property("bonding-addresses", &bonding_addresses)  // All sender addresses
         .property("receiver-buffer", 2000u32)
         .build()
@@ -319,6 +402,13 @@ async fn test_static_bandwidths_convergence() {
     let _ = sender_pipeline.set_state(gst::State::Null);
     let _ = receiver_pipeline.set_state(gst::State::Null);
     sleep(Duration::from_millis(500)).await;
+
+    // Cleanup shaping and links
+    for (p, _) in &profiles {
+        let _ = remove_network_params(&qdisc, &p.veth_tx).await;
+        let _ = remove_ingress_params(&qdisc, &p.veth_rx).await;
+        cleanup_veth_pair(&p.veth_tx, &p.veth_rx).await;
+    }
 
     println!("\nExpected (capacity-based): [{:.3}, {:.3}, {:.3}, {:.3}]",
         expected_weights[0], expected_weights[1], expected_weights[2], expected_weights[3]);

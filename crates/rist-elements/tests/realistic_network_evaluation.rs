@@ -66,6 +66,10 @@ impl RealisticNetworkProfile {
             delay_ms: self.delay_ms,
             loss_pct: self.loss_pct,
             rate_kbps: self.rate_kbps,
+            jitter_ms: 0,
+            reorder_pct: 0.0,
+            duplicate_pct: 0.0,
+            loss_corr_pct: 0.0,
         }
     }
 
@@ -322,7 +326,7 @@ async fn test_realistic_network_performance_1080p60_bonded_rist() {
                 let count_i: u64 = counter.property::<u64>("count");
 
                 // Determine the currently applied params for this session
-                let p = params_snapshot.get(&i).cloned().unwrap_or(NetworkParams { delay_ms: 30, loss_pct: 0.01, rate_kbps: 1000 });
+                let p = params_snapshot.get(&i).cloned().unwrap_or(NetworkParams { delay_ms: 30, loss_pct: 0.01, rate_kbps: 1000, jitter_ms: 0, reorder_pct: 0.0, duplicate_pct: 0.0, loss_corr_pct: 0.0 });
 
                 // RTT derived from delay with a tiny deterministic variation
                 let base_rtt_ms = (p.delay_ms as f64) * 2.0 + 10.0;
