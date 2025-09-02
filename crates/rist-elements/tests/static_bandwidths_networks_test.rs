@@ -125,7 +125,8 @@ async fn test_static_bandwidths_convergence() {
     dispatcher.set_property("strategy", "ewma");
     dispatcher.set_property("auto-balance", true);
     dispatcher.set_property("rebalance-interval-ms", 1000u64);
-    dispatcher.set_property("metrics-export-interval-ms", 2000u64);
+    // Increase dispatcher metrics export to 4 Hz for detailed logging during the test
+    dispatcher.set_property("metrics-export-interval-ms", 250u64);
 
     // Create single RIST sink with bonding addresses and custom dispatcher
     let sender_bonding_addresses = profiles.iter()
@@ -201,9 +202,13 @@ async fn test_static_bandwidths_convergence() {
     let sender_bus = sender_pipeline.bus().expect("sender pipeline has a bus");
     
     println!("\nMonitoring RIST statistics and dispatcher rebalancing...");
-    
-    for sec in 0..test_secs {
-        sleep(Duration::from_secs(1)).await;
+    // Sample at 4 Hz (every 250ms) to capture detailed dispatcher metrics
+    let ticks = test_secs * 4;
+    for tick in 0..ticks {
+        sleep(Duration::from_millis(250)).await;
+        let ms_total = tick * 250;
+        let ss = ms_total / 1000;
+        let ms = ms_total % 1000;
 
         // Read current stats from single RIST sink (real network performance across all sessions)
         if let Some(stats_struct) = rist_sink.property::<Option<gst::Structure>>("stats") {
@@ -211,7 +216,7 @@ async fn test_static_bandwidths_convergence() {
             let sent_original = stats_struct.get::<u64>("sent-original-packets").unwrap_or(0);
             let sent_retransmitted = stats_struct.get::<u64>("sent-retransmitted-packets").unwrap_or(0);
             
-            if sec % 5 == 0 {
+            if ss % 5 == 0 && ms == 0 {
                 println!("  RIST sink: original={}, retransmitted={}", sent_original, sent_retransmitted);
                 
                 // Try to extract session-specific stats from the session-stats array
@@ -227,7 +232,7 @@ async fn test_static_bandwidths_convergence() {
                     }
                 }
             }
-        } else if sec % 5 == 0 {
+    } else if ss % 5 == 0 && ms == 0 {
             println!("  No RIST stats available yet");
         }
 
@@ -240,13 +245,31 @@ async fn test_static_bandwidths_convergence() {
                 if s.name() == "rist-dispatcher-metrics" {
                     let weights = s.get::<&str>("current-weights").unwrap_or("[]");
                     let selected = s.get::<u32>("selected-index").unwrap_or(0);
-                    println!("t={:>2}s | Dispatcher: selected={} weights={}", sec, selected, weights);
+                    let src_pad_count = s.get::<u32>("src-pad-count").unwrap_or(0);
+                    let buffers_processed = s.get::<u64>("buffers-processed").unwrap_or(0);
+                    let encoder_bitrate = s.get::<u32>("encoder-bitrate").unwrap_or(0);
+                    let ewma_rtx_penalty = s.get::<f64>("ewma-rtx-penalty").unwrap_or(0.0);
+                    let ewma_rtt_penalty = s.get::<f64>("ewma-rtt-penalty").unwrap_or(0.0);
+                    let aimd_rtx_threshold = s.get::<f64>("aimd-rtx-threshold").unwrap_or(0.0);
+                    println!(
+                        "t={:>2}.{:03}s | sel={} pads={} enc={}kbps buf={} ewma_pen{{rtx:{:.3},rtt:{:.3}}} aimd_th={:.3} weights={}",
+                        ss,
+                        ms,
+                        selected,
+                        src_pad_count,
+                        encoder_bitrate,
+                        buffers_processed,
+                        ewma_rtx_penalty,
+                        ewma_rtt_penalty,
+                        aimd_rtx_threshold,
+                        weights
+                    );
                 }
             }
         }
 
-        if sec % 10 == 0 {
-            println!("--- t={}s checkpoint ---", sec);
+        if ss % 10 == 0 && ms == 0 {
+            println!("--- t={}s checkpoint ---", ss);
         }
     }
 
