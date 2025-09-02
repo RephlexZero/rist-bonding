@@ -300,6 +300,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Ingress Shaping
+
+For inbound conditions, the crate provides helpers that redirect ingress to an IFB device and apply shaping there:
+
+```rust
+use network_sim::{apply_ingress_params, remove_ingress_params, NetworkParams, QdiscManager};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let qdisc_manager = QdiscManager::default();
+    let iface = "veth0";
+    apply_ingress_params(&qdisc_manager, iface, &NetworkParams::typical()).await?;
+    // ... run test traffic ...
+    remove_ingress_params(&qdisc_manager, iface).await?;
+    Ok(())
+}
+```
+
 ### Custom Qdisc Configuration
 
 Advanced builders are not yet available. Prefer `NetworkParams` fields to control delay, loss, jitter, reorder, duplicate, and rate.

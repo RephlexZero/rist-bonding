@@ -208,6 +208,111 @@ impl QdiscManager {
         Ok(())
     }
 
+    /// Compute the ifb device name to use for ingress shaping on a given interface
+    pub fn ingress_ifb_name(&self, interface: &str) -> String {
+        let mut base = format!("ifb-{}", interface.replace('/', "-"));
+        if base.len() > 15 {
+            base.truncate(15);
+        }
+        base
+    }
+
+    async fn ensure_ifb_up(&self, ifb: &str) -> Result<(), QdiscError> {
+        // if ifb exists, set up; otherwise create and set up
+        match self.interface_exists(ifb).await? {
+            true => {
+                let _ = self.run_ip(&["link", "set", "dev", ifb, "up"]).await?;
+            }
+            false => {
+                let out = self.run_ip(&["link", "add", ifb, "type", "ifb"]).await?;
+                if !out.status.success() {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    if stderr.contains("Operation not permitted") {
+                        return Err(QdiscError::PermissionDenied);
+                    }
+                    return Err(QdiscError::CommandFailed(stderr.to_string()));
+                }
+                let out = self.run_ip(&["link", "set", "dev", ifb, "up"]).await?;
+                if !out.status.success() {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    if stderr.contains("Operation not permitted") {
+                        return Err(QdiscError::PermissionDenied);
+                    }
+                    return Err(QdiscError::CommandFailed(stderr.to_string()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Configure ingress shaping by redirecting ingress to an IFB and applying egress shaping on the IFB
+    pub async fn configure_ingress(
+        &self,
+        interface: &str,
+        config: NetemConfig,
+    ) -> Result<(), QdiscError> {
+        info!("Configuring ingress for {} with {}", interface, config);
+
+        if !self.interface_exists(interface).await? {
+            return Err(QdiscError::InterfaceNotFound(interface.to_string()));
+        }
+
+        // Prepare IFB device
+        let ifb = self.ingress_ifb_name(interface);
+        self.ensure_ifb_up(&ifb).await?;
+
+        // Add ingress qdisc to base interface (ignore 'File exists')
+        let out = self
+            .run_tc(&["qdisc", "add", "dev", interface, "handle", "ffff:", "ingress"])
+            .await?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if !(stderr.contains("File exists") || stderr.contains("RTNETLINK answers: File exists")) {
+                if stderr.contains("Operation not permitted") {
+                    return Err(QdiscError::PermissionDenied);
+                }
+                return Err(QdiscError::CommandFailed(stderr.to_string()));
+            }
+        }
+
+        // Redirect all ingress traffic to IFB (ignore 'File exists')
+        let filt_args = [
+            "filter", "add", "dev", interface, "parent", "ffff:", "protocol", "all", "u32",
+            "match", "u32", "0", "0", "action", "mirred", "egress", "redirect", "dev", &ifb,
+        ];
+        let out = self.run_tc(&filt_args).await?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if !(stderr.contains("File exists") || stderr.contains("RTNETLINK answers: File exists")) {
+                if stderr.contains("Operation not permitted") {
+                    return Err(QdiscError::PermissionDenied);
+                }
+                return Err(QdiscError::CommandFailed(stderr.to_string()));
+            }
+        }
+
+        // Apply shaping on IFB as egress
+        self.configure_interface(&ifb, config).await
+    }
+
+    /// Clear ingress shaping: remove ingress qdisc/filter and delete IFB device
+    pub async fn clear_ingress(&self, interface: &str) -> Result<(), QdiscError> {
+        let ifb = self.ingress_ifb_name(interface);
+
+        // Delete ingress qdisc (best-effort)
+        let _ = self
+            .run_tc(&["qdisc", "del", "dev", interface, "ingress"])
+            .await;
+
+        // Clear shaping on IFB
+        let _ = self.clear_interface(&ifb).await;
+
+        // Delete IFB device
+        let _ = self.run_ip(&["link", "del", "dev", &ifb]).await;
+
+        Ok(())
+    }
+
     /// Return raw `tc qdisc show dev <iface>` output for inspection
     pub async fn describe_interface_qdisc(&self, interface: &str) -> Result<String, QdiscError> {
         let out = self.run_tc(&["qdisc", "show", "dev", interface]).await?;
