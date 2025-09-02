@@ -641,11 +641,15 @@ impl ObjectImpl for DispatcherImpl {
                                     serde_json::to_string(&valid_weights).unwrap_or_default();
                                 self.obj()
                                     .emit_by_name::<()>("weights-changed", &[&weights_json]);
+                                // Also notify the readonly property so listeners get GObject notifications
+                                self.obj().notify("current-weights");
                             } else {
                                 gst::warning!(CAT, "Invalid weights JSON, using default [1.0]");
                                 self.inner.state.lock().weights = vec![1.0];
                                 self.obj()
                                     .emit_by_name::<()>("weights-changed", &[&"[1.0]".to_string()]);
+                                // Notify after fallback as well
+                                self.obj().notify("current-weights");
                             }
                         }
                         Err(e) => {
@@ -1546,6 +1550,8 @@ impl DispatcherImpl {
                 if let Some(parent) = sinkpad.parent() {
                     if let Ok(dispatcher) = parent.downcast::<Dispatcher>() {
                         dispatcher.emit_by_name::<()>("weights-changed", &[&weights_json]);
+                        // Also trigger a property notification for tests listening to notify::current-weights
+                        dispatcher.notify("current-weights");
                     }
                 }
             }
