@@ -18,6 +18,13 @@ use std::sync::Arc;
 #[cfg(feature = "network-sim")]
 use tokio::time::sleep;
 
+#[cfg(feature = "network-sim")]
+use std::fs::{create_dir_all, File};
+#[cfg(feature = "network-sim")]
+use std::io::{BufWriter, Write};
+#[cfg(feature = "network-sim")]
+use std::path::PathBuf;
+
 #[derive(Debug, Clone)]
 struct StaticProfile {
     name: &'static str,
@@ -202,6 +209,18 @@ async fn test_static_bandwidths_convergence() {
     let sender_bus = sender_pipeline.bus().expect("sender pipeline has a bus");
     
     println!("\nMonitoring RIST statistics and dispatcher rebalancing...");
+    // Prepare CSV logging at 4 Hz
+    let csv_dir = PathBuf::from("/workspace/target/tmp");
+    let _ = create_dir_all(&csv_dir);
+    let csv_path = csv_dir.join("static-bandwidths-metrics.csv");
+    println!("CSV: {}", csv_path.display());
+    let csv_file = File::create(&csv_path).expect("create CSV file");
+    let mut csv = BufWriter::new(csv_file);
+    // Header
+    writeln!(
+        csv,
+        "elapsed_ms,timestamp,selected_index,src_pad_count,encoder_bitrate_kbps,buffers_processed,ewma_rtx_penalty,ewma_rtt_penalty,aimd_rtx_threshold,current_weights"
+    ).ok();
     // Sample at 4 Hz (every 250ms) to capture detailed dispatcher metrics
     let ticks = test_secs * 4;
     for tick in 0..ticks {
@@ -251,6 +270,7 @@ async fn test_static_bandwidths_convergence() {
                     let ewma_rtx_penalty = s.get::<f64>("ewma-rtx-penalty").unwrap_or(0.0);
                     let ewma_rtt_penalty = s.get::<f64>("ewma-rtt-penalty").unwrap_or(0.0);
                     let aimd_rtx_threshold = s.get::<f64>("aimd-rtx-threshold").unwrap_or(0.0);
+                    let ts = s.get::<u64>("timestamp").unwrap_or(0);
                     println!(
                         "t={:>2}.{:03}s | sel={} pads={} enc={}kbps buf={} ewma_pen{{rtx:{:.3},rtt:{:.3}}} aimd_th={:.3} weights={}",
                         ss,
@@ -264,6 +284,23 @@ async fn test_static_bandwidths_convergence() {
                         aimd_rtx_threshold,
                         weights
                     );
+
+                    // CSV line (quote weights); escape inner quotes by doubling
+                    let weights_csv = format!("\"{}\"", weights.replace('"', "\"\""));
+                    let _ = writeln!(
+                        csv,
+                        "{},{},{},{},{},{},{:.6},{:.6},{:.6},{}",
+                        (tick) * 250,
+                        ts,
+                        selected,
+                        src_pad_count,
+                        encoder_bitrate,
+                        buffers_processed,
+                        ewma_rtx_penalty,
+                        ewma_rtt_penalty,
+                        aimd_rtx_threshold,
+                        weights_csv
+                    );
                 }
             }
         }
@@ -275,6 +312,7 @@ async fn test_static_bandwidths_convergence() {
 
     // Shutdown
     println!("\nShutting down pipelines...");
+    let _ = csv.flush();
     let _ = sender_pipeline.set_state(gst::State::Ready);
     let _ = receiver_pipeline.set_state(gst::State::Ready);
     sleep(Duration::from_millis(1000)).await;
