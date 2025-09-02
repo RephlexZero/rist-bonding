@@ -39,6 +39,16 @@ pub async fn apply_network_params(
     Ok(())
 }
 
+/// Remove any network parameters previously applied (delete root qdisc)
+pub async fn remove_network_params(
+    qdisc_manager: &QdiscManager,
+    interface: &str,
+) -> Result<(), RuntimeError> {
+    qdisc_manager.clear_interface(interface).await?;
+    info!("Removed network simulation from {}", interface);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

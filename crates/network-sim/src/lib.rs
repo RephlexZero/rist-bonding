@@ -10,5 +10,5 @@ pub mod types;
 #[cfg(feature = "docker")]
 pub mod docker;
 
-pub use runtime::apply_network_params;
+pub use runtime::{apply_network_params, remove_network_params};
 pub use types::{NetworkParams, RuntimeError};
