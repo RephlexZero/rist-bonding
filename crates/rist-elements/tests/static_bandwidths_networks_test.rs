@@ -87,19 +87,19 @@ async fn setup_veth_pair(tx: &str, rx: &str, tx_ip: &str, rx_ip: &str) -> std::i
 
     // Create veth pair
     let out = run_cmd("ip", &["link", "add", tx, "type", "veth", "peer", "name", rx]).await?;
-    if !out.status.success() { return Err(std::io::Error::new(std::io::ErrorKind::Other, String::from_utf8_lossy(&out.stderr).to_string())); }
+    if !out.status.success() { return Err(std::io::Error::other(String::from_utf8_lossy(&out.stderr).to_string())); }
     // Assign IPs (/30)
     let _ = run_cmd("ip", &["addr", "flush", "dev", tx]).await;
     let _ = run_cmd("ip", &["addr", "flush", "dev", rx]).await;
     let out = run_cmd("ip", &["addr", "add", &format!("{}/30", tx_ip), "dev", tx]).await?;
-    if !out.status.success() { return Err(std::io::Error::new(std::io::ErrorKind::Other, String::from_utf8_lossy(&out.stderr).to_string())); }
+    if !out.status.success() { return Err(std::io::Error::other(String::from_utf8_lossy(&out.stderr).to_string())); }
     let out = run_cmd("ip", &["addr", "add", &format!("{}/30", rx_ip), "dev", rx]).await?;
-    if !out.status.success() { return Err(std::io::Error::new(std::io::ErrorKind::Other, String::from_utf8_lossy(&out.stderr).to_string())); }
+    if !out.status.success() { return Err(std::io::Error::other(String::from_utf8_lossy(&out.stderr).to_string())); }
     // Bring up
     let out = run_cmd("ip", &["link", "set", "dev", tx, "up"]).await?;
-    if !out.status.success() { return Err(std::io::Error::new(std::io::ErrorKind::Other, String::from_utf8_lossy(&out.stderr).to_string())); }
+    if !out.status.success() { return Err(std::io::Error::other(String::from_utf8_lossy(&out.stderr).to_string())); }
     let out = run_cmd("ip", &["link", "set", "dev", rx, "up"]).await?;
-    if !out.status.success() { return Err(std::io::Error::new(std::io::ErrorKind::Other, String::from_utf8_lossy(&out.stderr).to_string())); }
+    if !out.status.success() { return Err(std::io::Error::other(String::from_utf8_lossy(&out.stderr).to_string())); }
     Ok(())
 }
 
