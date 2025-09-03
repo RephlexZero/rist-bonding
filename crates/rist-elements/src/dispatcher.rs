@@ -494,8 +494,30 @@ impl ObjectImpl for DispatcherImpl {
         obj.add_pad(&sinkpad).unwrap();
         *self.inner.sinkpad.lock() = Some(sinkpad);
 
-        // Auto-discover parent RIST sink by traversing up the element hierarchy
+        // Auto-discover parent RIST sink by traversing up the element hierarchy now
         self.discover_rist_sink_parent();
+
+        // Also react to parenting changes to (re)discover the RIST sink lazily,
+        // and clear cached handle when detached. This avoids races during bin
+        // construction where discovery in constructed() may be too early.
+        let obj = self.obj();
+        let obj_weak = obj.downgrade();
+        obj.upcast_ref::<gst::Object>().connect_notify(Some("parent"), move |o, _| {
+            if let Some(obj) = obj_weak.upgrade() {
+                if o.parent().is_some() {
+                    // Now parented — try discovery again
+                    if let Some(imp) = obj.imp().downcast_ref::<DispatcherImpl>() {
+                        imp.discover_rist_sink_parent();
+                    }
+                } else {
+                    // Lost parent — drop cached rist element so we re-resolve later
+                    if let Some(imp) = obj.imp().downcast_ref::<DispatcherImpl>() {
+                        *imp.inner.rist_element.lock() = None;
+                        gst::debug!(CAT, "Dispatcher lost parent; cleared cached RIST element");
+                    }
+                }
+            }
+        });
 
         // Start the rebalancer timer even without RIST element
         // This provides basic weight adjustment capabilities
@@ -1245,6 +1267,16 @@ impl DispatcherImpl {
                 } else {
                     gst::warning!(CAT, "Failed to downcast GstRistSink to GstElement");
                 }
+            } else if let Ok(el) = current_parent.clone().downcast::<gst::Element>() {
+                // Fallback: check factory name in case type name differs
+                if let Some(factory) = el.factory() {
+                    if factory.name() == "ristsink" {
+                        gst::info!(CAT, "Auto-discovered parent RIST sink by factory: {}", el.name());
+                        *self.inner.rist_element.lock() = Some(el);
+                        self.start_stats_polling();
+                        return;
+                    }
+                }
             }
             
             // Move up one level in the hierarchy  
@@ -1277,6 +1309,37 @@ impl DispatcherImpl {
             };
 
             gst::debug!(CAT, "Rebalancer timer fired, polling RIST stats...");
+            // Lazy discovery: if we don't yet have a RIST element, try to resolve it now
+            let need_discover = inner.rist_element.lock().is_none();
+            if need_discover {
+                if let Some(sinkpad) = inner.sinkpad.lock().as_ref() {
+                    if let Some(dispatcher_parent) = sinkpad.parent() {
+                        if let Ok(dispatcher_el) = dispatcher_parent.clone().downcast::<gst::Element>() {
+                            // Walk up to find a RIST sink either by type name or factory name
+                            let mut p = dispatcher_el.parent();
+                            while let Some(cur) = p.as_ref() {
+                                let tname = cur.type_().name();
+                                if tname == "GstRistSink" {
+                                    if let Ok(rist_el) = cur.clone().downcast::<gst::Element>() {
+                                        *inner.rist_element.lock() = Some(rist_el);
+                                        gst::info!(CAT, "Lazy-discovered RIST sink (type match) in timer");
+                                        break;
+                                    }
+                                } else if let Ok(e) = cur.clone().downcast::<gst::Element>() {
+                                    if let Some(f) = e.factory() {
+                                        if f.name() == "ristsink" {
+                                            *inner.rist_element.lock() = Some(e);
+                                            gst::info!(CAT, "Lazy-discovered RIST sink (factory match) in timer");
+                                            break;
+                                        }
+                                    }
+                                }
+                                p = cur.parent();
+                            }
+                        }
+                    }
+                }
+            }
             
             // Poll RIST stats and update weights
             Self::poll_rist_stats_and_update_weights(&inner);
