@@ -456,10 +456,10 @@ impl ObjectImpl for DispatcherImpl {
                                 }
                             }
 
-                            // No linked pads yet: answer with our template caps to keep negotiation going
-                            let tmpl_caps = pad.pad_template_caps();
-                            gst::debug!(CAT, "No linked src pads; returning template caps: {:?}", tmpl_caps);
-                            caps_query.set_result(&tmpl_caps);
+                            // No linked pads yet: answer with RTP caps to keep negotiation going
+                            let rtp_caps = gst::Caps::builder("application/x-rtp").build();
+                            gst::debug!(CAT, "No linked src pads; returning RTP caps: {:?}", rtp_caps);
+                            caps_query.set_result(&rtp_caps);
                             true
                         }
                         _ => {
@@ -504,17 +504,14 @@ impl ObjectImpl for DispatcherImpl {
         let obj_weak = obj.downgrade();
         obj.upcast_ref::<gst::Object>().connect_notify(Some("parent"), move |o, _| {
             if let Some(obj) = obj_weak.upgrade() {
+                let imp = obj.imp();
                 if o.parent().is_some() {
                     // Now parented — try discovery again
-                    if let Some(imp) = obj.imp().downcast_ref::<DispatcherImpl>() {
-                        imp.discover_rist_sink_parent();
-                    }
+                    imp.discover_rist_sink_parent();
                 } else {
                     // Lost parent — drop cached rist element so we re-resolve later
-                    if let Some(imp) = obj.imp().downcast_ref::<DispatcherImpl>() {
-                        *imp.inner.rist_element.lock() = None;
-                        gst::debug!(CAT, "Dispatcher lost parent; cleared cached RIST element");
-                    }
+                    *imp.inner.rist_element.lock() = None;
+                    gst::debug!(CAT, "Dispatcher lost parent; cleared cached RIST element");
                 }
             }
         });
@@ -551,7 +548,7 @@ impl ObjectImpl for DispatcherImpl {
                 glib::ParamSpecBoolean::builder("caps-any")
                     .nick("Use ANY caps")
                     .blurb("Use ANY caps instead of application/x-rtp for broader compatibility")
-                    .default_value(true)
+                    .default_value(false)
                     .build(),
                 glib::ParamSpecBoolean::builder("auto-balance")
                     .nick("Auto balance")
@@ -908,14 +905,15 @@ impl ElementImpl for DispatcherImpl {
     fn pad_templates() -> &'static [gst::PadTemplate] {
         use once_cell::sync::Lazy;
         static PAD_TEMPLATES: Lazy<Vec<gst::PadTemplate>> = Lazy::new(|| {
-            // Single sink template with ANY caps - actual caps controlled by caps-any property
+            // Single sink template with RTP caps by default; caps-any can widen negotiation
             let any_caps = gst::Caps::new_any();
+            let rtp_caps = gst::Caps::builder("application/x-rtp").build();
 
             let sink_pad_template = gst::PadTemplate::new(
                 "sink",
                 gst::PadDirection::Sink,
                 gst::PadPresence::Always,
-                &any_caps,
+                &rtp_caps,
             )
             .unwrap();
 
