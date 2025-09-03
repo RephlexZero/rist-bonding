@@ -1354,70 +1354,35 @@ impl DispatcherImpl {
     let ewma_rtt_penalty = *inner.ewma_rtt_penalty.lock();
     let aimd_rtx_threshold = *inner.aimd_rtx_threshold.lock();
 
-        // Emit bus message if we can get the dispatcher element
+        // Emit bus message by posting it from the dispatcher element.
+        // GStreamer will deliver it to the top-level pipeline bus.
         if let Some(sinkpad) = inner.sinkpad.lock().as_ref() {
             if let Some(parent) = sinkpad.parent() {
                 if let Ok(dispatcher) = parent.downcast::<Dispatcher>() {
-                    // Try to get the pipeline bus instead of element bus
-                    if let Some(pipeline) = dispatcher.parent() {
-                        if let Ok(pipeline_element) = pipeline.downcast::<gst::Element>() {
-                            if let Some(bus) = pipeline_element.bus() {
-                                gst::debug!(CAT, "Posting metrics bus message with {} fields", 6);
-                                let structure = gst::Structure::builder("rist-dispatcher-metrics")
-                                    .field("timestamp", timestamp)
-                                    .field("current-weights", current_weights_json.as_str())
-                                    .field("buffers-processed", buffers_processed)
-                                    .field("src-pad-count", src_pad_count)
-                                    .field("selected-index", selected_index as u32)
-                                    .field("encoder-bitrate", encoder_bitrate)
-                                    .field("ewma-rtx-penalty", ewma_rtx_penalty)
-                                    .field("ewma-rtt-penalty", ewma_rtt_penalty)
-                                    .field("aimd-rtx-threshold", aimd_rtx_threshold)
-                                    .build();
-                                let message = gst::message::Application::builder(structure)
-                                    .src(&dispatcher)
-                                    .build();
-                                let _result = bus.post(message);
-                                gst::trace!(CAT, "Emitted metrics bus message");
-                            } else {
-                                gst::debug!(CAT, "Pipeline has no bus");
-                            }
-                        } else {
-                            gst::debug!(CAT, "Failed to downcast parent to Element");
-                        }
-                    } else {
-                        // Fallback to element bus
-                        let bus = dispatcher.bus();
-                        if let Some(bus) = bus {
-                            gst::debug!(CAT, "Using element bus as fallback for metrics");
-                            let structure = gst::Structure::builder("rist-dispatcher-metrics")
-                                .field("timestamp", timestamp)
-                                .field("current-weights", current_weights_json.as_str())
-                                .field("buffers-processed", buffers_processed)
-                                .field("src-pad-count", src_pad_count)
-                                .field("selected-index", selected_index as u32)
-                                .field("encoder-bitrate", encoder_bitrate)
-                                .field("ewma-rtx-penalty", ewma_rtx_penalty)
-                                .field("ewma-rtt-penalty", ewma_rtt_penalty)
-                                .field("aimd-rtx-threshold", aimd_rtx_threshold)
-                                .build();
-                            let message = gst::message::Application::builder(structure)
-                                .src(&dispatcher)
-                                .build();
-                            let _result = bus.post(message);
-                            gst::trace!(CAT, "Emitted metrics bus message via element bus");
-                        } else {
-                            gst::warning!(CAT, "No element bus available");
-                        }
-                    }
+                    let structure = gst::Structure::builder("rist-dispatcher-metrics")
+                        .field("timestamp", timestamp)
+                        .field("current-weights", current_weights_json.as_str())
+                        .field("buffers-processed", buffers_processed)
+                        .field("src-pad-count", src_pad_count)
+                        .field("selected-index", selected_index as u32)
+                        .field("encoder-bitrate", encoder_bitrate)
+                        .field("ewma-rtx-penalty", ewma_rtx_penalty)
+                        .field("ewma-rtt-penalty", ewma_rtt_penalty)
+                        .field("aimd-rtx-threshold", aimd_rtx_threshold)
+                        .build();
+                    let message = gst::message::Application::builder(structure)
+                        .src(&dispatcher)
+                        .build();
+                    let _ = dispatcher.post_message(message);
+                    gst::trace!(CAT, "Emitted metrics bus message via dispatcher.post_message()");
                 } else {
-                    gst::debug!(CAT, "Failed to downcast to Dispatcher");
+                    gst::debug!(CAT, "Failed to downcast parent to Dispatcher for metrics posting");
                 }
             } else {
-                gst::debug!(CAT, "No parent element");
+                gst::debug!(CAT, "No parent element for sinkpad while posting metrics");
             }
         } else {
-            gst::debug!(CAT, "No sinkpad available");
+            gst::debug!(CAT, "No sinkpad available for metrics emission");
         }
     }
 
