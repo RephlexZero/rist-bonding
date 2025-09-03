@@ -68,6 +68,48 @@ impl StaticProfile {
     }
 }
 
+// RAII guard to ensure veth/qdisc cleanup even on early returns
+#[cfg(feature = "network-sim")]
+struct VethGuard {
+    qdisc: Arc<QdiscManager>,
+    veth_tx: String,
+    veth_rx: String,
+}
+
+#[cfg(feature = "network-sim")]
+impl VethGuard {
+    async fn setup(p: &StaticProfile, qdisc: Arc<QdiscManager>) -> anyhow::Result<Self> {
+        setup_veth_pair(&p.veth_tx, &p.veth_rx, &p.tx_ip, &p.rx_ip)
+            .await
+            .map_err(|e| anyhow::anyhow!("veth setup {}-{} failed: {}", p.veth_tx, p.veth_rx, e))?;
+
+        // Apply shaping; assert success so failures don't go unnoticed
+        apply_network_params(&qdisc, &p.veth_tx, &p.to_params())
+            .await
+            .map_err(|e| anyhow::anyhow!("egress qdisc apply failed on {}: {}", p.veth_tx, e))?;
+        apply_ingress_params(&qdisc, &p.veth_rx, &p.to_params())
+            .await
+            .map_err(|e| anyhow::anyhow!("ingress qdisc apply failed on {}: {}", p.veth_rx, e))?;
+
+        Ok(Self { qdisc, veth_tx: p.veth_tx.clone(), veth_rx: p.veth_rx.clone() })
+    }
+}
+
+#[cfg(feature = "network-sim")]
+impl Drop for VethGuard {
+    fn drop(&mut self) {
+        // Best-effort async cleanup in the background
+        let q = self.qdisc.clone();
+        let tx = self.veth_tx.clone();
+        let rx = self.veth_rx.clone();
+        tokio::spawn(async move {
+            let _ = remove_network_params(&q, &tx).await;
+            let _ = remove_ingress_params(&q, &rx).await;
+            cleanup_veth_pair(&tx, &rx).await;
+        });
+    }
+}
+
 #[cfg(feature = "network-sim")]
 async fn has_net_admin() -> bool {
     QdiscManager::default().has_net_admin().await
@@ -158,14 +200,15 @@ async fn test_static_bandwidths_convergence() {
     // Create links and apply static network constraints
     let qdisc = Arc::new(QdiscManager::new());
     println!("\nCreating veth pairs and applying constraints...");
+    let mut veth_guards = Vec::with_capacity(profiles.len());
     for (p, _) in &profiles {
-        if let Err(e) = setup_veth_pair(&p.veth_tx, &p.veth_rx, &p.tx_ip, &p.rx_ip).await {
-            println!("⚠️ Failed to setup {}-{}: {}", p.veth_tx, p.veth_rx, e);
-            return;
+        match VethGuard::setup(p, qdisc.clone()).await {
+            Ok(g) => veth_guards.push(g),
+            Err(e) => {
+                println!("❌ Network setup failed: {e}");
+                return;
+            }
         }
-        // Egress shaping on sender side, ingress on receiver side
-        let _ = apply_network_params(&qdisc, &p.veth_tx, &p.to_params()).await;
-        let _ = apply_ingress_params(&qdisc, &p.veth_rx, &p.to_params()).await;
     }
 
     // Create sender pipeline with real RIST sinks
@@ -246,14 +289,15 @@ async fn test_static_bandwidths_convergence() {
     // Create receiver pipeline to complete the RIST loop
     let receiver_pipeline = gst::Pipeline::new();
     
-    // RIST source configured for bonding - listens on all sender ports
+    // RIST source configured for bonding - REMOTE SENDER addresses (tx_ip)
     let bonding_addresses = profiles.iter()
-        .map(|(p, port)| format!("{}:{}", p.rx_ip, port))
+        .map(|(p, port)| format!("{}:{}", p.tx_ip, port))
         .collect::<Vec<_>>()
         .join(",");
     
     let rist_src = gst::ElementFactory::make("ristsrc")
-        .property("address", "0.0.0.0")
+        // Configure with the REMOTE sender address/port so the handshake completes
+        .property("address", &profiles[0].0.tx_ip)
         .property("port", profiles[0].1 as u32)
         .property("bonding-addresses", &bonding_addresses)  // All sender addresses
         .property("receiver-buffer", 2000u32)
@@ -403,12 +447,7 @@ async fn test_static_bandwidths_convergence() {
     let _ = receiver_pipeline.set_state(gst::State::Null);
     sleep(Duration::from_millis(500)).await;
 
-    // Cleanup shaping and links
-    for (p, _) in &profiles {
-        let _ = remove_network_params(&qdisc, &p.veth_tx).await;
-        let _ = remove_ingress_params(&qdisc, &p.veth_rx).await;
-        cleanup_veth_pair(&p.veth_tx, &p.veth_rx).await;
-    }
+    // Cleanup is handled by VethGuard Drop
 
     println!("\nExpected (capacity-based): [{:.3}, {:.3}, {:.3}, {:.3}]",
         expected_weights[0], expected_weights[1], expected_weights[2], expected_weights[3]);
