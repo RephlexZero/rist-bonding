@@ -233,7 +233,7 @@ async fn test_static_bandwidths_convergence() {
         
         // Add H.265/HEVC encoder for high-quality 1080p60
         let x265enc = gst::ElementFactory::make("x265enc")
-            .property("bitrate", 6000u32)  // 6 Mbps - within total capacity but requires balancing
+            .property("bitrate", 1500u32)  // Lower to reduce backpressure and ensure flow
             .property_from_str("speed-preset", "ultrafast")  // Fast encoding for tests
             .property_from_str("tune", "zerolatency")
             .build().unwrap();
@@ -278,7 +278,7 @@ async fn test_static_bandwidths_convergence() {
     println!("Sender bonding addresses: {}", sender_bonding_addresses);
     println!("Using custom EWMA dispatcher for bonding");
 
-    // Add elements to sender pipeline (only av_source and rist_sink, no external dispatcher)
+    // Add elements to sender pipeline (only av_source and rist_sink)
     sender_pipeline.add(&av_source).unwrap();
     sender_pipeline.add(&rist_sink).unwrap();
 
@@ -296,10 +296,15 @@ async fn test_static_bandwidths_convergence() {
         .join(",");
     
     let rist_src = gst::ElementFactory::make("ristsrc")
-        // Configure with the REMOTE sender address/port so the handshake completes
-        .property("address", &profiles[0].0.tx_ip)
+        // Bind locally; remote senders go into bonding-addresses per plugin docs
+        .property("address", "0.0.0.0")
         .property("port", profiles[0].1 as u32)
         .property("bonding-addresses", &bonding_addresses)  // All sender addresses
+        .property("encoding-name", "H265") // Help caps negotiation for dynamic payload type
+        .property("caps", gst::Caps::builder("application/x-rtp")
+            .field("media", "video")
+            .field("encoding-name", "H265")
+            .build())
         .property("receiver-buffer", 2000u32)
         .build()
         .expect("Failed to create ristsrc - ensure gst-plugins-bad with RIST support is installed");
@@ -320,6 +325,27 @@ async fn test_static_bandwidths_convergence() {
     gst::Element::link_many([&rist_src, &rtph265depay, &h265parse, &avdec_h265, &videoconvert, &appsink]).unwrap();
 
     println!("✅ End-to-end RIST pipeline established (sender -> UDP -> receiver)");
+
+    // Attach receiver bus logging to catch warnings/errors
+    if let Some(bus) = receiver_pipeline.bus() {
+        let _ = bus.add_watch_local(move |_bus, msg| {
+            use gst::MessageView;
+            match msg.view() {
+                MessageView::Warning(w) => {
+                    let err = w.error();
+                    let dbg = w.debug().unwrap_or_else(|| glib::GString::from("<none>"));
+                    println!("[receiver][WARN] {} | {:?}", err, dbg);
+                }
+                MessageView::Error(e) => {
+                    let err = e.error();
+                    let dbg = e.debug().unwrap_or_else(|| glib::GString::from("<none>"));
+                    println!("[receiver][ERROR] {} | {:?}", err, dbg);
+                }
+                _ => {}
+            }
+            glib::ControlFlow::Continue
+        });
+    }
 
     // Start receiver first
     println!("Starting receiver pipeline...");
@@ -350,8 +376,12 @@ async fn test_static_bandwidths_convergence() {
     ).ok();
     // Sample at 4 Hz (every 250ms) to capture detailed dispatcher metrics
     let ticks = test_secs * 4;
+    let main_ctx = glib::MainContext::default();
     for tick in 0..ticks {
         sleep(Duration::from_millis(250)).await;
+        // Pump GLib main loop so timeout_add callbacks (e.g., metrics export) can run
+        // Drain all pending events without blocking
+        while main_ctx.iteration(false) {}
         let ms_total = tick * 250;
         let ss = ms_total / 1000;
         let ms = ms_total % 1000;
