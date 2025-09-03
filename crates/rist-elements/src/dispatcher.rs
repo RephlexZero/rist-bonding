@@ -494,6 +494,9 @@ impl ObjectImpl for DispatcherImpl {
         obj.add_pad(&sinkpad).unwrap();
         *self.inner.sinkpad.lock() = Some(sinkpad);
 
+        // Auto-discover parent RIST sink by traversing up the element hierarchy
+        self.discover_rist_sink_parent();
+
         // Start the rebalancer timer even without RIST element
         // This provides basic weight adjustment capabilities
         self.start_rebalancer_timer();
@@ -1221,6 +1224,36 @@ impl ElementImpl for DispatcherImpl {
 }
 
 impl DispatcherImpl {
+    fn discover_rist_sink_parent(&self) {
+        let obj = self.obj();
+        
+        // Traverse up the element hierarchy to find GstRistSink
+        let mut parent = obj.parent();
+        while let Some(current_parent) = parent.as_ref() {
+            let type_name = current_parent.type_().name();
+            gst::trace!(CAT, "Checking parent element type: {}", type_name);
+            
+            if type_name == "GstRistSink" {
+                // Found the RIST sink parent!
+                if let Ok(rist_element) = current_parent.clone().downcast::<gst::Element>() {
+                    gst::info!(CAT, "Auto-discovered parent RIST sink: {}", rist_element.name());
+                    *self.inner.rist_element.lock() = Some(rist_element);
+                    
+                    // Start stats polling since we now have a RIST element
+                    self.start_stats_polling();
+                    return;
+                } else {
+                    gst::warning!(CAT, "Failed to downcast GstRistSink to GstElement");
+                }
+            }
+            
+            // Move up one level in the hierarchy  
+            parent = current_parent.parent();
+        }
+        
+        gst::debug!(CAT, "No GstRistSink parent found in element hierarchy");
+    }
+
     fn start_rebalancer_timer(&self) {
         // Check auto_balance setting
         let auto_balance = *self.inner.auto_balance.lock();
