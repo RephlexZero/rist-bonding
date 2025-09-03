@@ -7,7 +7,7 @@
 use gst::prelude::*;
 use gstreamer as gst;
 use gstristelements::testing::*;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "network-sim")]
 use ::network_sim::{
@@ -289,17 +289,17 @@ async fn test_static_bandwidths_convergence() {
     // Create receiver pipeline to complete the RIST loop
     let receiver_pipeline = gst::Pipeline::new();
     
-    // RIST source configured for bonding - REMOTE SENDER addresses (tx_ip)
+    // RIST source configured for bonding - listen on RECEIVER addresses (rx_ip)
     let bonding_addresses = profiles.iter()
-        .map(|(p, port)| format!("{}:{}", p.tx_ip, port))
+        .map(|(p, port)| format!("{}:{}", p.rx_ip, port))
         .collect::<Vec<_>>()
         .join(",");
     
     let rist_src = gst::ElementFactory::make("ristsrc")
-        // Bind locally; remote senders go into bonding-addresses per plugin docs
-        .property("address", "0.0.0.0")
+        // Bind to first receiver address for primary connection
+        .property("address", &profiles[0].0.rx_ip)
         .property("port", profiles[0].1 as u32)
-        .property("bonding-addresses", &bonding_addresses)  // All sender addresses
+        .property("bonding-addresses", &bonding_addresses)  // All receiver addresses
         .property("encoding-name", "H265") // Help caps negotiation for dynamic payload type
         .property("caps", gst::Caps::builder("application/x-rtp")
             .field("media", "video")
@@ -367,15 +367,48 @@ async fn test_static_bandwidths_convergence() {
     let _ = create_dir_all(&csv_dir);
     let csv_path = csv_dir.join("static-bandwidths-metrics.csv");
     println!("CSV: {}", csv_path.display());
-    let csv_file = File::create(&csv_path).expect("create CSV file");
-    let mut csv = BufWriter::new(csv_file);
-    // Header
-    writeln!(
-        csv,
-        "elapsed_ms,timestamp,selected_index,src_pad_count,encoder_bitrate_kbps,buffers_processed,ewma_rtx_penalty,ewma_rtt_penalty,aimd_rtx_threshold,current_weights"
-    ).ok();
+    // Create separate CSV files for better analysis
+    let base_path = "/workspace/target/tmp/static-bandwidths";
+    let weights_path = format!("{}-weights.csv", base_path);
+    let sessions_path = format!("{}-sessions.csv", base_path);
+    let metrics_path = format!("{}-metrics.csv", base_path);
+    // Per-session CSVs (one file per session id)
+    let mut per_session_csvs: Vec<BufWriter<File>> = Vec::new();
+    for sid in 0..profiles.len() {
+        let p = format!("{}-sessions-{}.csv", base_path, sid);
+        let f = File::create(&p).expect("create per-session CSV file");
+        let mut w = BufWriter::new(f);
+        // Same schema as aggregate sessions CSV
+        let _ = writeln!(w, "elapsed_ms,timestamp,session_id,sent_original_packets,sent_retransmitted_packets,rtt_us,goodput_pps,rtx_rate");
+        per_session_csvs.push(w);
+    }
+    
+    // Weights CSV - tracks weight evolution over time
+    let weights_file = File::create(&weights_path).expect("create weights CSV file");
+    let mut weights_csv = BufWriter::new(weights_file);
+    writeln!(weights_csv, "elapsed_ms,timestamp,session_0_weight,session_1_weight,session_2_weight,session_3_weight").ok();
+    
+    // Sessions CSV - individual session stats over time
+    let sessions_file = File::create(&sessions_path).expect("create sessions CSV file");
+    let mut sessions_csv = BufWriter::new(sessions_file);
+    writeln!(sessions_csv, "elapsed_ms,timestamp,session_id,sent_original_packets,sent_retransmitted_packets,rtt_us,goodput_pps,rtx_rate").ok();
+    
+    // Metrics CSV - dispatcher-level metrics over time
+    let metrics_file = File::create(&metrics_path).expect("create metrics CSV file");
+    let mut metrics_csv = BufWriter::new(metrics_file);
+    writeln!(metrics_csv, "elapsed_ms,timestamp,selected_index,src_pad_count,encoder_bitrate_kbps,buffers_processed,ewma_rtx_penalty,ewma_rtt_penalty,aimd_rtx_threshold").ok();
+    
+    println!("CSV files:");
+    println!("  Weights: {}", weights_path);
+    println!("  Sessions: {}", sessions_path);
+    println!("  Metrics: {}", metrics_path);
+    for sid in 0..per_session_csvs.len() {
+        println!("  Session {}: {}-sessions-{}.csv", sid, base_path, sid);
+    }
     // Sample at 4 Hz (every 250ms) to capture detailed dispatcher metrics
     let ticks = test_secs * 4;
+    // Track the latest weights observed from dispatcher metrics
+    let mut last_weights: Option<Vec<f64>> = None;
     let main_ctx = glib::MainContext::default();
     for tick in 0..ticks {
         sleep(Duration::from_millis(250)).await;
@@ -401,9 +434,38 @@ async fn test_static_bandwidths_convergence() {
                         if let Ok(session_struct) = session_value.get::<gst::Structure>() {
                             let session_id = session_struct.get::<i32>("session-id").unwrap_or(-1);
                             let session_sent = session_struct.get::<u64>("sent-original-packets").unwrap_or(0);
+                            let session_retrans = session_struct.get::<u64>("sent-retransmitted-packets").unwrap_or(0);
                             let session_rtt = session_struct.get::<u64>("round-trip-time").unwrap_or(0);
+                            
                             println!("    Session {}: id={}, sent={}, rtt={}μs", 
                                     i, session_id, session_sent, session_rtt);
+                            
+                            // Write session stats to CSV
+                            // For now, we'll calculate simple metrics here (goodput/rtx would need time deltas)
+                            let _ = writeln!(
+                                sessions_csv,
+                                "{},{},{},{},{},{},0.0,0.0",
+                                ms_total,
+                                SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis(),
+                                session_id,
+                                session_sent,
+                                session_retrans,
+                                session_rtt
+                            );
+
+                            // Also write to the per-session CSV if the session id is within range
+                            if session_id >= 0 && (session_id as usize) < per_session_csvs.len() {
+                                let _ = writeln!(
+                                    per_session_csvs[session_id as usize],
+                                    "{},{},{},{},{},{},0.0,0.0",
+                                    ms_total,
+                                    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis(),
+                                    session_id,
+                                    session_sent,
+                                    session_retrans,
+                                    session_rtt
+                                );
+                            }
                         }
                     }
                 }
@@ -442,11 +504,10 @@ async fn test_static_bandwidths_convergence() {
                         weights
                     );
 
-                    // CSV line (quote weights); escape inner quotes by doubling
-                    let weights_csv = format!("\"{}\"", weights.replace('"', "\"\""));
+                    // Write to metrics CSV
                     let _ = writeln!(
-                        csv,
-                        "{},{},{},{},{},{},{:.6},{:.6},{:.6},{}",
+                        metrics_csv,
+                        "{},{},{},{},{},{},{:.6},{:.6},{:.6}",
                         (tick) * 250,
                         ts,
                         selected,
@@ -455,9 +516,30 @@ async fn test_static_bandwidths_convergence() {
                         buffers_processed,
                         ewma_rtx_penalty,
                         ewma_rtt_penalty,
-                        aimd_rtx_threshold,
-                        weights_csv
+                        aimd_rtx_threshold
                     );
+
+                    // Write to weights CSV
+                    if let Ok(v) = serde_json::from_str::<Vec<f64>>(weights) {
+                        // Validate finite and normalize if necessary to guard against rounding
+                        if !v.is_empty() && v.iter().all(|w| w.is_finite() && *w >= 0.0) {
+                            // Ensure we have at least 4 weights, pad with 0.0 if needed
+                            let w0 = v.first().copied().unwrap_or(0.0);
+                            let w1 = v.get(1).copied().unwrap_or(0.0);
+                            let w2 = v.get(2).copied().unwrap_or(0.0);
+                            let w3 = v.get(3).copied().unwrap_or(0.0);
+                            
+                            let _ = writeln!(
+                                weights_csv,
+                                "{},{},{:.6},{:.6},{:.6},{:.6}",
+                                (tick) * 250,
+                                ts,
+                                w0, w1, w2, w3
+                            );
+                            
+                            last_weights = Some(v);
+                        }
+                    }
                 }
             }
         }
@@ -469,7 +551,10 @@ async fn test_static_bandwidths_convergence() {
 
     // Shutdown
     println!("\nShutting down pipelines...");
-    let _ = csv.flush();
+    let _ = weights_csv.flush();
+    let _ = sessions_csv.flush();
+    let _ = metrics_csv.flush();
+    for w in per_session_csvs.iter_mut() { let _ = w.flush(); }
     let _ = sender_pipeline.set_state(gst::State::Ready);
     let _ = receiver_pipeline.set_state(gst::State::Ready);
     sleep(Duration::from_millis(1000)).await;
@@ -481,7 +566,41 @@ async fn test_static_bandwidths_convergence() {
 
     println!("\nExpected (capacity-based): [{:.3}, {:.3}, {:.3}, {:.3}]",
         expected_weights[0], expected_weights[1], expected_weights[2], expected_weights[3]);
-    println!("✅ End-to-end RIST network test completed - check logs for rebalancing behavior");
+
+    // Assert convergence: compare the latest observed weights to expected capacity ratios
+    // Allow a reasonable tolerance due to measurement noise and encoding variability.
+    let observed = last_weights.expect("No dispatcher weights observed; metrics not received");
+    assert_eq!(
+        observed.len(),
+        expected_weights.len(),
+        "Observed weights length {} != expected {}",
+        observed.len(),
+        expected_weights.len()
+    );
+
+    // Compute maximum absolute error across links
+    let mut max_abs_err = 0.0f64;
+    for (i, (obs, exp)) in observed.iter().zip(expected_weights.iter()).enumerate() {
+        let err = (obs - exp).abs();
+        max_abs_err = max_abs_err.max(err);
+        println!(
+            "Link {}: observed {:.3}, expected {:.3}, abs_err {:.3}",
+            i, obs, exp, err
+        );
+    }
+
+    // Tolerance: 12 percentage points per link
+    let tol = 0.12f64;
+    assert!(
+        max_abs_err <= tol,
+        "Weights did not converge: observed={:?}, expected={:?}, max_abs_err={:.3} > tol={:.3}",
+        observed,
+        expected_weights,
+        max_abs_err,
+        tol
+    );
+
+    println!("✅ Convergence within tolerance (max_abs_err {:.3} <= {:.3})", max_abs_err, tol);
 }
 
 // Fallback when network-sim isn’t enabled
