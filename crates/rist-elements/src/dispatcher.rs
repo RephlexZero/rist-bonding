@@ -504,17 +504,14 @@ impl ObjectImpl for DispatcherImpl {
         let obj_weak = obj.downgrade();
         obj.upcast_ref::<gst::Object>().connect_notify(Some("parent"), move |o, _| {
             if let Some(obj) = obj_weak.upgrade() {
+                let imp = obj.imp();
                 if o.parent().is_some() {
                     // Now parented — try discovery again
-                    if let Some(imp) = obj.imp().downcast_ref::<DispatcherImpl>() {
-                        imp.discover_rist_sink_parent();
-                    }
+                    imp.discover_rist_sink_parent();
                 } else {
                     // Lost parent — drop cached rist element so we re-resolve later
-                    if let Some(imp) = obj.imp().downcast_ref::<DispatcherImpl>() {
-                        *imp.inner.rist_element.lock() = None;
-                        gst::debug!(CAT, "Dispatcher lost parent; cleared cached RIST element");
-                    }
+                    *imp.inner.rist_element.lock() = None;
+                    gst::debug!(CAT, "Dispatcher lost parent; cleared cached RIST element");
                 }
             }
         });
