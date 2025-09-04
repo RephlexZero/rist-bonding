@@ -206,7 +206,7 @@ async fn test_static_bandwidths_convergence() {
             Ok(g) => veth_guards.push(g),
             Err(e) => {
                 println!("❌ Network setup failed: {e}");
-                return;
+                panic!("Network setup failed: {e}");
             }
         }
     }
