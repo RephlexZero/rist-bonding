@@ -185,10 +185,10 @@ async fn test_static_bandwidths_convergence() {
 
     // Fixed capacities for four links with different UDP port assignments
     let profiles = vec![
-        (StaticProfile::new(0, "5G-Good",    15, 0.0005, 4000), 5000),
-        (StaticProfile::new(1, "4G-Good",    25, 0.0010, 2000), 5002), 
-        (StaticProfile::new(2, "4G-Typical", 40, 0.0050, 1200), 5004),
-        (StaticProfile::new(3, "5G-Poor",    60, 0.0100,  800), 5006),
+        (StaticProfile::new(0, "5G-Good",    15, 0.0005, 1500), 5000),
+        (StaticProfile::new(1, "4G-Good",    25, 0.0010, 1250), 5002), 
+        (StaticProfile::new(2, "4G-Typical", 40, 0.0050,  750), 5004),
+        (StaticProfile::new(3, "5G-Poor",    60, 0.0100,  300), 5006),
     ];
 
     // Expected capacity-proportional weights
@@ -240,13 +240,17 @@ async fn test_static_bandwidths_convergence() {
         
         // Add H.265/HEVC encoder for high-quality 1080p60
         let x265enc = gst::ElementFactory::make("x265enc")
-            .property("bitrate", 3000u32)  // Lower to reduce backpressure and ensure flow
+            .property("bitrate", 5000u32)  // Lower to reduce backpressure and ensure flow
             .property_from_str("speed-preset", "ultrafast")  // Fast encoding for tests
             .property_from_str("tune", "zerolatency")
             .build().unwrap();
         let h265parse = gst::ElementFactory::make("h265parse").build().unwrap();
-        let rtph265pay = gst::ElementFactory::make("rtph265pay").build().unwrap();
-        
+        // Set an explicit MTU so RTP packets are sized well for typical links
+        let rtph265pay = gst::ElementFactory::make("rtph265pay")
+            .property("mtu", 1200u32)
+            .build()
+            .unwrap();
+
         bin.add_many([&videotestsrc, &videoconvert, &capsfilter, &x265enc, &h265parse, &rtph265pay]).unwrap();
         gst::Element::link_many([&videotestsrc, &videoconvert, &capsfilter, &x265enc, &h265parse, &rtph265pay]).unwrap();
         
@@ -261,7 +265,12 @@ async fn test_static_bandwidths_convergence() {
     let dispatcher = create_dispatcher(Some(&[0.25, 0.25, 0.25, 0.25]));
     dispatcher.set_property("strategy", "ewma");
     dispatcher.set_property("auto-balance", true);
-    dispatcher.set_property("rebalance-interval-ms", 1000u64);
+    // Loosen stickiness slightly and speed up early rebalances
+    dispatcher.set_property("min-hold-ms", 200u64);
+    dispatcher.set_property("switch-threshold", 1.05f64);
+    dispatcher.set_property("ewma-rtx-penalty", 0.30f64);
+    dispatcher.set_property("ewma-rtt-penalty", 0.10f64);
+    dispatcher.set_property("rebalance-interval-ms", 500u64);
     // Increase dispatcher metrics export to 4 Hz for detailed logging during the test
     dispatcher.set_property("metrics-export-interval-ms", 250u64);
 

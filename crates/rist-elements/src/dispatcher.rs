@@ -25,7 +25,6 @@ static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
 // - rebalance-interval-ms: how often to recompute weights from stats
 // - strategy: "aimd" | "ewma" (affects weight updates)
 
-#[derive(Default)]
 pub struct State {
     // Selected output index at the time a packet arrives
     next_out: usize,
@@ -48,6 +47,28 @@ pub struct State {
     // Keyframe duplication state
     dup_budget_used: u32, // Duplications used this second
     dup_budget_reset_time: Option<std::time::Instant>, // When to reset the budget
+    // Dispatcher start time (for short ε warm-up ramp)
+    started_at: std::time::Instant,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            next_out: 0,
+            weights: Vec::new(),
+            swrr_counters: Vec::new(),
+            cached_stream_start: None,
+            cached_caps: None,
+            cached_segment: None,
+            cached_tags: Vec::new(),
+            link_stats: Vec::new(),
+            last_switch_time: None,
+            link_health_timers: Vec::new(),
+            dup_budget_used: 0,
+            dup_budget_reset_time: None,
+            started_at: std::time::Instant::now(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +128,9 @@ pub struct DispatcherInner {
     ewma_rtx_penalty: Mutex<f64>,   // alpha coefficient for RTX penalty (default 0.1)
     ewma_rtt_penalty: Mutex<f64>,   // beta coefficient for RTT penalty (default 0.05)
     aimd_rtx_threshold: Mutex<f64>, // RTX threshold for AIMD decrease (default 0.05)
+    // Exploration and fairness controls
+    probe_ratio: Mutex<f64>,       // epsilon mix for deterministic exploration (default 0.08)
+    max_link_share: Mutex<f64>,    // hard cap on any single normalized weight (<=1.0, default 0.70)
 }
 
 impl Default for DispatcherInner {
@@ -120,8 +144,9 @@ impl Default for DispatcherInner {
             strategy: Mutex::new(Strategy::default()),
             caps_any: Mutex::new(false),
             auto_balance: Mutex::new(true),
-            min_hold_ms: Mutex::new(500),
-            switch_threshold: Mutex::new(1.2),
+            // Less sticky defaults to allow better mixing
+            min_hold_ms: Mutex::new(200),
+            switch_threshold: Mutex::new(1.05),
             health_warmup_ms: Mutex::new(2000),
             duplicate_keyframes: Mutex::new(false),
             dup_budget_pps: Mutex::new(5),
@@ -129,9 +154,13 @@ impl Default for DispatcherInner {
             metrics_timeout_id: Mutex::new(None),
             rist_element: Mutex::new(None),
             stats_timeout_id: Mutex::new(None),
-            ewma_rtx_penalty: Mutex::new(0.1),
-            ewma_rtt_penalty: Mutex::new(0.05),
+            // Stronger default quality penalties
+            ewma_rtx_penalty: Mutex::new(0.3),
+            ewma_rtt_penalty: Mutex::new(0.1),
             aimd_rtx_threshold: Mutex::new(0.05),
+            // Exploration and fairness controls
+            probe_ratio: Mutex::new(0.08),
+            max_link_share: Mutex::new(0.70),
         }
     }
 }
@@ -286,15 +315,16 @@ impl ObjectImpl for DispatcherImpl {
                                 }
                                 return Ok(flow);
                             }
-                            Err(gst::FlowError::NotLinked) => {
-                                gst::warning!(
+                            Err(err) => {
+                                // Treat all push errors as transient; try other pads
+                                gst::log!(
                                     CAT,
-                                    "Chosen pad {} not linked, trying fallback",
-                                    chosen_idx
+                                    "Push to chosen pad {} failed with {:?}, trying fallback",
+                                    chosen_idx,
+                                    err
                                 );
                                 // Fall through to fallback logic
                             }
-                            Err(e) => return Err(e),
                         }
                     } else {
                         gst::debug!(CAT, "Chosen pad {} not linked, trying fallback", chosen_idx);
@@ -315,8 +345,11 @@ impl ObjectImpl for DispatcherImpl {
                             gst::debug!(CAT, "Fallback: forwarding buffer to output pad {}", idx);
                             match outpad.push(buf.clone()) {
                                 Ok(flow) => return Ok(flow),
-                                Err(gst::FlowError::NotLinked) => continue,
-                                Err(e) => return Err(e),
+                                Err(err) => {
+                                    // Continue probing other pads on any error
+                                    gst::log!(CAT, "Fallback push to pad {} failed: {:?}", idx, err);
+                                    continue;
+                                }
                             }
                         }
                     }
@@ -569,14 +602,14 @@ impl ObjectImpl for DispatcherImpl {
                     .blurb("Minimum time between pad switches to prevent thrashing")
                     .minimum(0)
                     .maximum(10000)
-                    .default_value(500)
+                    .default_value(200)
                     .build(),
                 glib::ParamSpecDouble::builder("switch-threshold")
                     .nick("Switch threshold ratio")
                     .blurb("Minimum weight ratio required to switch pads (new_weight/current_weight)")
                     .minimum(1.0)
                     .maximum(10.0)
-                    .default_value(1.2)
+                    .default_value(1.05)
                     .build(),
                 glib::ParamSpecUInt64::builder("health-warmup-ms")
                     .nick("Health warmup time (ms)")
@@ -610,14 +643,14 @@ impl ObjectImpl for DispatcherImpl {
                     .blurb("Alpha coefficient for retransmission-rate penalty in EWMA weighting")
                     .minimum(0.0)
                     .maximum(10.0)
-                    .default_value(0.1)
+                    .default_value(0.3)
                     .build(),
                 glib::ParamSpecDouble::builder("ewma-rtt-penalty")
                     .nick("EWMA RTT penalty coefficient")
                     .blurb("Beta coefficient for RTT penalty in EWMA weighting")
                     .minimum(0.0)
                     .maximum(10.0)
-                    .default_value(0.05)
+                    .default_value(0.1)
                     .build(),
                 glib::ParamSpecDouble::builder("aimd-rtx-threshold")
                     .nick("AIMD RTX threshold")
@@ -625,6 +658,20 @@ impl ObjectImpl for DispatcherImpl {
                     .minimum(0.0)
                     .maximum(1.0)
                     .default_value(0.05)
+                    .build(),
+                glib::ParamSpecDouble::builder("probe-ratio")
+                    .nick("Exploration probe ratio")
+                    .blurb("Deterministic epsilon mix applied after normalization (0.0-0.5)")
+                    .minimum(0.0)
+                    .maximum(0.5)
+                    .default_value(0.08)
+                    .build(),
+                glib::ParamSpecDouble::builder("max-link-share")
+                    .nick("Max link share cap")
+                    .blurb("Hard cap for any single normalized weight before epsilon mix (<=1.0, 1.0 disables)")
+                    .minimum(0.5)
+                    .maximum(1.0)
+                    .default_value(0.70)
                     .build(),
             ]
         });
@@ -634,9 +681,11 @@ impl ObjectImpl for DispatcherImpl {
     fn signals() -> &'static [glib::subclass::Signal] {
         use once_cell::sync::Lazy;
         static SIGNALS: Lazy<Vec<glib::subclass::Signal>> = Lazy::new(|| {
-            vec![glib::subclass::Signal::builder("weights-changed")
-                .param_types([String::static_type()])
-                .build()]
+            vec![
+                glib::subclass::Signal::builder("weights-changed")
+                    .param_types([String::static_type()])
+                    .build(),
+            ]
         });
         SIGNALS.as_ref()
     }
@@ -656,7 +705,13 @@ impl ObjectImpl for DispatcherImpl {
                                 .collect();
 
                             if !valid_weights.is_empty() {
-                                self.inner.state.lock().weights = valid_weights.clone();
+                                {
+                                    let mut st = self.inner.state.lock();
+                                    st.weights = valid_weights.clone();
+                                    if !st.swrr_counters.is_empty() {
+                                        st.swrr_counters.fill(0.0);
+                                    }
+                                }
                                 gst::info!(
                                     CAT,
                                     "Set weights: {:?}",
@@ -797,6 +852,16 @@ impl ObjectImpl for DispatcherImpl {
                 *self.inner.aimd_rtx_threshold.lock() = v;
                 gst::debug!(CAT, "Set aimd-rtx-threshold: {:.4}", v);
             }
+            17 => {
+                let v = value.get::<f64>().unwrap_or(0.08).clamp(0.0, 0.5);
+                *self.inner.probe_ratio.lock() = v;
+                gst::debug!(CAT, "Set probe-ratio: {:.3}", v);
+            }
+            18 => {
+                let v = value.get::<f64>().unwrap_or(0.70).clamp(0.5, 1.0);
+                *self.inner.max_link_share.lock() = v;
+                gst::debug!(CAT, "Set max-link-share: {:.3}", v);
+            }
             _ => {}
         }
     }
@@ -876,6 +941,14 @@ impl ObjectImpl for DispatcherImpl {
             16 => {
                 gst::debug!(CAT, "Returning aimd-rtx-threshold");
                 self.inner.aimd_rtx_threshold.lock().to_value()
+            }
+            17 => {
+                gst::debug!(CAT, "Returning probe-ratio");
+                self.inner.probe_ratio.lock().to_value()
+            }
+            18 => {
+                gst::debug!(CAT, "Returning max-link-share");
+                self.inner.max_link_share.lock().to_value()
             }
             _ => {
                 gst::debug!(CAT, "Unknown property id: {}, returning default", id);
@@ -1532,19 +1605,32 @@ impl DispatcherImpl {
                 }
 
                 // Process each session's stats
-                for (link_idx, session_value) in sess_array.iter().enumerate() {
+                for (arr_idx, session_value) in sess_array.iter().enumerate() {
                     if let Ok(session_struct) = session_value.get::<gst::Structure>() {
+                        // Map by array order to align with src pad order in tests and typical setups
+                        let idx = arr_idx;
+
+                        // Ensure link_stats holds this index
+                        if state.link_stats.len() <= idx {
+                            state
+                                .link_stats
+                                .resize(idx + 1, LinkStats::default());
+                        }
+
                         let sent_original = session_struct
                             .get::<u64>("sent-original-packets")
                             .unwrap_or(0);
                         let sent_retrans = session_struct
                             .get::<u64>("sent-retransmitted-packets")
                             .unwrap_or(0);
-                        // RTT from RIST stats is in nanoseconds, convert to milliseconds
-                        let rtt_ns = session_struct.get::<u64>("round-trip-time").unwrap_or(50_000_000); // 50ms default
-                        let rtt_ms = rtt_ns as f64 / 1_000_000.0;
+                        // RTT may be ns (u64) or ms (f64) depending on source
+                        let rtt_ms = session_struct
+                            .get::<u64>("round-trip-time")
+                            .map(|ns| ns as f64 / 1_000_000.0)
+                            .or_else(|_| session_struct.get::<f64>("round-trip-time"))
+                            .unwrap_or(50.0);
 
-                        if let Some(link_stats) = state.link_stats.get_mut(link_idx) {
+                        if let Some(link_stats) = state.link_stats.get_mut(idx) {
                             // Calculate deltas
                             let delta_time =
                                 now.duration_since(link_stats.prev_timestamp).as_secs_f64();
@@ -1576,7 +1662,7 @@ impl DispatcherImpl {
                                 link_stats.prev_timestamp = now;
 
                                 gst::trace!(CAT, "Session {}: sent={}, rtx={}, rtt={:.1}ms, goodput={:.1}pps, rtx_rate={:.3}", 
-                                          link_idx, sent_original, sent_retrans, rtt_ms, link_stats.ewma_goodput, link_stats.ewma_rtx_rate);
+                                          idx, sent_original, sent_retrans, rtt_ms, link_stats.ewma_goodput, link_stats.ewma_rtx_rate);
                             }
                         }
                     }
@@ -1649,12 +1735,17 @@ impl DispatcherImpl {
                     .or_else(|_| stats.get::<u64>("sent-retransmitted-packets"))
                     .unwrap_or(0);
 
-                // RTT from RIST stats is in nanoseconds, convert to milliseconds
-                let rtt_ns = stats
+                // RTT may be provided as ns (u64) or ms (f64)
+                let rtt_ms = stats
                     .get::<u64>(&format!("{}.round-trip-time", session_key))
                     .or_else(|_| stats.get::<u64>("round-trip-time"))
-                    .unwrap_or(50_000_000); // 50ms default
-                let rtt_ms = rtt_ns as f64 / 1_000_000.0;
+                    .map(|ns| ns as f64 / 1_000_000.0)
+                    .or_else(|_| {
+                        stats
+                            .get::<f64>(&format!("{}.round-trip-time", session_key))
+                            .or_else(|_| stats.get::<f64>("round-trip-time"))
+                    })
+                    .unwrap_or(50.0);
 
                 gst::debug!(CAT, "Session {}: sent_orig={}, sent_retx={}, rtt={:.1}ms", 
                           link_idx, sent_original, sent_retrans, rtt_ms);
@@ -1698,63 +1789,149 @@ impl DispatcherImpl {
     }
 
     fn calculate_ewma_weights(inner: &DispatcherInner, state: &mut State) -> bool {
-        // EWMA goodput strategy from the roadmap
+        // 1) score each link using capacity-normalized estimator
         let mut new_weights = vec![0.0; state.weights.len()];
-        let mut total_weight = 0.0;
-        let mut changed = false;
+        let mut total = 0.0;
 
         gst::debug!(CAT, "Calculating EWMA weights for {} connections", state.weights.len());
-        
+
+        let n = state.weights.len() as f64;
+        let base_eps = *inner.probe_ratio.lock();
+        let share_floor = if n > 0.0 { (base_eps.max(1e-9)) / n } else { 0.0 };
+
         for (i, stats) in state.link_stats.iter().enumerate() {
-            if i >= new_weights.len() {
-                break;
-            }
+            if i >= new_weights.len() { break; }
 
-            // Base weight from goodput
-            let mut weight = stats.ewma_goodput.max(0.1); // minimum floor
+            // Capacity estimate removes share bias: cap ≈ goodput / last_share
+            let last_share = state
+                .weights
+                .get(i)
+                .copied()
+                .unwrap_or_else(|| if n > 0.0 { 1.0 / n } else { 1.0 })
+                .max(share_floor);
+            let cap_est = stats.ewma_goodput / last_share;
 
-            // Penalty for loss: scale by 1 / (1 + α × RTX_rate)
-            let alpha_rtx = *inner.ewma_rtx_penalty.lock();
-            weight *= 1.0 / (1.0 + alpha_rtx * stats.ewma_rtx_rate);
+            // Spread compression to avoid runaway winner
+            let gp = cap_est.max(1.0).powf(0.5);
 
-            // Optional RTT normalization (prefer lower RTT)
-            let beta_rtt = *inner.ewma_rtt_penalty.lock();
-            let normalized_rtt = (stats.ewma_rtt / 100.0).max(0.1); // normalize to ~100ms baseline
-            weight /= 1.0 + beta_rtt * normalized_rtt;
+            // Quality penalties
+            let alpha = *inner.ewma_rtx_penalty.lock();
+            let beta = *inner.ewma_rtt_penalty.lock();
+            let q_rtx = 1.0 / (1.0 + alpha * stats.ewma_rtx_rate);
+            let q_rtt = 1.0 / (1.0 + beta * (stats.ewma_rtt / 50.0).max(0.1));
 
-            // Weight floor to avoid starvation
-            weight = weight.max(0.05);
+            let mut w = gp * q_rtx * q_rtt;
+            w = w.max(1e-6); // starvation guard pre-norm
 
-            new_weights[i] = weight;
-            total_weight += weight;
-            
-            gst::debug!(CAT, "Connection {}: goodput={:.3}, rtx_rate={:.4}, rtt={:.1}ms, weight={:.3}", 
-                      i, stats.ewma_goodput, stats.ewma_rtx_rate, stats.ewma_rtt, weight);
+            new_weights[i] = w;
+            total += w;
+
+            gst::debug!(
+                CAT,
+                "EWMA score link {}: goodput={:.1}pps, share={:.3} -> cap_est={:.1}pps, rtx={:.4}, rtt={:.1}ms -> pre={:.6}",
+                i,
+                stats.ewma_goodput,
+                last_share,
+                cap_est,
+                stats.ewma_rtx_rate,
+                stats.ewma_rtt,
+                w
+            );
         }
 
-        // Normalize weights to sum to 1
-        if total_weight > 0.0 {
-            for w in &mut new_weights {
-                *w /= total_weight;
-            }
+        // 2) normalize
+        if total <= 0.0 {
+            gst::warning!(CAT, "Total weight is zero, cannot normalize");
+            return false;
+        }
+        for w in &mut new_weights { *w /= total; }
 
-            // Check if weights actually changed significantly
-            for (old, new) in state.weights.iter().zip(new_weights.iter()) {
-                if (old - new).abs() > 0.01 {
-                    // 1% threshold
-                    changed = true;
+        // 2b) optional cap before epsilon mix: enforce hard cap with waterfilling
+        let cap = *inner.max_link_share.lock();
+        if cap < 1.0 {
+            // Work on a copy to preserve original proportions for redistribution
+            let mut capped = vec![false; new_weights.len()];
+            let mut remaining = 1.0; // target sum after capping
+            let mut iter = 0;
+            loop {
+                iter += 1;
+                if iter > new_weights.len() + 1 {
+                    break; // safety
+                }
+
+                // Sum of under-cap weights in current distribution
+                let mut under_sum = 0.0;
+                for (i, &w) in new_weights.iter().enumerate() {
+                    if capped[i] {
+                        continue;
+                    }
+                    under_sum += w;
+                }
+
+                if under_sum <= 0.0 {
+                    // nothing left to distribute; set all uncapped to equal share of remaining
+                    let uncapped = capped.iter().filter(|&&c| !c).count();
+                    if uncapped > 0 {
+                        let fill = remaining / uncapped as f64;
+                        for (i, w) in new_weights.iter_mut().enumerate() {
+                            if !capped[i] {
+                                *w = fill.min(cap);
+                            }
+                        }
+                    }
                     break;
                 }
-            }
 
-            if changed {
-                state.weights = new_weights;
-                gst::debug!(CAT, "Updated EWMA weights: {:?}", state.weights);
-            } else {
-                gst::debug!(CAT, "EWMA weights unchanged (below 1% threshold): {:?}", state.weights);
+                // Scale under-cap weights to fill the remaining mass
+                let scale = if under_sum > 0.0 { remaining / under_sum } else { 1.0 };
+
+                // Apply scaling and detect new violations
+                let mut any_new_cap = false;
+                for (i, w) in new_weights.iter_mut().enumerate() {
+                    if capped[i] { continue; }
+                    let proposed = *w * scale;
+                    if proposed > cap {
+                        // Cap this one and mark
+                        *w = cap;
+                        capped[i] = true;
+                        any_new_cap = true;
+                    } else {
+                        *w = proposed;
+                    }
+                }
+
+                // Recompute remaining mass for next iteration
+                let new_remaining = 1.0 - new_weights.iter().sum::<f64>();
+                if !any_new_cap || new_remaining.abs() < 1e-9 {
+                    // Done (either no new caps or mass fully distributed)
+                    break;
+                } else {
+                    remaining = new_remaining.max(0.0);
+                    continue;
+                }
             }
+        }
+
+        // 3) deterministic ε-greedy post-normalization mix with warm-up ramp
+        let elapsed = state.started_at.elapsed().as_secs_f64();
+        let mut eps = base_eps;
+        if elapsed < 5.0 { eps = eps.max(0.12); }
+        if n > 0.0 && eps > 0.0 {
+            for w in &mut new_weights { *w = (1.0 - eps) * *w + eps / n; }
+        }
+
+        // 4) commit + reset SWRR debt if materially different
+        let mut changed = false;
+        for (old, new) in state.weights.iter().zip(new_weights.iter()) {
+            if (old - new).abs() > 0.01 { changed = true; break; }
+        }
+
+        if changed {
+            state.weights = new_weights;
+            state.swrr_counters.fill(0.0);
+            gst::debug!(CAT, "Updated EWMA weights: {:?}", state.weights);
         } else {
-            gst::warning!(CAT, "Total weight is zero, cannot normalize");
+            gst::debug!(CAT, "EWMA weights unchanged: {:?}", state.weights);
         }
 
         changed
@@ -2023,33 +2200,8 @@ fn pick_output_index_swrr_with_hysteresis(
         return (current_idx, false);
     }
 
-    // Apply switch threshold - only switch if new choice is significantly better
-    // BUT: always respect SWRR counter-based decisions for load balancing
-    let will_switch = if best_idx != current_idx && current_idx < adjusted_weights.len() {
-        // If we're in pure load balancing mode (min_hold_ms = 0), always follow SWRR
-        if min_hold_ms == 0 {
-            true
-        } else {
-            // Apply weight-based switch threshold for stability
-            let current_weight = adjusted_weights[current_idx];
-            let new_weight = adjusted_weights[best_idx];
-
-            // For equal weights, allow switching more easily
-            if (current_weight - new_weight).abs() < 0.01 {
-                // Equal weights - use pure SWRR behavior
-                true
-            } else {
-                let ratio = if current_weight > 0.0 {
-                    new_weight / current_weight
-                } else {
-                    f64::INFINITY
-                };
-                ratio >= switch_threshold
-            }
-        }
-    } else {
-        best_idx == current_idx // Not switching if same pad
-    };
+    // After hold period, follow pure SWRR decision for load balancing
+    let will_switch = best_idx != current_idx;
 
     let selected_idx = if will_switch {
         best_idx
