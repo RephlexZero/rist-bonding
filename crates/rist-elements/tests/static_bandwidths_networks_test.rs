@@ -154,6 +154,12 @@ async fn cleanup_veth_pair(tx: &str, rx: &str) {
 #[cfg(feature = "network-sim")]
 #[tokio::test] 
 async fn test_static_bandwidths_convergence() {
+    // Reduce GStreamer debug noise unless user explicitly set GST_DEBUG
+    if std::env::var_os("GST_DEBUG").is_none() {
+        // WARNING level: suppress INFO/DEBUG element dumps
+        std::env::set_var("GST_DEBUG", "WARNING");
+    }
+
     init_for_tests();
 
     // Check if RIST elements are available and functional
@@ -220,6 +226,7 @@ async fn test_static_bandwidths_convergence() {
         let videotestsrc = gst::ElementFactory::make("videotestsrc")
             .property("is-live", true)
             .property_from_str("pattern", "smpte")
+            .property("do-timestamp", true)  // Ensure proper timestamps
             .build().unwrap();
         let videoconvert = gst::ElementFactory::make("videoconvert").build().unwrap();
         let capsfilter = gst::ElementFactory::make("capsfilter")
@@ -233,7 +240,7 @@ async fn test_static_bandwidths_convergence() {
         
         // Add H.265/HEVC encoder for high-quality 1080p60
         let x265enc = gst::ElementFactory::make("x265enc")
-            .property("bitrate", 1500u32)  // Lower to reduce backpressure and ensure flow
+            .property("bitrate", 3000u32)  // Lower to reduce backpressure and ensure flow
             .property_from_str("speed-preset", "ultrafast")  // Fast encoding for tests
             .property_from_str("tune", "zerolatency")
             .build().unwrap();
@@ -272,6 +279,7 @@ async fn test_static_bandwidths_convergence() {
         .property("dispatcher", &dispatcher)  // Use our custom EWMA dispatcher
         .property("sender-buffer", 1000u32)
         .property("stats-update-interval", 500u32)
+        .property("multicast-loopback", false)
         .build()
         .expect("Failed to create ristsink - ensure gst-plugins-bad with RIST support is installed");
     
@@ -300,18 +308,25 @@ async fn test_static_bandwidths_convergence() {
         .property("address", &profiles[0].0.rx_ip)
         .property("port", profiles[0].1 as u32)
         .property("bonding-addresses", &bonding_addresses)  // All receiver addresses
-        .property("encoding-name", "H265") // Help caps negotiation for dynamic payload type
+        // Provide explicit RTP caps with clock-rate to avoid jitter buffer warnings
         .property("caps", gst::Caps::builder("application/x-rtp")
             .field("media", "video")
             .field("encoding-name", "H265")
+            .field("clock-rate", 90000i32)  // Standard video clock rate
+            .field("payload", 96i32)        // Dynamic payload type
             .build())
         .property("receiver-buffer", 2000u32)
+        .property("multicast-loopback", false)
         .build()
         .expect("Failed to create ristsrc - ensure gst-plugins-bad with RIST support is installed");
     
     println!("Receiver bonding addresses: {}", bonding_addresses);
 
-    // Create a proper RTP receiver chain for H.265/HEVC
+    // Create a proper RTP receiver chain for H.265/HEVC with jitter buffer
+    let rtpjitterbuffer = gst::ElementFactory::make("rtpjitterbuffer")
+        .property("latency", 200u32)         // Match RTP latency
+        .property("drop-on-latency", true)   // Drop late packets
+        .build().unwrap();
     let rtph265depay = gst::ElementFactory::make("rtph265depay").build().unwrap();
     let h265parse = gst::ElementFactory::make("h265parse").build().unwrap();
     let avdec_h265 = gst::ElementFactory::make("avdec_h265").build().unwrap();
@@ -321,41 +336,84 @@ async fn test_static_bandwidths_convergence() {
         .property("drop", true)   // Drop frames if needed to avoid blocking
         .build().unwrap();
 
-    receiver_pipeline.add_many([&rist_src, &rtph265depay, &h265parse, &avdec_h265, &videoconvert, &appsink]).unwrap();
-    gst::Element::link_many([&rist_src, &rtph265depay, &h265parse, &avdec_h265, &videoconvert, &appsink]).unwrap();
+    receiver_pipeline.add_many([&rist_src, &rtpjitterbuffer, &rtph265depay, &h265parse, &avdec_h265, &videoconvert, &appsink]).unwrap();
+    gst::Element::link_many([&rist_src, &rtpjitterbuffer, &rtph265depay, &h265parse, &avdec_h265, &videoconvert, &appsink]).unwrap();
 
     println!("✅ End-to-end RIST pipeline established (sender -> UDP -> receiver)");
 
-    // Attach receiver bus logging to catch warnings/errors
-    if let Some(bus) = receiver_pipeline.bus() {
-        let _ = bus.add_watch_local(move |_bus, msg| {
-            use gst::MessageView;
-            match msg.view() {
-                MessageView::Warning(w) => {
-                    let err = w.error();
-                    let dbg = w.debug().unwrap_or_else(|| glib::GString::from("<none>"));
-                    println!("[receiver][WARN] {} | {:?}", err, dbg);
+    // Set up synchronized clocks for both pipelines to avoid timestamp issues
+    let system_clock = gst::SystemClock::obtain();
+    let _ = sender_pipeline.set_clock(Some(&system_clock));
+    let _ = receiver_pipeline.set_clock(Some(&system_clock));
+    
+    // Set base time to ensure synchronized timestamps
+    let base_time = system_clock.time();
+    sender_pipeline.set_base_time(base_time);
+    receiver_pipeline.set_base_time(base_time);
+    
+    // Configure RTP latency on internal rtpbin elements to fix timing warnings
+    let configure_rtpbin_latency = |element: &gst::Element, latency_ms: u32| {
+        // RIST elements are bins, so we can access their internal elements
+        if let Ok(bin) = element.clone().downcast::<gst::Bin>() {
+            if let Some(rtpbin) = bin.by_name("rist_send_rtpbin") {
+                rtpbin.set_property("latency", latency_ms);
+                rtpbin.set_property("drop-on-latency", true);
+                rtpbin.set_property("do-sync-event", true);
+                println!("  Configured sender rtpbin latency: {}ms", latency_ms);
+                
+                // Configure internal rtpsession elements to use running-time for RTCP
+                if let Ok(rtpbin_bin) = rtpbin.downcast::<gst::Bin>() {
+                    for session_id in 0..4 {
+                        if let Some(rtpsession) = rtpbin_bin.by_name(&format!("rtpsession{}", session_id)) {
+                            rtpsession.set_property_from_str("ntp-time-source", "running-time");
+                            println!("    Set sender rtpsession{} ntp-time-source to running-time", session_id);
+                        } else {
+                            println!("    Sender rtpsession{} not found", session_id);
+                        }
+                    }
                 }
-                MessageView::Error(e) => {
-                    let err = e.error();
-                    let dbg = e.debug().unwrap_or_else(|| glib::GString::from("<none>"));
-                    println!("[receiver][ERROR] {} | {:?}", err, dbg);
-                }
-                _ => {}
             }
-            glib::ControlFlow::Continue
-        });
-    }
-
-    // Start receiver first
+            if let Some(rtpbin) = bin.by_name("rist_recv_rtpbin") {
+                rtpbin.set_property("latency", latency_ms);
+                rtpbin.set_property("drop-on-latency", true);
+                rtpbin.set_property("do-sync-event", true);
+                println!("  Configured receiver rtpbin latency: {}ms", latency_ms);
+                
+                // Configure receiver rtpsession elements
+                if let Ok(rtpbin_bin) = rtpbin.downcast::<gst::Bin>() {
+                    for session_id in 0..4 {
+                        if let Some(rtpsession) = rtpbin_bin.by_name(&format!("rtpsession{}", session_id)) {
+                            rtpsession.set_property_from_str("ntp-time-source", "running-time");
+                            println!("    Set receiver rtpsession{} ntp-time-source to running-time", session_id);
+                        } else {
+                            println!("    Receiver rtpsession{} not found", session_id);
+                        }
+                    }
+                }
+            }
+        }
+    };
+    
+    // Start pipelines first, then configure rtpbin latency after state change
     println!("Starting receiver pipeline...");
     receiver_pipeline.set_state(gst::State::Playing).unwrap();
-    sleep(Duration::from_millis(1000)).await; // Let receiver settle
-
-    // Start sender
+    
     println!("Starting sender pipeline...");
     sender_pipeline.set_state(gst::State::Playing).unwrap();
-    sleep(Duration::from_millis(2000)).await; // Let RIST establish connections
+    
+    // Wait for pipelines to reach playing state before configuring latency
+    sleep(Duration::from_millis(500)).await;
+    
+    // Now configure latency on both RIST elements after they're playing
+    configure_rtpbin_latency(&rist_sink, 200);
+    configure_rtpbin_latency(&rist_src, 200);
+
+    // Wait longer for all rtpsession elements to be created before accessing them
+    sleep(Duration::from_millis(3000)).await; // Let RIST establish connections
+    
+    // Try configuring rtpsession elements again after more time
+    configure_rtpbin_latency(&rist_sink, 200);
+    configure_rtpbin_latency(&rist_src, 200);
 
     // Monitor for rebalancing behavior
     let test_secs = 30u64;
@@ -424,24 +482,31 @@ async fn test_static_bandwidths_convergence() {
             // The single ristsink with bonding should provide session-level stats
             let sent_original = stats_struct.get::<u64>("sent-original-packets").unwrap_or(0);
             let sent_retransmitted = stats_struct.get::<u64>("sent-retransmitted-packets").unwrap_or(0);
-            
+            // Print a compact one-line summary every 5s
             if ss % 5 == 0 && ms == 0 {
-                println!("  RIST sink: original={}, retransmitted={}", sent_original, sent_retransmitted);
-                
-                // Try to extract session-specific stats from the session-stats array
+                let mut per = String::new();
                 if let Ok(session_stats) = stats_struct.get::<glib::ValueArray>("session-stats") {
-                    for (i, session_value) in session_stats.iter().enumerate() {
+                    let mut parts: Vec<String> = Vec::with_capacity(session_stats.len());
+                    for session_value in session_stats.iter() {
+                        if let Ok(session_struct) = session_value.get::<gst::Structure>() {
+                            let id = session_struct.get::<i32>("session-id").unwrap_or(-1);
+                            let sent = session_struct.get::<u64>("sent-original-packets").unwrap_or(0);
+                            let rtt = session_struct.get::<u64>("round-trip-time").unwrap_or(0);
+                            parts.push(format!("id{}:sent{} rtt{}us", id, sent, rtt));
+                        }
+                    }
+                    per = parts.join(" | ");
+                }
+                println!("  RIST sink: orig={} retrx={} | {}", sent_original, sent_retransmitted, per);
+
+                // CSV logging unchanged
+                if let Ok(session_stats) = stats_struct.get::<glib::ValueArray>("session-stats") {
+                    for session_value in session_stats.iter() {
                         if let Ok(session_struct) = session_value.get::<gst::Structure>() {
                             let session_id = session_struct.get::<i32>("session-id").unwrap_or(-1);
                             let session_sent = session_struct.get::<u64>("sent-original-packets").unwrap_or(0);
                             let session_retrans = session_struct.get::<u64>("sent-retransmitted-packets").unwrap_or(0);
                             let session_rtt = session_struct.get::<u64>("round-trip-time").unwrap_or(0);
-                            
-                            println!("    Session {}: id={}, sent={}, rtt={}μs", 
-                                    i, session_id, session_sent, session_rtt);
-                            
-                            // Write session stats to CSV
-                            // For now, we'll calculate simple metrics here (goodput/rtx would need time deltas)
                             let _ = writeln!(
                                 sessions_csv,
                                 "{},{},{},{},{},{},0.0,0.0",
@@ -452,8 +517,6 @@ async fn test_static_bandwidths_convergence() {
                                 session_retrans,
                                 session_rtt
                             );
-
-                            // Also write to the per-session CSV if the session id is within range
                             if session_id >= 0 && (session_id as usize) < per_session_csvs.len() {
                                 let _ = writeln!(
                                     per_session_csvs[session_id as usize],
@@ -471,7 +534,7 @@ async fn test_static_bandwidths_convergence() {
                 }
             }
     } else if ss % 5 == 0 && ms == 0 {
-            println!("  No RIST stats available yet");
+            println!("  RIST sink: no stats yet");
         }
 
         // Drain dispatcher metrics from bus
@@ -490,19 +553,20 @@ async fn test_static_bandwidths_convergence() {
                     let ewma_rtt_penalty = s.get::<f64>("ewma-rtt-penalty").unwrap_or(0.0);
                     let aimd_rtx_threshold = s.get::<f64>("aimd-rtx-threshold").unwrap_or(0.0);
                     let ts = s.get::<u64>("timestamp").unwrap_or(0);
-                    println!(
-                        "t={:>2}.{:03}s | sel={} pads={} enc={}kbps buf={} ewma_pen{{rtx:{:.3},rtt:{:.3}}} aimd_th={:.3} weights={}",
-                        ss,
-                        ms,
-                        selected,
-                        src_pad_count,
-                        encoder_bitrate,
-                        buffers_processed,
-                        ewma_rtx_penalty,
-                        ewma_rtt_penalty,
-                        aimd_rtx_threshold,
-                        weights
-                    );
+                    // Throttle metrics printing to once per second for readability
+                    if ms == 0 {
+                        println!(
+                            "t={:>2}.{:03}s | sel={} pads={} enc={}kbps ewma_rtx={:.3} aimd_th={:.3} weights={}",
+                            ss,
+                            ms,
+                            selected,
+                            src_pad_count,
+                            encoder_bitrate,
+                            ewma_rtx_penalty,
+                            aimd_rtx_threshold,
+                            weights
+                        );
+                    }
 
                     // Write to metrics CSV
                     let _ = writeln!(

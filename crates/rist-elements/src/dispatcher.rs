@@ -1485,42 +1485,42 @@ impl DispatcherImpl {
     }
 
     fn poll_rist_stats_and_update_weights(inner: &DispatcherInner) {
-        gst::debug!(CAT, "Polling RIST stats...");
+        gst::trace!(CAT, "Polling RIST stats...");
         
         let rist_element = inner.rist_element.lock().clone();
         if let Some(rist) = rist_element {
-            gst::debug!(CAT, "Found RIST element, getting stats property...");
+            gst::trace!(CAT, "Found RIST element, getting stats property...");
             
             // Get stats from ristsink "stats" property -> GstStructure
             let stats_value: glib::Value = rist.property("stats");
-            gst::debug!(CAT, "Got stats value type: {}", stats_value.type_().name());
+            gst::trace!(CAT, "Got stats value type: {}", stats_value.type_().name());
             
             // Try Option<gst::Structure> first (real RIST elements)
             if let Ok(Some(structure)) = stats_value.get::<Option<gst::Structure>>() {
-                gst::debug!(CAT, "Got RIST stats structure (Option): {}", structure.to_string());
+                // Avoid dumping full structure; it's very noisy in tests. Process internally.
                 Self::update_weights_from_stats(inner, &structure);
             }
             // Fall back to direct gst::Structure (test mocks)
             else if let Ok(structure) = stats_value.get::<gst::Structure>() {
-                gst::debug!(CAT, "Got RIST stats structure (direct): {}", structure.to_string());
+                // Avoid dumping full structure; it's very noisy in tests. Process internally.
                 Self::update_weights_from_stats(inner, &structure);
             }
             else {
-                gst::debug!(CAT, "Failed to get RIST stats structure from element");
+                gst::trace!(CAT, "Failed to get RIST stats structure from element");
             }
         } else {
-            gst::debug!(CAT, "No RIST element set");
+            gst::trace!(CAT, "No RIST element set");
         }
     }
 
     fn update_weights_from_stats(inner: &DispatcherInner, stats: &gst::Structure) {
-        gst::debug!(CAT, "Updating weights from stats: {}", stats.to_string());
+        // Do not print full stats structure to keep test output tidy.
         
         let strategy = *inner.strategy.lock();
         let mut state = inner.state.lock();
         let now = std::time::Instant::now();
 
-        gst::debug!(CAT, "Strategy: {:?}, current link_stats count: {}", strategy, state.link_stats.len());
+        gst::trace!(CAT, "Strategy: {:?}, current link_stats count: {}", strategy, state.link_stats.len());
 
         // Parse session-stats array from ristsink (correct format)
         if let Ok(sess_stats_value) = stats.get::<glib::Value>("session-stats") {
@@ -1540,8 +1540,9 @@ impl DispatcherImpl {
                         let sent_retrans = session_struct
                             .get::<u64>("sent-retransmitted-packets")
                             .unwrap_or(0);
-                        let rtt_ms =
-                            session_struct.get::<u64>("round-trip-time").unwrap_or(50) as f64;
+                        // RTT from RIST stats is in nanoseconds, convert to milliseconds
+                        let rtt_ns = session_struct.get::<u64>("round-trip-time").unwrap_or(50_000_000); // 50ms default
+                        let rtt_ms = rtt_ns as f64 / 1_000_000.0;
 
                         if let Some(link_stats) = state.link_stats.get_mut(link_idx) {
                             // Calculate deltas
@@ -1581,7 +1582,7 @@ impl DispatcherImpl {
                     }
                 }
             } else {
-                gst::warning!(
+                gst::trace!(
                     CAT,
                     "session-stats is not a ValueArray, falling back to legacy parsing"
                 );
@@ -1589,7 +1590,7 @@ impl DispatcherImpl {
                 Self::update_weights_from_stats_legacy(&mut state, stats, now);
             }
         } else {
-            gst::debug!(
+            gst::trace!(
                 CAT,
                 "No session-stats found, falling back to legacy parsing"
             );
@@ -1648,10 +1649,12 @@ impl DispatcherImpl {
                     .or_else(|_| stats.get::<u64>("sent-retransmitted-packets"))
                     .unwrap_or(0);
 
-                let rtt_ms = stats
-                    .get::<f64>(&format!("{}.round-trip-time", session_key))
-                    .or_else(|_| stats.get::<f64>("round-trip-time"))
-                    .unwrap_or(50.0);
+                // RTT from RIST stats is in nanoseconds, convert to milliseconds
+                let rtt_ns = stats
+                    .get::<u64>(&format!("{}.round-trip-time", session_key))
+                    .or_else(|_| stats.get::<u64>("round-trip-time"))
+                    .unwrap_or(50_000_000); // 50ms default
+                let rtt_ms = rtt_ns as f64 / 1_000_000.0;
 
                 gst::debug!(CAT, "Session {}: sent_orig={}, sent_retx={}, rtt={:.1}ms", 
                           link_idx, sent_original, sent_retrans, rtt_ms);
@@ -1760,6 +1763,7 @@ impl DispatcherImpl {
     fn calculate_aimd_weights(inner: &DispatcherInner, state: &mut State) -> bool {
         // AIMD per-link strategy (TCP-like fairness)
         let rtx_threshold = *inner.aimd_rtx_threshold.lock(); // default 5%
+        let rtt_threshold = 200.0; // 200ms RTT threshold
         let additive_increase = 0.1;
         let multiplicative_decrease = 0.5;
         let mut changed = false;
@@ -1773,11 +1777,12 @@ impl DispatcherImpl {
 
             let current_weight = state.weights[i];
 
-            if stats.ewma_rtx_rate < rtx_threshold {
+            // Increase weight if both RTX rate and RTT are below threshold
+            if stats.ewma_rtx_rate < rtx_threshold && stats.ewma_rtt < rtt_threshold {
                 // Additively increase
                 state.weights[i] = (current_weight + additive_increase).min(2.0);
             } else {
-                // Multiplicatively decrease
+                // Multiplicatively decrease if either RTX rate or RTT is high
                 state.weights[i] = (current_weight * multiplicative_decrease).max(0.05);
             }
         }

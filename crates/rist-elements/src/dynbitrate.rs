@@ -573,8 +573,9 @@ impl ControllerImpl {
                         let sent_retrans = session_struct
                             .get::<u64>("sent-retransmitted-packets")
                             .unwrap_or(0);
-                        let rtt_ms =
-                            session_struct.get::<u64>("round-trip-time").unwrap_or(50) as f64;
+                        // RTT from RIST stats is in nanoseconds, convert to milliseconds
+                        let rtt_ns = session_struct.get::<u64>("round-trip-time").unwrap_or(50_000_000); // 50ms default
+                        let rtt_ms = rtt_ns as f64 / 1_000_000.0;
 
                         // Simple EWMA-based weight calculation
                         let total_sent = sent_original + sent_retrans;
@@ -623,10 +624,12 @@ impl ControllerImpl {
                         .or_else(|_| stats.get::<u64>("sent-retransmitted-packets"))
                         .unwrap_or(0);
 
-                    let rtt_ms = stats
-                        .get::<f64>(&format!("{}.round-trip-time", session_key))
-                        .or_else(|_| stats.get::<f64>("round-trip-time"))
-                        .unwrap_or(50.0);
+                    // RTT from RIST stats is in nanoseconds, convert to milliseconds
+                    let rtt_ns = stats
+                        .get::<u64>(&format!("{}.round-trip-time", session_key))
+                        .or_else(|_| stats.get::<u64>("round-trip-time"))
+                        .unwrap_or(50_000_000); // 50ms default
+                    let rtt_ms = rtt_ns as f64 / 1_000_000.0;
 
                     // Simple EWMA-based weight calculation
                     let total_sent = sent_original + sent_retrans;
@@ -692,8 +695,9 @@ impl ControllerImpl {
                         let sent_retrans = session_struct
                             .get::<u64>("sent-retransmitted-packets")
                             .unwrap_or(0);
-                        let rtt_ms =
-                            session_struct.get::<u64>("round-trip-time").unwrap_or(50) as f64;
+                        // RTT from RIST stats is in nanoseconds, convert to milliseconds
+                        let rtt_ns = session_struct.get::<u64>("round-trip-time").unwrap_or(50_000_000); // 50ms default
+                        let rtt_ms = rtt_ns as f64 / 1_000_000.0;
 
                         total_original += sent_original;
                         total_retrans += sent_retrans;
@@ -709,9 +713,11 @@ impl ControllerImpl {
         if total_original == 0 && rtts.is_empty() {
             total_original = stats.get::<u64>("sent-original-packets").unwrap_or(0);
             total_retrans = stats.get::<u64>("sent-retransmitted-packets").unwrap_or(0);
-            if let Ok(rtt) = stats.get::<f64>("round-trip-time") {
-                if rtt > 0.0 {
-                    rtts.push(rtt);
+            // RTT from RIST stats is in nanoseconds, convert to milliseconds
+            if let Ok(rtt_ns) = stats.get::<u64>("round-trip-time") {
+                let rtt_ms = rtt_ns as f64 / 1_000_000.0;
+                if rtt_ms > 0.0 {
+                    rtts.push(rtt_ms);
                 }
             }
         }
