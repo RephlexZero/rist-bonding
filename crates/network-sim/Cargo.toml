@@ -7,15 +7,17 @@ description = "Simple network simulation library for applying fixed network para
 [features]
 default = []
 docker = ["futures"]
+ns-threads = ["nix/sched"]
+test-utils = []
 
 [dependencies]
 log = "0.4.27"
 tokio = { version = "1.47.1", features = ["full"] }
 thiserror = "2.0.16"
 futures = { version = "0.3.31", optional = true }
+nix = { version = "0.29.0", default-features = false, features = ["sched"] }
 
 [dev-dependencies]
 futures = "0.3.31"
-nix = { version = "0.29.0", default-features = false, features = ["sched"] }
 socket2 = "0.5"
 libc = "0.2"

@@ -11,15 +11,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "network-sim")]
 use ::network_sim::{
+    get_connection_ips,
+    namespace::{cleanup_rist_test_links, create_shaped_veth_pair, ShapedVethConfig},
     qdisc::QdiscManager,
-    runtime::{
-        apply_ingress_params, apply_network_params, remove_ingress_params, remove_network_params,
-    },
+    runtime::{apply_ingress_params, remove_ingress_params},
     types::NetworkParams,
 };
-
-#[cfg(feature = "network-sim")]
-use std::sync::Arc;
 
 #[cfg(feature = "network-sim")]
 use tokio::time::sleep;
@@ -79,115 +76,10 @@ impl StaticProfile {
     }
 }
 
-// RAII guard to ensure veth/qdisc cleanup even on early returns
-#[cfg(feature = "network-sim")]
-struct VethGuard {
-    qdisc: Arc<QdiscManager>,
-    veth_tx: String,
-    veth_rx: String,
-}
-
-#[cfg(feature = "network-sim")]
-impl VethGuard {
-    async fn setup(p: &StaticProfile, qdisc: Arc<QdiscManager>) -> anyhow::Result<Self> {
-        setup_veth_pair(&p.veth_tx, &p.veth_rx, &p.tx_ip, &p.rx_ip)
-            .await
-            .map_err(|e| anyhow::anyhow!("veth setup {}-{} failed: {}", p.veth_tx, p.veth_rx, e))?;
-
-        // Apply shaping; assert success so failures don't go unnoticed
-        apply_network_params(&qdisc, &p.veth_tx, &p.to_params())
-            .await
-            .map_err(|e| anyhow::anyhow!("egress qdisc apply failed on {}: {}", p.veth_tx, e))?;
-        apply_ingress_params(&qdisc, &p.veth_rx, &p.to_params())
-            .await
-            .map_err(|e| anyhow::anyhow!("ingress qdisc apply failed on {}: {}", p.veth_rx, e))?;
-
-        Ok(Self {
-            qdisc,
-            veth_tx: p.veth_tx.clone(),
-            veth_rx: p.veth_rx.clone(),
-        })
-    }
-}
-
-#[cfg(feature = "network-sim")]
-impl Drop for VethGuard {
-    fn drop(&mut self) {
-        // Best-effort async cleanup in the background
-        let q = self.qdisc.clone();
-        let tx = self.veth_tx.clone();
-        let rx = self.veth_rx.clone();
-        tokio::spawn(async move {
-            let _ = remove_network_params(&q, &tx).await;
-            let _ = remove_ingress_params(&q, &rx).await;
-            cleanup_veth_pair(&tx, &rx).await;
-        });
-    }
-}
-
+// network-sim capability check
 #[cfg(feature = "network-sim")]
 async fn has_net_admin() -> bool {
-    QdiscManager::default().has_net_admin().await
-}
-
-#[cfg(feature = "network-sim")]
-async fn run_cmd(cmd: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
-    use tokio::process::Command;
-    Command::new(cmd).args(args).output().await
-}
-
-#[cfg(feature = "network-sim")]
-async fn setup_veth_pair(tx: &str, rx: &str, tx_ip: &str, rx_ip: &str) -> std::io::Result<()> {
-    // Delete pre-existing
-    let _ = run_cmd("ip", &["link", "del", "dev", tx]).await;
-    let _ = run_cmd("ip", &["link", "del", "dev", rx]).await;
-
-    // Create veth pair
-    let out = run_cmd(
-        "ip",
-        &["link", "add", tx, "type", "veth", "peer", "name", rx],
-    )
-    .await?;
-    if !out.status.success() {
-        return Err(std::io::Error::other(
-            String::from_utf8_lossy(&out.stderr).to_string(),
-        ));
-    }
-    // Assign IPs (/30)
-    let _ = run_cmd("ip", &["addr", "flush", "dev", tx]).await;
-    let _ = run_cmd("ip", &["addr", "flush", "dev", rx]).await;
-    let out = run_cmd("ip", &["addr", "add", &format!("{}/30", tx_ip), "dev", tx]).await?;
-    if !out.status.success() {
-        return Err(std::io::Error::other(
-            String::from_utf8_lossy(&out.stderr).to_string(),
-        ));
-    }
-    let out = run_cmd("ip", &["addr", "add", &format!("{}/30", rx_ip), "dev", rx]).await?;
-    if !out.status.success() {
-        return Err(std::io::Error::other(
-            String::from_utf8_lossy(&out.stderr).to_string(),
-        ));
-    }
-    // Bring up
-    let out = run_cmd("ip", &["link", "set", "dev", tx, "up"]).await?;
-    if !out.status.success() {
-        return Err(std::io::Error::other(
-            String::from_utf8_lossy(&out.stderr).to_string(),
-        ));
-    }
-    let out = run_cmd("ip", &["link", "set", "dev", rx, "up"]).await?;
-    if !out.status.success() {
-        return Err(std::io::Error::other(
-            String::from_utf8_lossy(&out.stderr).to_string(),
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(feature = "network-sim")]
-async fn cleanup_veth_pair(tx: &str, rx: &str) {
-    let _ = run_cmd("ip", &["link", "del", "dev", tx]).await;
-    let _ = run_cmd("ip", &["link", "del", "dev", rx]).await;
+    QdiscManager::new().has_net_admin().await
 }
 
 #[cfg(feature = "network-sim")]
@@ -257,24 +149,33 @@ async fn test_static_bandwidths_convergence() {
         );
     }
 
-    // Create links and apply static network constraints
-    let qdisc = Arc::new(QdiscManager::new());
-    println!("\nCreating veth pairs and applying constraints...");
-    let mut veth_guards = Vec::with_capacity(profiles.len());
+    // Create links and apply static network constraints using network-sim APIs
+    let qdisc = QdiscManager::new();
+    println!("\nCreating shaped veth pairs and applying constraints (network-sim)...");
+    let mut link_configs: Vec<ShapedVethConfig> = Vec::with_capacity(profiles.len());
     for (p, _) in &profiles {
-        match VethGuard::setup(p, qdisc.clone()).await {
-            Ok(g) => veth_guards.push(g),
-            Err(e) => {
-                println!("❌ Network setup failed: {e}");
-                panic!("Network setup failed: {e}");
-            }
+        let cfg = ShapedVethConfig {
+            tx_interface: p.veth_tx.clone(),
+            rx_interface: p.veth_rx.clone(),
+            tx_ip: format!("{}/30", p.tx_ip),
+            rx_ip: format!("{}/30", p.rx_ip),
+            rx_namespace: None,
+            network_params: p.to_params(),
+        };
+        if let Err(e) = create_shaped_veth_pair(&qdisc, &cfg).await {
+            panic!("Network setup failed for {}-{}: {}", cfg.tx_interface, cfg.rx_interface, e);
         }
+        // Optionally shape ingress on RX to model downstream constraints
+        if let Err(e) = apply_ingress_params(&qdisc, &cfg.rx_interface, &cfg.network_params).await {
+            eprintln!("Warning: ingress apply failed on {}: {}", cfg.rx_interface, e);
+        }
+        link_configs.push(cfg);
     }
 
     // Create sender pipeline with real RIST sinks
     let sender_pipeline = gst::Pipeline::new();
 
-    // High-rate H.265 1080p60 RTP source
+    // Raw video RTP source (~5000 kbps): I420 140x100 @ 30 fps
     let av_source: gst::Element = {
         let bin = gst::Bin::new();
         let videotestsrc = gst::ElementFactory::make("videotestsrc")
@@ -284,30 +185,24 @@ async fn test_static_bandwidths_convergence() {
             .build()
             .unwrap();
         let videoconvert = gst::ElementFactory::make("videoconvert").build().unwrap();
-        let capsfilter = gst::ElementFactory::make("capsfilter")
+    let capsfilter = gst::ElementFactory::make("capsfilter")
             .property(
                 "caps",
                 gst::Caps::builder("video/x-raw")
-                    .field("format", "I420")
-                    .field("width", 1920i32) // 1080p width
-                    .field("height", 1080i32) // 1080p height
-                    .field("framerate", gst::Fraction::new(60, 1)) // 60fps for high load
+            .field("format", "I420")
+            .field("width", 140i32)
+            .field("height", 100i32)
+            .field("framerate", gst::Fraction::new(30, 1))
                     .build(),
             )
             .build()
             .unwrap();
-
-        // Add H.265/HEVC encoder for high-quality 1080p60
-        let x265enc = gst::ElementFactory::make("x265enc")
-            .property("bitrate", 5000u32) // Lower to reduce backpressure and ensure flow
-            .property_from_str("speed-preset", "ultrafast") // Fast encoding for tests
-            .property_from_str("tune", "zerolatency")
-            .build()
-            .unwrap();
-        let h265parse = gst::ElementFactory::make("h265parse").build().unwrap();
-        // Set an explicit MTU so RTP packets are sized well for typical links
-        let rtph265pay = gst::ElementFactory::make("rtph265pay")
+        // RTP payloader for raw video
+        let rtpvrawpay = gst::ElementFactory::make("rtpvrawpay")
             .property("mtu", 1200u32)
+            // Set payload type and SSRC on the payloader instead of forcing caps downstream
+            .property("pt", 96u32)
+            .property("ssrc", 0x0022u32)
             .build()
             .unwrap();
 
@@ -315,22 +210,18 @@ async fn test_static_bandwidths_convergence() {
             &videotestsrc,
             &videoconvert,
             &capsfilter,
-            &x265enc,
-            &h265parse,
-            &rtph265pay,
+            &rtpvrawpay,
         ])
         .unwrap();
         gst::Element::link_many([
             &videotestsrc,
             &videoconvert,
             &capsfilter,
-            &x265enc,
-            &h265parse,
-            &rtph265pay,
+            &rtpvrawpay,
         ])
         .unwrap();
 
-        let src_pad = rtph265pay.static_pad("src").unwrap();
+        let src_pad = rtpvrawpay.static_pad("src").unwrap();
         let ghost_pad = gst::GhostPad::with_target(&src_pad).unwrap();
         ghost_pad.set_active(true).unwrap();
         bin.add_pad(&ghost_pad).unwrap();
@@ -354,18 +245,29 @@ async fn test_static_bandwidths_convergence() {
     dispatcher.set_property("metrics-export-interval-ms", 250u64);
 
     // Create single RIST sink with bonding addresses and custom dispatcher
-    let sender_bonding_addresses = profiles
+    // IMPORTANT: Append "/<ifname>" to each address to force SO_BINDTODEVICE on the udpsink sockets.
+    // ristsink parses "address:port[/iface]" and sets the child udpsink "multicast-iface" property,
+    // which triggers SO_BINDTODEVICE in multiudpsink and ensures egress via the specified veth device.
+    let sender_bonding_addresses = link_configs
         .iter()
-        .map(|(p, port)| format!("{}:{}", p.rx_ip, port))
+        .zip(profiles.iter().map(|(_, port)| *port))
+        .map(|(cfg, port)| {
+            let (_tx_ip, rx_ip) = get_connection_ips(cfg);
+            format!("{}:{}/{}", rx_ip, port, cfg.tx_interface)
+        })
         .collect::<Vec<_>>()
         .join(",");
 
     let rist_sink = gst::ElementFactory::make("ristsink")
         // Set primary destination as first profile; bonding will include all
-        .property("address", &profiles[0].0.rx_ip)
-        .property("port", profiles[0].1 as u32)
+    .property("address", get_connection_ips(&link_configs[0]).1)
+    .property("port", profiles[0].1 as u32)
         .property("bonding-addresses", &sender_bonding_addresses)
+        // Also set the top-level multicast-iface so the primary bond (session 0) is bound early
+    .property("multicast-iface", &link_configs[0].tx_interface)
         .property("dispatcher", &dispatcher) // Use our custom EWMA dispatcher
+    // Speed up RTCP so we see RR/RTT signals sooner
+    .property("min-rtcp-interval", 50u32)
         .property("sender-buffer", 1000u32)
         .property("stats-update-interval", 500u32)
         .property("multicast-loopback", false)
@@ -379,21 +281,13 @@ async fn test_static_bandwidths_convergence() {
 
     // Add elements to sender pipeline and insert a capsfilter to set a fixed RTP SSRC
     sender_pipeline.add(&av_source).unwrap();
-    // ristsink requires an SSRC in caps; provide an even SSRC (LSB=0) per RIST rules
-    let capsfilter_ssrc = gst::ElementFactory::make("capsfilter")
-        .property(
-            "caps",
-            gst::Caps::builder("application/x-rtp")
-                .field("ssrc", 0x0022u32)
-                .build(),
-        )
-        .build()
-        .unwrap();
-    sender_pipeline.add(&capsfilter_ssrc).unwrap();
+    // Insert a queue to decouple upstream from ristsink
+    let queue = gst::ElementFactory::make("queue").build().unwrap();
+    sender_pipeline.add(&queue).unwrap();
     sender_pipeline.add(&rist_sink).unwrap();
 
-    // Link source -> capsfilter (SSRC) -> RIST sink (it handles internal dispatcher)
-    gst::Element::link_many([&av_source, &capsfilter_ssrc, &rist_sink]).unwrap();
+    // Link source -> queue -> RIST sink (payloader already sets PT/SSRC)
+    gst::Element::link_many([&av_source, &queue, &rist_sink]).unwrap();
     println!(
         "  Connected av_source -> capsfilter(ssrc) -> ristsink (with internal EWMA dispatcher)"
     );
@@ -402,28 +296,29 @@ async fn test_static_bandwidths_convergence() {
     let receiver_pipeline = gst::Pipeline::new();
 
     // RIST source configured for bonding - listen on RECEIVER addresses (rx_ip)
-    let bonding_addresses = profiles
+    // Append "/<ifname>" to bind the receiving sockets to the veth RX device as well.
+    let bonding_addresses = link_configs
         .iter()
-        .map(|(p, port)| format!("{}:{}", p.rx_ip, port))
+        .zip(profiles.iter().map(|(_, port)| *port))
+        .map(|(cfg, port)| {
+            let (_tx_ip, rx_ip) = get_connection_ips(cfg);
+            format!("{}:{}/{}", rx_ip, port, cfg.rx_interface)
+        })
         .collect::<Vec<_>>()
         .join(",");
 
     let rist_src = gst::ElementFactory::make("ristsrc")
         // Bind to first receiver address for primary connection
-        .property("address", &profiles[0].0.rx_ip)
-        .property("port", profiles[0].1 as u32)
+    .property("address", get_connection_ips(&link_configs[0]).1)
+    .property("port", profiles[0].1 as u32)
         .property("bonding-addresses", &bonding_addresses) // All receiver addresses
-        // Provide explicit RTP caps with clock-rate to avoid jitter buffer warnings
-        .property(
-            "caps",
-            gst::Caps::builder("application/x-rtp")
-                .field("media", "video")
-                .field("encoding-name", "H265")
-                .field("clock-rate", 90000i32) // Standard video clock rate
-                .field("payload", 96i32) // Dynamic payload type
-                .build(),
-        )
+        // Ensure primary bond binds to the RX veth device early as well
+    .property("multicast-iface", &link_configs[0].rx_interface)
+    // Help internal rtpbin map dynamic PT=96 to RAW caps
+    .property("encoding-name", "RAW")
         .property("receiver-buffer", 2000u32)
+    // Speed up RR emission to improve feedback
+    .property("min-rtcp-interval", 50u32)
         .property("multicast-loopback", false)
         .build()
         .expect("Failed to create ristsrc - ensure gst-plugins-bad with RIST support is installed");
@@ -436,9 +331,7 @@ async fn test_static_bandwidths_convergence() {
         .property("drop-on-latency", true) // Drop late packets
         .build()
         .unwrap();
-    let rtph265depay = gst::ElementFactory::make("rtph265depay").build().unwrap();
-    let h265parse = gst::ElementFactory::make("h265parse").build().unwrap();
-    let avdec_h265 = gst::ElementFactory::make("avdec_h265").build().unwrap();
+    let rtpvrawdepay = gst::ElementFactory::make("rtpvrawdepay").build().unwrap();
     let videoconvert = gst::ElementFactory::make("videoconvert").build().unwrap();
     let appsink = gst::ElementFactory::make("appsink")
         .property("sync", false) // Don't sync to clock for testing
@@ -450,9 +343,7 @@ async fn test_static_bandwidths_convergence() {
         .add_many([
             &rist_src,
             &rtpjitterbuffer,
-            &rtph265depay,
-            &h265parse,
-            &avdec_h265,
+            &rtpvrawdepay,
             &videoconvert,
             &appsink,
         ])
@@ -460,9 +351,7 @@ async fn test_static_bandwidths_convergence() {
     gst::Element::link_many([
         &rist_src,
         &rtpjitterbuffer,
-        &rtph265depay,
-        &h265parse,
-        &avdec_h265,
+        &rtpvrawdepay,
         &videoconvert,
         &appsink,
     ])
@@ -803,7 +692,13 @@ async fn test_static_bandwidths_convergence() {
     let _ = receiver_pipeline.set_state(gst::State::Null);
     sleep(Duration::from_millis(500)).await;
 
-    // Cleanup is handled by VethGuard Drop
+    // Cleanup shaped links (remove ingress and delete links)
+    for cfg in &link_configs {
+        let _ = remove_ingress_params(&qdisc, &cfg.rx_interface).await;
+    }
+    if let Err(e) = cleanup_rist_test_links(&qdisc, &link_configs).await {
+        eprintln!("Cleanup warning: {}", e);
+    }
 
     println!(
         "\nExpected (capacity-based): [{:.3}, {:.3}, {:.3}, {:.3}]",

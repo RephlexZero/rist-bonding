@@ -383,6 +383,16 @@ This library is intentionally focused on simplicity and specific use cases:
 
 For complex network simulation scenarios with time-varying conditions, Markov chains, or detailed protocol modeling, consider using dedicated network simulation frameworks.
 
+## Planned rework: crate-managed namespaces and links
+
+To reduce duplication and improve reliability of tests, the crate will expose higher-level APIs managing namespaces and links internally, so tests no longer need to call `ip netns ...` or `setns` directly.
+
+- `Namespace` and `NamespaceGuard` for lifecycle and scoped entry
+- `VethPairConfig`/`VethPair` for creating/managing veth pairs across namespaces
+- `QdiscManager::*_in_ns` helpers to apply/inspect shaping within a namespace
+
+See the design doc at `/workspace/specs/001-build-a-throughput/network-sim-rework.md` for details and the migration plan.
+
 ## Contributing
 
 1. Fork the repository

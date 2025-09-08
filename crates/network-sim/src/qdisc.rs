@@ -177,6 +177,83 @@ impl QdiscManager {
         Ok(())
     }
 
+    /// Configure interface within a netns: `ip netns exec <ns> tc qdisc ...`
+    #[cfg(target_os = "linux")]
+    pub async fn configure_interface_in_ns(
+        &self,
+        ns: &str,
+        interface: &str,
+        config: NetemConfig,
+    ) -> Result<(), QdiscError> {
+        info!("[ns={}] Configuring interface {} with {}", ns, interface, config);
+
+        // Delete existing qdisc (best effort)
+        let _ = tokio::process::Command::new("ip")
+            .args(["netns", "exec", ns, "tc", "qdisc", "del", "dev", interface, "root"])
+            .output()
+            .await;
+
+        // Build netem args similar to configure_interface
+        let mut args: Vec<String> = vec![
+            "netns".into(),
+            "exec".into(),
+            ns.into(),
+            "tc".into(),
+            "qdisc".into(),
+            "add".into(),
+            "dev".into(),
+            interface.into(),
+            "root".into(),
+            "handle".into(),
+            "10:".into(),
+            "netem".into(),
+        ];
+
+        if config.rate_bps > 0 {
+            let rate_kbit = (config.rate_bps / 1000).max(1);
+            args.push("rate".into());
+            args.push(format!("{}kbit", rate_kbit));
+        }
+        if config.delay_us > 0 {
+            args.push("delay".into());
+            args.push(format!("{}us", config.delay_us));
+            if config.jitter_us > 0 {
+                args.push(format!("{}us", config.jitter_us));
+            }
+        }
+        if config.loss_percent > 0.0 {
+            args.push("loss".into());
+            args.push(format!("{}%", config.loss_percent));
+            if config.loss_correlation > 0.0 {
+                args.push(format!("{}%", config.loss_correlation));
+            }
+        }
+        if config.reorder_percent > 0.0 {
+            args.push("reorder".into());
+            args.push(format!("{}%", config.reorder_percent));
+        }
+        if config.duplicate_percent > 0.0 {
+            args.push("duplicate".into());
+            args.push(format!("{}%", config.duplicate_percent));
+        }
+
+        let out = tokio::process::Command::new("ip")
+            .args(args.iter().map(|s| s.as_str()).collect::<Vec<_>>())
+            .output()
+            .await?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if stderr.contains("Operation not permitted") {
+                return Err(QdiscError::PermissionDenied);
+            }
+            if stderr.contains("Cannot find device") {
+                return Err(QdiscError::InterfaceNotFound(interface.to_string()));
+            }
+            return Err(QdiscError::CommandFailed(stderr.to_string()));
+        }
+        Ok(())
+    }
+
     /// Remove any qdisc configuration from the interface (restore defaults)
     pub async fn clear_interface(&self, interface: &str) -> Result<(), QdiscError> {
         let out = self
@@ -187,6 +264,20 @@ impl QdiscManager {
                 "No qdisc to delete on {} or insufficient permissions",
                 interface
             );
+        }
+        Ok(())
+    }
+
+    /// Remove qdisc configuration for interface within a namespace
+    #[cfg(target_os = "linux")]
+    pub async fn clear_interface_in_ns(&self, ns: &str, interface: &str) -> Result<(), QdiscError> {
+        let out = tokio::process::Command::new("ip")
+            .args(["netns", "exec", ns, "tc", "qdisc", "del", "dev", interface, "root"])
+            .output()
+            .await?;
+        if !out.status.success() {
+            // Best-effort; log/debug
+            debug!("[ns={}] clear_interface_in_ns non-success: {}", ns, out.status);
         }
         Ok(())
     }
@@ -320,6 +411,33 @@ impl QdiscManager {
         }
     }
 
+    /// Like describe_interface_qdisc, but within a namespace
+    #[cfg(target_os = "linux")]
+    pub async fn describe_interface_qdisc_in_ns(
+        &self,
+        ns: &str,
+        interface: &str,
+    ) -> Result<String, QdiscError> {
+        let out = tokio::process::Command::new("ip")
+            .args(["netns", "exec", ns, "tc", "qdisc", "show", "dev", interface])
+            .output()
+            .await
+            .map_err(QdiscError::from)?;
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        if out.status.success() {
+            Ok(stdout)
+        } else {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if stderr.contains("Operation not permitted") {
+                return Err(QdiscError::PermissionDenied);
+            }
+            if stderr.contains("Cannot find device") {
+                return Err(QdiscError::InterfaceNotFound(interface.to_string()));
+            }
+            Err(QdiscError::CommandFailed(stderr.to_string()))
+        }
+    }
+
     /// Parse basic counters from `tc -s qdisc show dev <iface>`
     pub async fn get_interface_stats(&self, interface: &str) -> Result<InterfaceStats, QdiscError> {
         let out = self
@@ -345,6 +463,69 @@ impl QdiscManager {
             let l = line.trim();
             if l.contains("Sent") && l.contains("bytes") && l.contains("pkt") {
                 // Example: "Sent 12345 bytes 67 pkt (dropped 1, overlimits 0 requeues 0)"
+                let toks: Vec<&str> = l.split_whitespace().collect();
+                for (i, t) in toks.iter().enumerate() {
+                    if *t == "Sent" {
+                        if let Some(vs) = toks.get(i + 1) {
+                            if let Ok(v) = vs.parse::<u64>() {
+                                sent_bytes = v;
+                            }
+                        }
+                    }
+                    if *t == "pkt" && i > 0 {
+                        if let Ok(v) = toks[i - 1].parse::<u64>() {
+                            sent_pkts = v;
+                        }
+                    }
+                    if t.contains("dropped") {
+                        if let Some(next) = toks.get(i + 1) {
+                            let cleaned = next.trim_end_matches([',', ')']);
+                            if let Ok(v) = cleaned.parse::<u64>() {
+                                dropped = v;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(InterfaceStats {
+            sent_bytes,
+            sent_packets: sent_pkts,
+            dropped,
+        })
+    }
+
+    /// Parse basic counters from `tc -s qdisc show dev <iface>` within a namespace
+    #[cfg(target_os = "linux")]
+    pub async fn get_interface_stats_in_ns(
+        &self,
+        ns: &str,
+        interface: &str,
+    ) -> Result<InterfaceStats, QdiscError> {
+        let out = tokio::process::Command::new("ip")
+            .args(["netns", "exec", ns, "tc", "-s", "qdisc", "show", "dev", interface])
+            .output()
+            .await
+            .map_err(QdiscError::from)?;
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if stderr.contains("Operation not permitted") {
+                return Err(QdiscError::PermissionDenied);
+            }
+            if stderr.contains("Cannot find device") {
+                return Err(QdiscError::InterfaceNotFound(interface.to_string()));
+            }
+            return Err(QdiscError::CommandFailed(stderr.to_string()));
+        }
+
+        let mut sent_bytes = 0u64;
+        let mut sent_pkts = 0u64;
+        let mut dropped = 0u64;
+        for line in stdout.lines() {
+            let l = line.trim();
+            if l.contains("Sent") && l.contains("bytes") && l.contains("pkt") {
                 let toks: Vec<&str> = l.split_whitespace().collect();
                 for (i, t) in toks.iter().enumerate() {
                     if *t == "Sent" {

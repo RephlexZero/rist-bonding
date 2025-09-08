@@ -19,3 +19,13 @@ pub use runtime::{
     apply_ingress_params, apply_network_params, remove_ingress_params, remove_network_params,
 };
 pub use types::{NetworkParams, RuntimeError};
+
+// Expose new APIs (Linux only). Keeping current public API intact.
+#[cfg(target_os = "linux")]
+pub mod link;
+#[cfg(target_os = "linux")]
+pub mod nsapi;
+#[cfg(target_os = "linux")]
+pub use link::{VethPair, VethPairConfig};
+#[cfg(target_os = "linux")]
+pub use nsapi::{Namespace, NamespaceGuard};

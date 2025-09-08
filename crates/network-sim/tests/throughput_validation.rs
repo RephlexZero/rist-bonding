@@ -1,395 +1,148 @@
-//! Validate that network-sim shaping parameters actually constrain throughput.
+//! Validate that network-sim shaping parameters constrain throughput using crate-managed APIs.
 //!
-//! Sets up veth pairs with distinct rates in separate namespaces, applies egress shaping,
-//! measures UDP throughput, and asserts rates match configured values within tolerance.
+//! Sets up veth pairs with distinct rates in separate namespaces, applies egress shaping
+//! via QdiscManager, measures UDP throughput with native sockets inside namespaces, and
+//! asserts rates match configured values within tolerance.
 
 use network_sim::qdisc::QdiscManager;
-use std::time::Duration;
+use network_sim::{Namespace, VethPair, VethPairConfig};
+use std::net::UdpSocket;
+use std::time::{Duration, Instant};
 
-async fn run_cmd(cmd: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
-    use tokio::process::Command;
-    Command::new(cmd).args(args).output().await
-}
-
-async fn run_cmd_ok(cmd: &str, args: &[&str]) -> std::io::Result<()> {
-    let out = run_cmd(cmd, args).await?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(std::io::Error::other(
-            String::from_utf8_lossy(&out.stderr).to_string(),
-        ))
-    }
-}
-
-struct TestLink {
-    tx_if: String,
-    rx_if: String,
-    tx_ns: String,
-    rx_ns: String,
-    tx_ip: String,
-    rx_ip: String,
+#[derive(Clone, Debug)]
+struct TestLinkCfg {
+    name: String,
+    cfg: VethPairConfig,
     rate_kbps: u32,
     port: u16,
 }
 
-async fn setup_test_link(link: &TestLink) -> std::io::Result<()> {
-    // Cleanup any existing setup
-    let _ = run_cmd("ip", &["netns", "del", &link.tx_ns]).await;
-    let _ = run_cmd("ip", &["netns", "del", &link.rx_ns]).await;
-    let _ = run_cmd("ip", &["link", "del", "dev", &link.tx_if]).await;
-
-    // Create namespaces
-    run_cmd_ok("ip", &["netns", "add", &link.tx_ns]).await?;
-    run_cmd_ok("ip", &["netns", "add", &link.rx_ns]).await?;
-
-    // Create veth pair
-    run_cmd_ok(
-        "ip",
-        &[
-            "link",
-            "add",
-            &link.tx_if,
-            "type",
-            "veth",
-            "peer",
-            "name",
-            &link.rx_if,
-        ],
-    )
-    .await?;
-
-    // Move interfaces to namespaces
-    run_cmd_ok(
-        "ip",
-        &["link", "set", "dev", &link.tx_if, "netns", &link.tx_ns],
-    )
-    .await?;
-    run_cmd_ok(
-        "ip",
-        &["link", "set", "dev", &link.rx_if, "netns", &link.rx_ns],
-    )
-    .await?;
-
-    // Configure tx interface
-    run_cmd_ok(
-        "ip",
-        &[
-            "-n",
-            &link.tx_ns,
-            "addr",
-            "add",
-            &format!("{}/30", link.tx_ip),
-            "dev",
-            &link.tx_if,
-        ],
-    )
-    .await?;
-    run_cmd_ok(
-        "ip",
-        &["-n", &link.tx_ns, "link", "set", "dev", &link.tx_if, "up"],
-    )
-    .await?;
-    run_cmd_ok("ip", &["-n", &link.tx_ns, "link", "set", "dev", "lo", "up"]).await?;
-
-    // Configure rx interface
-    run_cmd_ok(
-        "ip",
-        &[
-            "-n",
-            &link.rx_ns,
-            "addr",
-            "add",
-            &format!("{}/30", link.rx_ip),
-            "dev",
-            &link.rx_if,
-        ],
-    )
-    .await?;
-    run_cmd_ok(
-        "ip",
-        &["-n", &link.rx_ns, "link", "set", "dev", &link.rx_if, "up"],
-    )
-    .await?;
-    run_cmd_ok("ip", &["-n", &link.rx_ns, "link", "set", "dev", "lo", "up"]).await?;
-
-    Ok(())
+async fn setup_link(cfg: &TestLinkCfg, qdisc: &QdiscManager) -> std::io::Result<VethPair> {
+    let pair = VethPair::create(qdisc, &cfg.cfg).await?;
+    Ok(pair)
 }
 
-async fn apply_shaping(link: &TestLink) -> std::io::Result<()> {
-    // Apply netem rate limiting on the tx interface within its namespace
-    let rate_kbit = link.rate_kbps;
+async fn measure_udp(cfg: &TestLinkCfg, secs: u64) -> std::io::Result<f64> {
+    let rx_ns = cfg.cfg.rx_ns.clone().unwrap();
+    let tx_ns = cfg.cfg.tx_ns.clone().unwrap();
+    let rx_ip = cfg.cfg.rx_ip_cidr.split('/').next().unwrap().to_string();
+    let tx_ip = cfg.cfg.tx_ip_cidr.split('/').next().unwrap().to_string();
+    let port = cfg.port;
 
-    // Use tc directly in the namespace
-    run_cmd_ok(
-        "ip",
-        &[
-            "netns",
-            "exec",
-            &link.tx_ns,
-            "tc",
-            "qdisc",
-            "add",
-            "dev",
-            &link.tx_if,
-            "root",
-            "netem",
-            "rate",
-            &format!("{}kbit", rate_kbit),
-        ],
-    )
-    .await?;
-
-    Ok(())
-}
-
-async fn measure_udp_throughput(link: &TestLink, duration_secs: u64) -> std::io::Result<f64> {
-    // Use netcat-based simple measurement for reliability 
-    // Since we've proven rate limiting works in proof_of_concept test
-    measure_udp_simple(link, duration_secs).await
-}
-
-async fn measure_udp_simple(link: &TestLink, duration_secs: u64) -> std::io::Result<f64> {
-    // Start receiver in rx namespace that counts bytes
-    let recv_script = format!(
-        r#"
-        python3 -c "
-import socket
-import time
-import sys
-
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.bind(('{}', {}))
-sock.settimeout(0.1)
-
-start = time.time()
-end = start + {}
-total_bytes = 0
-
-while time.time() < end:
-    try:
-        data, addr = sock.recvfrom(2048)
-        total_bytes += len(data)
-    except socket.timeout:
-        continue
-    except:
-        break
-
-elapsed = time.time() - start
-kbps = (total_bytes * 8) / (elapsed * 1000)
-print(f'{{total_bytes}} {{elapsed:.3f}} {{kbps:.0f}}')
-        "#,
-        link.rx_ip, link.port, duration_secs
-    );
-
-    let recv_cmd = tokio::process::Command::new("ip")
-        .args(&["netns", "exec", &link.rx_ns, "bash", "-c", &recv_script])
-        .stdout(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()?;
-
-    // Give receiver time to bind
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    // Start sender in tx namespace
-    let send_script = format!(
-        r#"
-        python3 -c "
-import socket
-import time
-
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.bind(('{}', 0))
-
-end = time.time() + {}
-payload = b'X' * 1200
-
-while time.time() < end:
-    try:
-        sock.sendto(payload, ('{}', {}))
-        time.sleep(0.0001)  # 100us between packets
-    except:
-        break
-        "#,
-        link.tx_ip, duration_secs, link.rx_ip, link.port
-    );
-
-    let _send_cmd = run_cmd(
-        "ip",
-        &["netns", "exec", &link.tx_ns, "bash", "-c", &send_script],
-    )
-    .await?;
-
-    // Get receiver results
-    let recv_result = recv_cmd.wait_with_output().await?;
-    let recv_output = String::from_utf8_lossy(&recv_result.stdout);
-
-    // Parse: "total_bytes elapsed kbps"
-    let parts: Vec<&str> = recv_output.split_whitespace().collect();
-    if parts.len() >= 3 {
-        if let Ok(kbps) = parts[2].parse::<f64>() {
-            return Ok(kbps);
+    // Receiver thread
+    let recv_handle = std::thread::spawn(move || -> std::io::Result<u64> {
+        let ns = Namespace::from_existing(rx_ns);
+        let _guard = ns.enter()?;
+        let addr = format!("0.0.0.0:{}", port);
+        let sock = UdpSocket::bind(addr).map_err(|e| std::io::Error::other(e.to_string()))?;
+        sock.set_read_timeout(Some(Duration::from_millis(100))).ok();
+        let end = Instant::now() + Duration::from_secs(secs);
+        let mut total = 0u64;
+        let mut buf = [0u8; 65536];
+        while Instant::now() < end {
+            match sock.recv(&mut buf) {
+                Ok(n) => total += n as u64,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {}
+                Err(e) => return Err(e),
+            }
         }
-    }
+        Ok(total)
+    });
 
-    Err(std::io::Error::other("Failed to parse measurement results"))
-}
+    tokio::time::sleep(Duration::from_millis(300)).await;
 
-async fn cleanup_test_link(link: &TestLink) {
-    let _ = run_cmd("ip", &["netns", "del", &link.tx_ns]).await;
-    let _ = run_cmd("ip", &["netns", "del", &link.rx_ns]).await;
+    // Sender thread
+    let send_handle = std::thread::spawn(move || -> std::io::Result<()> {
+        let ns = Namespace::from_existing(tx_ns);
+        let _guard = ns.enter()?;
+        let bind_addr = format!("{}:0", tx_ip);
+        let sock = UdpSocket::bind(bind_addr).map_err(|e| std::io::Error::other(e.to_string()))?;
+        let dest = format!("{}:{}", rx_ip, port);
+        let payload = vec![0x58u8; 1200];
+        let end = Instant::now() + Duration::from_secs(secs);
+        while Instant::now() < end {
+            let _ = sock.send_to(&payload, &dest);
+            std::thread::sleep(Duration::from_micros(100));
+        }
+        Ok(())
+    });
+
+    let _ = send_handle.join().map_err(|_| std::io::Error::other("send thread panicked"))?;
+    let total_bytes = recv_handle
+        .join()
+        .map_err(|_| std::io::Error::other("recv thread panicked"))?? as f64;
+    let kbps = (total_bytes * 8.0) / (secs as f64 * 1000.0);
+    Ok(kbps)
 }
 
 #[tokio::test]
 async fn test_network_shaping_enforcement() {
     let qdisc = QdiscManager::new();
     if !qdisc.has_net_admin().await {
-        eprintln!("Skipping test: requires NET_ADMIN capability for tc and namespaces");
+        println!("SKIP: No NET_ADMIN capability - need privileged container");
         return;
     }
 
-    let test_links = vec![
-        TestLink {
-            tx_if: "vtx0".into(),
-            rx_if: "vrx0".into(),
-            tx_ns: "nstx0".into(),
-            rx_ns: "nsrx0".into(),
-            tx_ip: "192.168.10.1".into(),
-            rx_ip: "192.168.10.2".into(),
-            rate_kbps: 800,
-            port: 8000,
-        },
-        TestLink {
-            tx_if: "vtx1".into(),
-            rx_if: "vrx1".into(),
-            tx_ns: "nstx1".into(),
-            rx_ns: "nsrx1".into(),
-            tx_ip: "192.168.11.1".into(),
-            rx_ip: "192.168.11.2".into(),
-            rate_kbps: 400,
-            port: 8001,
-        },
-        TestLink {
-            tx_if: "vtx2".into(),
-            rx_if: "vrx2".into(),
-            tx_ns: "nstx2".into(),
-            rx_ns: "nsrx2".into(),
-            tx_ip: "192.168.12.1".into(),
-            rx_ip: "192.168.12.2".into(),
-            rate_kbps: 150,
-            port: 8002,
-        },
-    ];
-
-    // Setup all links
-    for link in &test_links {
-        setup_test_link(link)
-            .await
-            .expect("Failed to setup test link");
-        apply_shaping(link).await.expect("Failed to apply shaping");
-    }
-
-    // Print diagnostics
-    for link in &test_links {
-        if let Ok(out) = run_cmd(
-            "ip",
-            &[
-                "netns",
-                "exec",
-                &link.tx_ns,
-                "tc",
-                "qdisc",
-                "show",
-                "dev",
-                &link.tx_if,
-            ],
-        )
-        .await
-        {
-            println!(
-                "Link {} shaping: {}",
-                link.tx_if,
-                String::from_utf8_lossy(&out.stdout).trim()
-            );
+    // Probe namespace creation
+    match Namespace::ensure("ns-probe-throughput").await {
+        Ok(ns) => { let _ = ns.delete().await; }
+        Err(e) => {
+            println!("SKIP: netns creation not permitted: {}", e);
+            return;
         }
     }
 
-    let test_duration = 4; // seconds
-    let mut results = Vec::new();
+    let links: Vec<TestLinkCfg> = vec![
+        (800u32, 8000u16),
+        (400u32, 8001u16),
+        (150u32, 8002u16),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, (rate, port))| TestLinkCfg {
+        name: format!("thr-{}k", rate),
+        cfg: VethPairConfig {
+            tx_if: format!("thr-tx-{}", i),
+            rx_if: format!("thr-rx-{}", i),
+            tx_ip_cidr: format!("192.168.{}.1/30", 200 + i),
+            rx_ip_cidr: format!("192.168.{}.2/30", 200 + i),
+            tx_ns: Some(format!("thr-ns-tx-{}", i)),
+            rx_ns: Some(format!("thr-ns-rx-{}", i)),
+            params: Some(network_sim::NetworkParams { delay_ms: 0, loss_pct: 0.0, rate_kbps: rate, jitter_ms: 0, reorder_pct: 0.0, duplicate_pct: 0.0, loss_corr_pct: 0.0 }),
+        },
+        rate_kbps: rate,
+        port,
+    })
+    .collect();
 
-    // Test each link
-    for link in &test_links {
-        println!(
-            "Testing {} -> {} (target: {} kbps)",
-            link.tx_ip, link.rx_ip, link.rate_kbps
-        );
-
-        let measured_kbps = measure_udp_throughput(link, test_duration)
-            .await
-            .expect("Failed to measure throughput");
-
-        println!("  Measured: {:.0} kbps", measured_kbps);
-        results.push((link.rate_kbps as f64, measured_kbps));
-
-        // Show qdisc stats
-        if let Ok(out) = run_cmd(
-            "ip",
-            &[
-                "netns",
-                "exec",
-                &link.tx_ns,
-                "tc",
-                "-s",
-                "qdisc",
-                "show",
-                "dev",
-                &link.tx_if,
-            ],
-        )
-        .await
-        {
-            let stats = String::from_utf8_lossy(&out.stdout);
-            if let Some(line) = stats.lines().find(|l| l.contains("Sent")) {
-                println!("  Stats: {}", line.trim());
-            }
+    // Setup
+    let futures = links.iter().map(|l| setup_link(l, &qdisc));
+    let results = futures::future::join_all(futures).await;
+    for (i, r) in results.iter().enumerate() {
+        if let Err(e) = r {
+            panic!("Setup failed for {}: {}", links[i].name, e);
         }
-
-        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
-    // Validate results
-    for (i, (target_kbps, measured_kbps)) in results.iter().enumerate() {
-        let tolerance = 0.40; // 40% tolerance for netem rate limiting
-        let lower_bound = target_kbps * (1.0 - tolerance);
-        let upper_bound = target_kbps * (1.0 + tolerance);
-
-        println!(
-            "Link {}: target={:.0}, measured={:.0}, range=[{:.0}-{:.0}]",
-            i, target_kbps, measured_kbps, lower_bound, upper_bound
-        );
-
-        assert!(
-            *measured_kbps >= lower_bound,
-            "Link {} underperformed: measured {:.0} kbps < lower bound {:.0} kbps (target {:.0})",
-            i,
-            measured_kbps,
-            lower_bound,
-            target_kbps
-        );
-
-        assert!(
-            *measured_kbps <= upper_bound,
-            "Link {} exceeded limit: measured {:.0} kbps > upper bound {:.0} kbps (target {:.0})",
-            i,
-            measured_kbps,
-            upper_bound,
-            target_kbps
-        );
+    // Measure
+    let mut measurements = Vec::new();
+    for link in &links {
+        let kbps = measure_udp(link, 3).await.expect("measurement failed");
+        println!("{}: target={} kbps, measured={:.0} kbps", link.name, link.rate_kbps, kbps);
+        measurements.push((link.rate_kbps as f64, kbps));
+        tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
-    // Cleanup
-    for link in &test_links {
-        cleanup_test_link(link).await;
+    // Validate within tolerance
+    for (i, (target, measured)) in measurements.iter().enumerate() {
+        let tol = 0.40; // ±40%
+        let lo = target * (1.0 - tol);
+        let hi = target * (1.0 + tol);
+        assert!(
+            *measured >= lo && *measured <= hi,
+            "Link {} out of range: target {:.0} kbps, measured {:.0} kbps (allowed [{:.0}, {:.0}])",
+            i, target, measured, lo, hi
+        );
     }
 
     println!("SUCCESS: All links respect their configured rate limits!");
