@@ -53,6 +53,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libflac-dev \
     libmp3lame-dev \
     libmpg123-dev \
+    # FFmpeg (libav*) for gst-libav
+    libavcodec-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libswscale-dev \
+    libswresample-dev \
+    libavfilter-dev \
     # Additional dependencies for plugins
     libcairo2-dev \
     libpango1.0-dev \
@@ -65,6 +72,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iproute2 \
     net-tools \
     iputils-ping \
+    netcat-openbsd \
+    tcpdump \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
