@@ -12,7 +12,9 @@ use std::time::Duration;
 #[cfg(feature = "network-sim")]
 use ::network_sim::{
     qdisc::QdiscManager,
-    runtime::{apply_ingress_params, apply_network_params, remove_ingress_params, remove_network_params},
+    runtime::{
+        apply_ingress_params, apply_network_params, remove_ingress_params, remove_network_params,
+    },
     types::NetworkParams,
 };
 
@@ -41,27 +43,41 @@ async fn setup_veth_pair(tx: &str, rx: &str, tx_ip: &str, rx_ip: &str) -> std::i
     let _ = run_cmd("ip", &["link", "del", "dev", tx]).await;
     let _ = run_cmd("ip", &["link", "del", "dev", rx]).await;
 
-    let out = run_cmd("ip", &["link", "add", tx, "type", "veth", "peer", "name", rx]).await?;
+    let out = run_cmd(
+        "ip",
+        &["link", "add", tx, "type", "veth", "peer", "name", rx],
+    )
+    .await?;
     if !out.status.success() {
-        return Err(std::io::Error::other(String::from_utf8_lossy(&out.stderr).to_string()));
+        return Err(std::io::Error::other(
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        ));
     }
     let _ = run_cmd("ip", &["addr", "flush", "dev", tx]).await;
     let _ = run_cmd("ip", &["addr", "flush", "dev", rx]).await;
     let out = run_cmd("ip", &["addr", "add", &format!("{}/30", tx_ip), "dev", tx]).await?;
     if !out.status.success() {
-        return Err(std::io::Error::other(String::from_utf8_lossy(&out.stderr).to_string()));
+        return Err(std::io::Error::other(
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        ));
     }
     let out = run_cmd("ip", &["addr", "add", &format!("{}/30", rx_ip), "dev", rx]).await?;
     if !out.status.success() {
-        return Err(std::io::Error::other(String::from_utf8_lossy(&out.stderr).to_string()));
+        return Err(std::io::Error::other(
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        ));
     }
     let out = run_cmd("ip", &["link", "set", "dev", tx, "up"]).await?;
     if !out.status.success() {
-        return Err(std::io::Error::other(String::from_utf8_lossy(&out.stderr).to_string()));
+        return Err(std::io::Error::other(
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        ));
     }
     let out = run_cmd("ip", &["link", "set", "dev", rx, "up"]).await?;
     if !out.status.success() {
-        return Err(std::io::Error::other(String::from_utf8_lossy(&out.stderr).to_string()));
+        return Err(std::io::Error::other(
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        ));
     }
     Ok(())
 }
@@ -81,14 +97,28 @@ struct VethGuard {
 
 #[cfg(feature = "network-sim")]
 impl VethGuard {
-    async fn setup(veth_tx: &str, veth_rx: &str, tx_ip: &str, rx_ip: &str, params: &NetworkParams, qdisc: Arc<QdiscManager>) -> anyhow::Result<Self> {
-        setup_veth_pair(veth_tx, veth_rx, tx_ip, rx_ip).await
+    async fn setup(
+        veth_tx: &str,
+        veth_rx: &str,
+        tx_ip: &str,
+        rx_ip: &str,
+        params: &NetworkParams,
+        qdisc: Arc<QdiscManager>,
+    ) -> anyhow::Result<Self> {
+        setup_veth_pair(veth_tx, veth_rx, tx_ip, rx_ip)
+            .await
             .map_err(|e| anyhow::anyhow!("veth setup {}-{} failed: {}", veth_tx, veth_rx, e))?;
-        apply_network_params(&qdisc, veth_tx, params).await
+        apply_network_params(&qdisc, veth_tx, params)
+            .await
             .map_err(|e| anyhow::anyhow!("egress qdisc apply failed on {}: {}", veth_tx, e))?;
-        apply_ingress_params(&qdisc, veth_rx, params).await
+        apply_ingress_params(&qdisc, veth_rx, params)
+            .await
             .map_err(|e| anyhow::anyhow!("ingress qdisc apply failed on {}: {}", veth_rx, e))?;
-        Ok(Self { qdisc, veth_tx: veth_tx.to_string(), veth_rx: veth_rx.to_string() })
+        Ok(Self {
+            qdisc,
+            veth_tx: veth_tx.to_string(),
+            veth_rx: veth_rx.to_string(),
+        })
     }
 }
 
@@ -112,7 +142,9 @@ async fn single_link_point_to_point_rist() {
     init_for_tests();
 
     // Ensure RIST elements are present
-    if gst::ElementFactory::make("ristsink").build().is_err() || gst::ElementFactory::make("ristsrc").build().is_err() {
+    if gst::ElementFactory::make("ristsink").build().is_err()
+        || gst::ElementFactory::make("ristsrc").build().is_err()
+    {
         println!("Skipping: RIST elements not available (install gst-plugins-bad with RIST)");
         return;
     }
@@ -125,7 +157,11 @@ async fn single_link_point_to_point_rist() {
     println!("=== Single-link RIST P2P Test (1080p60 H.265) ===");
 
     // Unique veth names to avoid clashes in parallel runs (<= 15 chars)
-    let nonce = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos() % 10000) as u16;
+    let nonce = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .subsec_nanos()
+        % 10000) as u16;
     let veth_tx = format!("vethsS{nonce}");
     let veth_rx = format!("vethrS{nonce}");
     let tx_ip = "10.201.0.1";
@@ -133,38 +169,62 @@ async fn single_link_point_to_point_rist() {
     let port: u32 = 5600;
 
     // Link shaping params generous enough for test bitrate
-    let params = NetworkParams { delay_ms: 20, jitter_ms: 0, loss_pct: 0.001, loss_corr_pct: 0.0, duplicate_pct: 0.0, reorder_pct: 0.0, rate_kbps: 5000 };
+    let params = NetworkParams {
+        delay_ms: 20,
+        jitter_ms: 0,
+        loss_pct: 0.001,
+        loss_corr_pct: 0.0,
+        duplicate_pct: 0.0,
+        reorder_pct: 0.0,
+        rate_kbps: 5000,
+    };
 
     let qdisc = Arc::new(QdiscManager::new());
-    let _guard = match VethGuard::setup(&veth_tx, &veth_rx, tx_ip, rx_ip, &params, qdisc.clone()).await {
-        Ok(g) => g,
-        Err(e) => {
-            eprintln!("❌ Network setup failed: {e}");
-            return;
-        }
-    };
-    println!("Link: {}({}) -> {}({}) @ {} kbps, {}ms, {:.2}% loss", veth_tx, tx_ip, veth_rx, rx_ip, params.rate_kbps, params.delay_ms, params.loss_pct*100.0);
+    let _guard =
+        match VethGuard::setup(&veth_tx, &veth_rx, tx_ip, rx_ip, &params, qdisc.clone()).await {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("❌ Network setup failed: {e}");
+                return;
+            }
+        };
+    println!(
+        "Link: {}({}) -> {}({}) @ {} kbps, {}ms, {:.2}% loss",
+        veth_tx,
+        tx_ip,
+        veth_rx,
+        rx_ip,
+        params.rate_kbps,
+        params.delay_ms,
+        params.loss_pct * 100.0
+    );
 
     // Sender pipeline: videotestsrc -> x265enc -> h265parse -> rtph265pay -> ristsink
     let sender = gst::Pipeline::new();
     let videotestsrc = gst::ElementFactory::make("videotestsrc")
         .property("is-live", true)
         .property_from_str("pattern", "smpte")
-        .build().unwrap();
+        .build()
+        .unwrap();
     let videoconvert = gst::ElementFactory::make("videoconvert").build().unwrap();
     let capsfilter = gst::ElementFactory::make("capsfilter")
-        .property("caps", gst::Caps::builder("video/x-raw")
-            .field("format", "I420")
-            .field("width", 1920i32)
-            .field("height", 1080i32)
-            .field("framerate", gst::Fraction::new(60, 1))
-            .build())
-        .build().unwrap();
+        .property(
+            "caps",
+            gst::Caps::builder("video/x-raw")
+                .field("format", "I420")
+                .field("width", 1920i32)
+                .field("height", 1080i32)
+                .field("framerate", gst::Fraction::new(60, 1))
+                .build(),
+        )
+        .build()
+        .unwrap();
     let x265enc = gst::ElementFactory::make("x265enc")
         .property("bitrate", 1500u32)
         .property_from_str("speed-preset", "ultrafast")
         .property_from_str("tune", "zerolatency")
-        .build().unwrap();
+        .build()
+        .unwrap();
     let h265parse = gst::ElementFactory::make("h265parse").build().unwrap();
     let rtph265pay = gst::ElementFactory::make("rtph265pay").build().unwrap();
     let ristsink = gst::ElementFactory::make("ristsink")
@@ -172,9 +232,29 @@ async fn single_link_point_to_point_rist() {
         .property("port", port)
         .property("sender-buffer", 1000u32)
         .property("stats-update-interval", 500u32)
-        .build().unwrap();
-    sender.add_many([&videotestsrc, &videoconvert, &capsfilter, &x265enc, &h265parse, &rtph265pay, &ristsink]).unwrap();
-    gst::Element::link_many([&videotestsrc, &videoconvert, &capsfilter, &x265enc, &h265parse, &rtph265pay, &ristsink]).unwrap();
+        .build()
+        .unwrap();
+    sender
+        .add_many([
+            &videotestsrc,
+            &videoconvert,
+            &capsfilter,
+            &x265enc,
+            &h265parse,
+            &rtph265pay,
+            &ristsink,
+        ])
+        .unwrap();
+    gst::Element::link_many([
+        &videotestsrc,
+        &videoconvert,
+        &capsfilter,
+        &x265enc,
+        &h265parse,
+        &rtph265pay,
+        &ristsink,
+    ])
+    .unwrap();
 
     // Receiver pipeline: ristsrc -> rtph265depay -> h265parse -> avdec_h265 -> videoconvert -> appsink
     let receiver = gst::Pipeline::new();
@@ -182,16 +262,44 @@ async fn single_link_point_to_point_rist() {
         .property("address", "0.0.0.0")
         .property("port", port)
         .property("encoding-name", "H265")
-        .property("caps", gst::Caps::builder("application/x-rtp").field("media", "video").field("encoding-name", "H265").build())
+        .property(
+            "caps",
+            gst::Caps::builder("application/x-rtp")
+                .field("media", "video")
+                .field("encoding-name", "H265")
+                .build(),
+        )
         .property("receiver-buffer", 2000u32)
-        .build().unwrap();
+        .build()
+        .unwrap();
     let rtph265depay = gst::ElementFactory::make("rtph265depay").build().unwrap();
     let h265parse_rx = gst::ElementFactory::make("h265parse").build().unwrap();
     let avdec_h265 = gst::ElementFactory::make("avdec_h265").build().unwrap();
     let videoconvert_rx = gst::ElementFactory::make("videoconvert").build().unwrap();
-    let appsink = gst::ElementFactory::make("appsink").property("sync", false).property("drop", true).build().unwrap();
-    receiver.add_many([&ristsrc, &rtph265depay, &h265parse_rx, &avdec_h265, &videoconvert_rx, &appsink]).unwrap();
-    gst::Element::link_many([&ristsrc, &rtph265depay, &h265parse_rx, &avdec_h265, &videoconvert_rx, &appsink]).unwrap();
+    let appsink = gst::ElementFactory::make("appsink")
+        .property("sync", false)
+        .property("drop", true)
+        .build()
+        .unwrap();
+    receiver
+        .add_many([
+            &ristsrc,
+            &rtph265depay,
+            &h265parse_rx,
+            &avdec_h265,
+            &videoconvert_rx,
+            &appsink,
+        ])
+        .unwrap();
+    gst::Element::link_many([
+        &ristsrc,
+        &rtph265depay,
+        &h265parse_rx,
+        &avdec_h265,
+        &videoconvert_rx,
+        &appsink,
+    ])
+    .unwrap();
 
     // Minimal receiver bus logging (WARN/ERROR)
     if let Some(bus) = receiver.bus() {
@@ -249,7 +357,10 @@ async fn single_link_point_to_point_rist() {
         packets = stats.get::<u64>("sent-original-packets").unwrap_or(0);
     }
     println!("Total original packets sent: {}", packets);
-    assert!(packets > 200, "Expected at least 200 packets sent over single link");
+    assert!(
+        packets > 200,
+        "Expected at least 200 packets sent over single link"
+    );
 
     // Teardown
     let _ = sender.set_state(gst::State::Null);

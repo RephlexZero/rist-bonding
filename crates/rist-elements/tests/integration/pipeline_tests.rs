@@ -528,7 +528,9 @@ fn test_pad_removal_and_cleanup() {
     counter2
         .set_state(gst::State::Null)
         .expect("Failed to set counter2 to NULL state");
-    pipeline.remove(&counter2).expect("Failed to remove counter2");
+    pipeline
+        .remove(&counter2)
+        .expect("Failed to remove counter2");
     dispatcher.release_request_pad(&src_1);
 
     // Resume and verify single output still works

@@ -69,10 +69,24 @@ A sophisticated multi-output RTP dispatcher that implements RIST bonding concept
 - Statistics collection and reporting
 
 **Properties:**
-- `weights`: Array of floating-point weights for each output pad
-- `enable-stats`: Enable detailed statistics collection
-- `failover-timeout`: Link failure detection timeout (ms)
-- `rebalance-interval`: Dynamic rebalancing update interval (ms)
+- `weights` (string JSON): Initial per-pad weights, e.g. "[1.0,1.0]"
+- `rebalance-interval-ms` (u64): How often to recompute weights (default 500)
+- `strategy` (string): `ewma` (default) or `aimd`
+- `min-hold-ms` (u64): Minimum time between switches to avoid flapping (default 200)
+- `switch-threshold` (f64): Ratio required to switch pads (default 1.05)
+- `health-warmup-ms` (u64): Delay before a new link is fully considered (default 2000)
+- `duplicate-keyframes` (bool): Duplicate keyframes on immediate backup during failover (default false)
+- `dup-budget-pps` (u32): Max keyframe duplicates per second (default 5)
+- `metrics-export-interval-ms` (u64): Bus metrics emit interval, 0 disables (default 0)
+- `ewma-rtx-penalty` (f64): Loss penalty alpha in EWMA scoring (default 0.3)
+- `ewma-rtt-penalty` (f64): RTT penalty beta in EWMA scoring (default 0.1)
+- `aimd-rtx-threshold` (f64): RTX threshold for AIMD decrease (default 0.05)
+- `probe-ratio` (f64): Deterministic epsilon exploration mixed post-normalization (default 0.08)
+- `max-link-share` (f64): Hard cap for any single link weight before epsilon (default 0.70)
+- `probe-boost` (f64): Micro‑probe multiplicative bump (default 0.12)
+- `probe-period-ms` (u64): Micro‑probe rotation period (default 800)
+- `scheduler` (string): `swrr` packet scheduler (default) or `drr` byte‑based Deficit Round Robin
+- `quantum-bytes` (u32): Base quantum in bytes for DRR rounds (default 1500)
 
 **Pads:**
 - Sink pad: Receives RTP stream input
@@ -301,13 +315,16 @@ cargo test
 # Run specific test categories
 cargo test integration
 cargo test performance_benchmarks
+ - probe-boost: multiplicative bump for the rotating micro-probe target (default 0.12)
+ - probe-period-ms: rotation period for micro-probe (default 800)
 cargo test thread_safety
 
 # Run individual test with output
-cargo test test_memory_usage_under_load -- --nocapture
-```
+Expects `rist/x-sender-stats` with `session-stats` entries containing:
+- sent-original-packets, sent-retransmitted-packets, round-trip-time (ns)
+- rr-packets-received (optional), rr-fraction-lost (optional)
 
-### Suppressing GStreamer Debug Output
+The dispatcher computes EWMA delivered_pps (from RR when available) along with goodput/RTX/RTT per session and updates weights accordingly.
 
 When running tests, you may see large hex dumps from GStreamer's internal buffer debugging. To suppress these:
 

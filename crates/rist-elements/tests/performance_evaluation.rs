@@ -76,7 +76,6 @@ impl ConnectionProfile {
             bandwidth_variation_period_s: 12.0,
         }
     }
-
 }
 
 /// Performance test collector
@@ -101,28 +100,29 @@ impl PerformanceCollector {
         counters: &[gst::Element],
     ) -> Result<(), Box<dyn std::error::Error>> {
         let timestamp = self.start_time.elapsed();
-        
+
         // Get configured weights from dispatcher
-        let weights_json: String = gstristelements::testing::get_property(dispatcher, "weights").unwrap_or_else(|_| "[]".to_string());
+        let weights_json: String = gstristelements::testing::get_property(dispatcher, "weights")
+            .unwrap_or_else(|_| "[]".to_string());
         let configured_weights: Vec<f64> = serde_json::from_str(&weights_json).unwrap_or_default();
-        
+
         // Get actual packet counts from counters
         let mut actual_distributions = Vec::new();
         for counter in counters {
             let count: u64 = gstristelements::testing::get_property(counter, "count").unwrap_or(0);
             actual_distributions.push(count);
         }
-        
+
         // Calculate current bitrates based on elapsed time and network stats
         let packet_loss: Vec<f64> = self.connections.iter().map(|c| c.loss_percent).collect();
-        
+
         let stats = PerformanceStats {
             timestamp,
             configured_weights,
             actual_distributions,
             packet_loss,
         };
-        
+
         self.stats.lock().unwrap().push(stats);
         Ok(())
     }
@@ -144,7 +144,7 @@ impl PerformanceCollector {
 
         // Plot 1: Weight distributions over time
         self.plot_weight_distributions(upper, &stats)?;
-        
+
         // Plot 2: Network performance metrics
         self.plot_network_metrics(lower, &stats)?;
 
@@ -188,7 +188,9 @@ impl PerformanceCollector {
             chart
                 .draw_series(LineSeries::new(configured_data, colors[i % colors.len()]))?
                 .label(format!("{} (Configured)", connection.name))
-                .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 10, y)], colors[i % colors.len()]));
+                .legend(move |(x, y)| {
+                    PathElement::new(vec![(x, y), (x + 10, y)], colors[i % colors.len()])
+                });
 
             // Plot actual distributions (normalized)
             let actual_data: Vec<(f64, f64)> = stats
@@ -205,7 +207,10 @@ impl PerformanceCollector {
                 .collect();
 
             chart
-                .draw_series(LineSeries::new(actual_data, colors[i % colors.len()].mix(0.5)))?
+                .draw_series(LineSeries::new(
+                    actual_data,
+                    colors[i % colors.len()].mix(0.5),
+                ))?
                 .label(format!("{} (Actual)", connection.name))
                 .legend(move |(x, y)| {
                     PathElement::new(vec![(x, y), (x + 10, y)], colors[i % colors.len()].mix(0.5))
@@ -251,7 +256,9 @@ impl PerformanceCollector {
             chart
                 .draw_series(LineSeries::new(loss_data, colors[i % colors.len()]))?
                 .label(format!("{} Loss %", connection.name))
-                .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 10, y)], colors[i % colors.len()]));
+                .legend(move |(x, y)| {
+                    PathElement::new(vec![(x, y), (x + 10, y)], colors[i % colors.len()])
+                });
         }
 
         chart.configure_series_labels().draw()?;
@@ -325,9 +332,22 @@ fn create_ts_av_source() -> Result<gst::Element, Box<dyn std::error::Error>> {
 
     // Add to bin
     bin.add_many([
-        &videotestsrc, &videoconvert, &videocaps, &x265enc, &h265parse, &vqueue,
-        &audiotestsrc, &audioconvert, &audioresample, &audiocaps, &aacenc, &aacparse, &aqueue,
-        &mpegtsmux, &mqueue, &rtpmp2tpay,
+        &videotestsrc,
+        &videoconvert,
+        &videocaps,
+        &x265enc,
+        &h265parse,
+        &vqueue,
+        &audiotestsrc,
+        &audioconvert,
+        &audioresample,
+        &audiocaps,
+        &aacenc,
+        &aacparse,
+        &aqueue,
+        &mpegtsmux,
+        &mqueue,
+        &rtpmp2tpay,
     ])?;
 
     // Link video chain
@@ -344,7 +364,15 @@ fn create_ts_av_source() -> Result<gst::Element, Box<dyn std::error::Error>> {
     vsrc.link(&vpad)?;
 
     // Link audio chain (single stereo source)
-    gst::Element::link_many([&audiotestsrc, &audioconvert, &audioresample, &audiocaps, &aacenc, &aacparse, &aqueue])?;
+    gst::Element::link_many([
+        &audiotestsrc,
+        &audioconvert,
+        &audioresample,
+        &audiocaps,
+        &aacenc,
+        &aacparse,
+        &aqueue,
+    ])?;
     // Connect to mpegtsmux sink pad
     let asrc = aqueue.static_pad("src").unwrap();
     let apad = mpegtsmux
@@ -396,7 +424,9 @@ fn create_ts_recorder(output_file: &str) -> Result<gst::Element, Box<dyn std::er
 fn test_performance_evaluation_1080p60_four_bonded_connections() {
     init_for_tests();
 
-    println!("=== Performance Evaluation: 1080p60 H.265 + AAC MPEG-TS over 4 Bonded Connections ===");
+    println!(
+        "=== Performance Evaluation: 1080p60 H.265 + AAC MPEG-TS over 4 Bonded Connections ==="
+    );
 
     // Define four different connection profiles
     let connections = vec![
@@ -408,10 +438,17 @@ fn test_performance_evaluation_1080p60_four_bonded_connections() {
 
     println!("Connection profiles:");
     for (i, conn) in connections.iter().enumerate() {
-        println!("  {}: {} - {}-{}kbps (base: {}kbps), {}ms delay, {}% loss, varies every {:.1}s", 
-                i, conn.name, conn.min_bitrate_kbps, conn.max_bitrate_kbps, 
-                conn.base_bitrate_kbps, conn.base_delay_ms, conn.loss_percent, 
-                conn.bandwidth_variation_period_s);
+        println!(
+            "  {}: {} - {}-{}kbps (base: {}kbps), {}ms delay, {}% loss, varies every {:.1}s",
+            i,
+            conn.name,
+            conn.min_bitrate_kbps,
+            conn.max_bitrate_kbps,
+            conn.base_bitrate_kbps,
+            conn.base_delay_ms,
+            conn.loss_percent,
+            conn.bandwidth_variation_period_s
+        );
     }
 
     // Create performance collector
@@ -419,48 +456,49 @@ fn test_performance_evaluation_1080p60_four_bonded_connections() {
 
     // Create pipeline elements
     let pipeline = gst::Pipeline::new();
-    
+
     // Create MPEG-TS AV source (H.265 + AAC -> MPEG-TS -> RTP)
-    let av_source = create_ts_av_source()
-        .expect("Failed to create TS AV source");
+    let av_source = create_ts_av_source().expect("Failed to create TS AV source");
 
     // Create dispatcher with initial equal weights, BUT enable auto-balancing
     let initial_weights = vec![0.25, 0.25, 0.25, 0.25];
     let dispatcher = create_dispatcher(Some(&initial_weights)); // Use create_dispatcher, not create_dispatcher_for_testing
-    
+
     // Create mock RIST stats element that will provide realistic network feedback
     let mock_stats = create_mock_stats(4); // 4 sessions for 4 connections
-    
+
     // Use the tick method to update stats with different RTT and retransmission patterns
     // This will provide the feedback the dispatcher needs for auto-balancing
     let base_packets = 1000u64;
     let delta_original = [base_packets; 4];
-    
-    // Different retransmission rates based on connection profiles  
+
+    // Different retransmission rates based on connection profiles
     let mut delta_retrans = [0u64; 4];
     let mut rtt_values = [0u64; 4];
-    
+
     for (i, conn) in connections.iter().enumerate() {
         // Calculate retransmissions based on loss rate
         let loss_rate = conn.loss_percent / 100.0;
         delta_retrans[i] = (base_packets as f64 * loss_rate * 2.0) as u64; // 2x lost packets as retrans
         rtt_values[i] = conn.base_delay_ms as u64;
-        
-        println!("  Mock stats for connection {}: {}ms RTT, {:.2}% loss ({} retrans)", 
-                i, conn.base_delay_ms, conn.loss_percent, delta_retrans[i]);
+
+        println!(
+            "  Mock stats for connection {}: {}ms RTT, {:.2}% loss ({} retrans)",
+            i, conn.base_delay_ms, conn.loss_percent, delta_retrans[i]
+        );
     }
-    
+
     // Update the mock stats with differentiated performance
     mock_stats.tick(&delta_original, &delta_retrans, &rtt_values);
-    
+
     // Connect the mock stats to the dispatcher
     dispatcher.set_property("rist", mock_stats.upcast::<gst::Element>());
-    
+
     // Enable auto-balancing and metrics - THIS is the key difference
-    dispatcher.set_property("auto-balance", true);  // Enable auto-balancing
+    dispatcher.set_property("auto-balance", true); // Enable auto-balancing
     dispatcher.set_property("rebalance-interval-ms", 1000u64);
     dispatcher.set_property("metrics-export-interval-ms", 500u64);
-    
+
     // Configure more aggressive balancing parameters
     dispatcher.set_property("min-hold-ms", 1000u64); // Hold weights for 1s before changes
     dispatcher.set_property("switch-threshold", 1.1); // Lower threshold for rebalancing (minimum is 1.0)
@@ -476,16 +514,21 @@ fn test_performance_evaluation_1080p60_four_bonded_connections() {
     // to reflect the expected capacity ratios based on connection profiles
     let total_capacity: u32 = connections.iter().map(|c| c.base_bitrate_kbps).sum();
     let mut weighted_initial_weights = Vec::new();
-    
+
     println!("Calculating capacity-based weights:");
     for (i, conn) in connections.iter().enumerate() {
         let weight = conn.base_bitrate_kbps as f64 / total_capacity as f64;
         weighted_initial_weights.push(weight);
-        println!("  Connection {}: {}kbps capacity = {:.3} weight ({:.1}%)", 
-                i, conn.base_bitrate_kbps, weight, weight * 100.0);
+        println!(
+            "  Connection {}: {}kbps capacity = {:.3} weight ({:.1}%)",
+            i,
+            conn.base_bitrate_kbps,
+            weight,
+            weight * 100.0
+        );
     }
 
-    // Create counter sinks for each bonded connection  
+    // Create counter sinks for each bonded connection
     let mut counters = Vec::new();
     for (i, _conn) in connections.iter().enumerate() {
         let counter = create_counter_sink();
@@ -494,100 +537,127 @@ fn test_performance_evaluation_1080p60_four_bonded_connections() {
     }
 
     // Create MPEG-TS file recorder (RTP -> TS depayload -> file)
-    let output_file = format!("/workspace/target/performance_test_{}fps_h265_aac.ts", 
+    let output_file = format!(
+        "/workspace/target/performance_test_{}fps_h265_aac.ts",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_secs());
+            .as_secs()
+    );
     println!("Recording MPEG-TS to: {}", output_file);
-    
-    let file_recorder = create_ts_recorder(&output_file)
-        .expect("Failed to create TS recorder");
+
+    let file_recorder = create_ts_recorder(&output_file).expect("Failed to create TS recorder");
 
     // Add all elements to pipeline
     pipeline.add(&av_source).expect("Failed to add AV source");
     pipeline.add(&dispatcher).expect("Failed to add dispatcher");
     pipeline.add(&dynbitrate).expect("Failed to add dynbitrate");
-    pipeline.add(&file_recorder).expect("Failed to add file recorder");
-    
+    pipeline
+        .add(&file_recorder)
+        .expect("Failed to add file recorder");
+
     for counter in &counters {
         pipeline.add(counter).expect("Failed to add counter");
     }
 
     // Link the pipeline
-    av_source.link(&dynbitrate).expect("Failed to link AV source to dynbitrate");
-    dynbitrate.link(&dispatcher).expect("Failed to link dynbitrate to dispatcher");
+    av_source
+        .link(&dynbitrate)
+        .expect("Failed to link AV source to dynbitrate");
+    dynbitrate
+        .link(&dispatcher)
+        .expect("Failed to link dynbitrate to dispatcher");
 
     // Request src pads and link to counters
     let mut src_pads = Vec::new();
     for (i, counter) in counters.iter().enumerate() {
-        let src_pad = dispatcher.request_pad_simple("src_%u")
+        let src_pad = dispatcher
+            .request_pad_simple("src_%u")
             .unwrap_or_else(|| panic!("Failed to request src pad {}", i));
-        src_pad.link(&counter.static_pad("sink").unwrap())
+        src_pad
+            .link(&counter.static_pad("sink").unwrap())
             .unwrap_or_else(|_| panic!("Failed to link src pad {} to counter", i));
         src_pads.push(src_pad);
     }
-    
+
     // Link first connection to video recorder for file output (record one stream)
     if !src_pads.is_empty() {
         // Create a tee to split first connection's stream, with per-branch queues to prevent blocking
         let recorder_tee = gst::ElementFactory::make("tee")
             .build()
             .expect("Failed to create recorder tee");
-        pipeline.add(&recorder_tee).expect("Failed to add recorder tee");
-        let tee_q_counter = gst::ElementFactory::make("queue").build().expect("Failed to create tee queue for counter");
-        let tee_q_rec = gst::ElementFactory::make("queue").build().expect("Failed to create tee queue for recorder");
-        pipeline.add_many([&tee_q_counter, &tee_q_rec]).expect("Failed to add tee queues");
-        
+        pipeline
+            .add(&recorder_tee)
+            .expect("Failed to add recorder tee");
+        let tee_q_counter = gst::ElementFactory::make("queue")
+            .build()
+            .expect("Failed to create tee queue for counter");
+        let tee_q_rec = gst::ElementFactory::make("queue")
+            .build()
+            .expect("Failed to create tee queue for recorder");
+        pipeline
+            .add_many([&tee_q_counter, &tee_q_rec])
+            .expect("Failed to add tee queues");
+
         // Insert tee between first src pad and counter
         let first_src_pad = &src_pads[0];
         let first_counter = &counters[0];
-        
+
         // Unlink first connection from counter
         let _ = first_src_pad.unlink(&first_counter.static_pad("sink").unwrap());
-        
+
         // Link src pad to tee, then tee to both counter and recorder
-        first_src_pad.link(&recorder_tee.static_pad("sink").unwrap())
+        first_src_pad
+            .link(&recorder_tee.static_pad("sink").unwrap())
             .expect("Failed to link first src to tee");
-            
+
         let tee_src1 = recorder_tee.request_pad_simple("src_%u").unwrap();
         let tee_src2 = recorder_tee.request_pad_simple("src_%u").unwrap();
 
         // Link tee -> queues -> sinks
-        tee_src1.link(&tee_q_counter.static_pad("sink").unwrap())
+        tee_src1
+            .link(&tee_q_counter.static_pad("sink").unwrap())
             .expect("Failed to link tee to counter queue");
         tee_q_counter
             .link_pads(Some("src"), first_counter, Some("sink"))
             .expect("Failed to link counter queue to counter");
 
-        tee_src2.link(&tee_q_rec.static_pad("sink").unwrap())
+        tee_src2
+            .link(&tee_q_rec.static_pad("sink").unwrap())
             .expect("Failed to link tee to recorder queue");
         tee_q_rec
             .link_pads(Some("src"), &file_recorder, Some("sink"))
             .expect("Failed to link recorder queue to file recorder");
     }
     println!("Starting performance test...");
-    
+
     // Print pipeline structure for debugging
     println!("Pipeline structure:");
     println!("  av_source -> dynbitrate -> dispatcher -> [4x counters + file_recorder]");
-    
+
     // Verify all elements are properly linked
     println!("Verifying element connections:");
     let av_src_pad = av_source.static_pad("src").unwrap();
-    println!("  av_source.src -> dynbitrate.sink: {}", av_src_pad.is_linked());
-    
+    println!(
+        "  av_source.src -> dynbitrate.sink: {}",
+        av_src_pad.is_linked()
+    );
+
     let dyn_src_pad = dynbitrate.static_pad("src").unwrap();
-    println!("  dynbitrate.src -> dispatcher.sink: {}", dyn_src_pad.is_linked());
-    
+    println!(
+        "  dynbitrate.src -> dispatcher.sink: {}",
+        dyn_src_pad.is_linked()
+    );
+
     for (i, _) in src_pads.iter().enumerate() {
         println!("  dispatcher.src_{} -> counter_{}: connected", i, i);
     }
 
     // Start the pipeline
-    pipeline.set_state(gst::State::Playing)
+    pipeline
+        .set_state(gst::State::Playing)
         .expect("Failed to start pipeline");
-        
+
     println!("Pipeline started - waiting for PLAYING state...");
 
     // Collect statistics over test duration (30 seconds)
@@ -597,37 +667,52 @@ fn test_performance_evaluation_1080p60_four_bonded_connections() {
 
     // Monitor pipeline messages for errors/warnings
     let bus = pipeline.bus().unwrap();
-    
+
     while start_time.elapsed() < test_duration {
         // Check for pipeline messages (non-blocking)
         if let Some(msg) = bus.pop_filtered(&[
-            gst::MessageType::Error, 
-            gst::MessageType::Warning, 
+            gst::MessageType::Error,
+            gst::MessageType::Warning,
             gst::MessageType::Info,
-            gst::MessageType::StateChanged
+            gst::MessageType::StateChanged,
         ]) {
             match msg.view() {
                 gst::MessageView::Error(err) => {
-                    eprintln!("Pipeline Error: {} - {}", err.error(), err.debug().unwrap_or_default());
+                    eprintln!(
+                        "Pipeline Error: {} - {}",
+                        err.error(),
+                        err.debug().unwrap_or_default()
+                    );
                 }
                 gst::MessageView::Warning(warn) => {
-                    eprintln!("Pipeline Warning: {} - {}", warn.error(), warn.debug().unwrap_or_default());
+                    eprintln!(
+                        "Pipeline Warning: {} - {}",
+                        warn.error(),
+                        warn.debug().unwrap_or_default()
+                    );
                 }
                 gst::MessageView::Info(info) => {
-                    println!("Pipeline Info: {} - {}", info.error(), info.debug().unwrap_or_default());
+                    println!(
+                        "Pipeline Info: {} - {}",
+                        info.error(),
+                        info.debug().unwrap_or_default()
+                    );
                 }
                 gst::MessageView::StateChanged(state_changed) => {
                     if state_changed.src() == Some(pipeline.upcast_ref()) {
-                        println!("Pipeline state changed: {:?} -> {:?}", 
-                               state_changed.old(), state_changed.current());
+                        println!(
+                            "Pipeline state changed: {:?} -> {:?}",
+                            state_changed.old(),
+                            state_changed.current()
+                        );
                     }
                 }
                 _ => {}
             }
         }
-        
+
         thread::sleep(stats_interval);
-        
+
         if let Err(e) = collector.collect_stats(&dispatcher, &counters) {
             eprintln!("Failed to collect stats: {}", e);
         }
@@ -635,7 +720,7 @@ fn test_performance_evaluation_1080p60_four_bonded_connections() {
         // Print detailed progress with link statistics
         let elapsed = start_time.elapsed();
         let progress = elapsed.as_secs_f64() / test_duration.as_secs_f64() * 100.0;
-        
+
         // Get current packet counts and rates
         let mut total_packets = 0u64;
         let mut link_stats = String::new();
@@ -649,16 +734,18 @@ fn test_performance_evaluation_1080p60_four_bonded_connections() {
             total_packets += count;
             link_stats.push_str(&format!(" L{}: {}pkts({:.1}pps)", i, count, rate));
         }
-        
+
         // Check output file size to verify data is being written
         let file_size = if let Ok(metadata) = std::fs::metadata(&output_file) {
             format!("{}KB", metadata.len() / 1024)
         } else {
             "0KB".to_string()
         };
-        
-        println!("\rProgress: {:.1}% | Total: {}pkts | File: {} |{}", 
-                progress, total_packets, file_size, link_stats);
+
+        println!(
+            "\rProgress: {:.1}% | Total: {}pkts | File: {} |{}",
+            progress, total_packets, file_size, link_stats
+        );
         std::io::Write::flush(&mut std::io::stdout()).unwrap();
     }
 
@@ -669,7 +756,7 @@ fn test_performance_evaluation_1080p60_four_bonded_connections() {
     if !pipeline.send_event(gst::event::Eos::new()) {
         eprintln!("Warning: Failed to send EOS event");
     }
-    
+
     // Wait for EOS to propagate through the entire pipeline
     // This ensures all elements (especially filesink) flush their buffers
     let bus = pipeline.bus().unwrap();
@@ -680,7 +767,11 @@ fn test_performance_evaluation_1080p60_four_bonded_connections() {
                 println!("EOS received - all data should be flushed to disk");
             }
             gst::MessageView::Error(err) => {
-                eprintln!("Error during EOS: {} - {}", err.error(), err.debug().unwrap_or_default());
+                eprintln!(
+                    "Error during EOS: {} - {}",
+                    err.error(),
+                    err.debug().unwrap_or_default()
+                );
             }
             _ => {}
         },
@@ -695,14 +786,15 @@ fn test_performance_evaluation_1080p60_four_bonded_connections() {
 
     // Generate performance plots
     let svg_output = "/workspace/target/performance_analysis.svg";
-    collector.generate_svg_plots(svg_output)
+    collector
+        .generate_svg_plots(svg_output)
         .expect("Failed to generate performance plots");
 
     // Print final statistics
     let final_stats = collector.stats.lock().unwrap();
     println!("\n=== Final Performance Results ===");
     println!("Total samples collected: {}", final_stats.len());
-    
+
     if let Some(last_stats) = final_stats.last() {
         println!("Final weight distribution:");
         for (i, weight) in last_stats.configured_weights.iter().enumerate() {
@@ -712,8 +804,10 @@ fn test_performance_evaluation_1080p60_four_bonded_connections() {
             } else {
                 0.0
             };
-            println!("  Connection {}: Configured={:.3}, Actual={:.3}, Packets={}", 
-                    i, weight, actual_ratio, last_stats.actual_distributions[i]);
+            println!(
+                "  Connection {}: Configured={:.3}, Actual={:.3}, Packets={}",
+                i, weight, actual_ratio, last_stats.actual_distributions[i]
+            );
         }
     }
 

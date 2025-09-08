@@ -1,25 +1,21 @@
 use gst::glib;
 use gstreamer as gst;
 
-pub mod dispatcher;
+pub mod dispatcher; // RIST dispatcher (refactored module)
 pub mod dynbitrate;
+// pub mod core_dispatcher; // pure core tree (deprecated during refactor)
 
-// Test harness (only compiled with test-plugin feature)
 #[cfg(feature = "test-plugin")]
 mod test_harness;
 
-// Testing utilities (always available)
 pub mod testing;
 
-// Export public types
 pub use crate::dispatcher::Dispatcher;
 pub use crate::dynbitrate::DynBitrate;
 
-// Export test harness types when feature is enabled
 #[cfg(feature = "test-plugin")]
 pub use crate::test_harness::RistStatsMock;
 
-// Register plugin
 fn plugin_init(plugin: &gst::Plugin) -> Result<(), glib::BoolError> {
     dispatcher::register(plugin)?;
     dynbitrate::register(plugin)?;

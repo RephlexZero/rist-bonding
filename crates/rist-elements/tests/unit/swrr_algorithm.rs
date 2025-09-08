@@ -213,15 +213,26 @@ fn test_weighted_distribution_pipeline() {
 
     // With 0.8/0.2 weights, we should see buffers on both outputs, dominated by counter1
     assert!(count1 > 0, "Counter 1 should receive buffers");
-    assert!(count2 > 0, "Counter 2 should receive some buffers for 0.2 weight");
+    assert!(
+        count2 > 0,
+        "Counter 2 should receive some buffers for 0.2 weight"
+    );
 
     let total = count1 + count2;
     if total > 0 {
         let ratio1 = count1 as f64 / total as f64;
         let ratio2 = count2 as f64 / total as f64;
         // Allow generous tolerance due to discrete SWRR and startup effects
-        assert!(ratio1 > 0.55, "Expected majority on path1 (~0.8), got {:.2}", ratio1);
-        assert!(ratio2 < 0.45, "Expected minority on path2 (~0.2), got {:.2}", ratio2);
+        assert!(
+            ratio1 > 0.55,
+            "Expected majority on path1 (~0.8), got {:.2}",
+            ratio1
+        );
+        assert!(
+            ratio2 < 0.45,
+            "Expected minority on path2 (~0.2), got {:.2}",
+            ratio2
+        );
     }
 
     println!("✅ Weighted distribution pipeline test passed");

@@ -1,0 +1,112 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/static_bandwidths_networks_test.rs (target/debug/deps/static_bandwidths_networks_test-e18456d4a374b559)
+
+running 1 test
+test test_static_bandwidths_convergence ... ristdispatcher registered successfully
+dynbitrate registered successfully
+counter_sink registered successfully
+encoder_stub registered successfully
+riststats_mock registered successfully
+=== End-to-End RIST Network Convergence Test ===
+Profiles (fixed) with UDP ports and veth pairs:
+  0: 5G-Good - 15ms, 0.05% loss, 1500 kbps -> UDP port 5000, tx=veths0(10.200.100.1), rx=vethr0(10.200.100.2)
+  1: 4G-Good - 25ms, 0.10% loss, 1250 kbps -> UDP port 5002, tx=veths1(10.200.101.1), rx=vethr1(10.200.101.2)
+  2: 4G-Typical - 40ms, 0.50% loss, 750 kbps -> UDP port 5004, tx=veths2(10.200.102.1), rx=vethr2(10.200.102.2)
+  3: 5G-Poor - 60ms, 1.00% loss, 300 kbps -> UDP port 5006, tx=veths3(10.200.103.1), rx=vethr3(10.200.103.2)
+
+Creating veth pairs and applying constraints...
+
+Pre-check: measuring raw UDP throughput per shaped link...
+  [link 0:5G-Good] tx=10.200.100.1 -> rx=10.200.100.2 probe_port=6000 target=1500 kbps
+    [precheck] binding UDP receiver on 10.200.100.2:6000 (pkt=1200B, dur=1500ms)
+    [precheck] binding UDP sender on 10.200.100.1:* -> 10.200.100.2:6000
+    [precheck] rx 136651200 bytes in 1551 ms -> ~704842 kbps
+  [link 0:5G-Good] result measured~704842 kbps (target 1500 kbps)
+  [link 1:4G-Good] tx=10.200.101.1 -> rx=10.200.101.2 probe_port=6001 target=1250 kbps
+    [precheck] binding UDP receiver on 10.200.101.2:6001 (pkt=1200B, dur=1500ms)
+    [precheck] binding UDP sender on 10.200.101.1:* -> 10.200.101.2:6001
+    [precheck] rx 138213600 bytes in 1500 ms -> ~737139 kbps
+  [link 1:4G-Good] result measured~737139 kbps (target 1250 kbps)
+  [link 2:4G-Typical] tx=10.200.102.1 -> rx=10.200.102.2 probe_port=6002 target=750 kbps
+    [precheck] binding UDP receiver on 10.200.102.2:6002 (pkt=1200B, dur=1500ms)
+    [precheck] binding UDP sender on 10.200.102.1:* -> 10.200.102.2:6002
+    [precheck] rx 139674000 bytes in 1500 ms -> ~744928 kbps
+  [link 2:4G-Typical] result measured~744928 kbps (target 750 kbps)
+  [link 3:5G-Poor] tx=10.200.103.1 -> rx=10.200.103.2 probe_port=6003 target=300 kbps
+    [precheck] binding UDP receiver on 10.200.103.2:6003 (pkt=1200B, dur=1500ms)
+    [precheck] binding UDP sender on 10.200.103.1:* -> 10.200.103.2:6003
+    [precheck] rx 138093600 bytes in 1550 ms -> ~712741 kbps
+  [link 3:5G-Poor] result measured~712741 kbps (target 300 kbps)
+Pre-check passed: shaped links delivering expected throughput
+
+Sender bonding addresses: 10.200.100.2:5000,10.200.101.2:5002,10.200.102.2:5004,10.200.103.2:5006
+Using custom EWMA dispatcher for bonding
+  Connected av_source -> capsfilter(ssrc) -> ristsink (with internal EWMA dispatcher)
+Receiver bonding addresses: 10.200.100.2:5000,10.200.101.2:5002,10.200.102.2:5004,10.200.103.2:5006
+✅ End-to-end RIST pipeline established (sender -> UDP -> receiver)
+Starting receiver pipeline...
+Starting sender pipeline...
+0:00:06.925307889 18293 0x7fa3e83b9460 WARN                  udpsrc gstudpsrc.c:1638:gst_udpsrc_open:<rist_rtcp_udpsrc0> Disabling port reuse for dynamically allocated port to avoid potential conflicts
+0:00:06.925395926 18293 0x7fa3e83b9460 WARN                  udpsrc gstudpsrc.c:1638:gst_udpsrc_open:<rist_rtcp_udpsrc1> Disabling port reuse for dynamically allocated port to avoid potential conflicts
+0:00:06.925472091 18293 0x7fa3e83b9460 WARN                  udpsrc gstudpsrc.c:1638:gst_udpsrc_open:<rist_rtcp_udpsrc2> Disabling port reuse for dynamically allocated port to avoid potential conflicts
+0:00:06.925541272 18293 0x7fa3e83b9460 WARN                  udpsrc gstudpsrc.c:1638:gst_udpsrc_open:<rist_rtcp_udpsrc3> Disabling port reuse for dynamically allocated port to avoid potential conflicts
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+set_mempolicy: Operation not permitted
+0:00:06.971991837 18293 0x7fa3e0003cb0 WARN              rtpsession gstrtpsession.c:2499:gst_rtp_session_chain_send_rtp_common:<rtpsession1> Can't determine running time for this packet without knowing configured latency
+0:00:06.971993109 18293 0x7fa3e0003690 WARN              rtpsession gstrtpsession.c:2499:gst_rtp_session_chain_send_rtp_common:<rtpsession2> Can't determine running time for this packet without knowing configured latency
+0:00:07.172672259 18293 0x7fa3e0003070 WARN              rtpsession gstrtpsession.c:2499:gst_rtp_session_chain_send_rtp_common:<rtpsession3> Can't determine running time for this packet without knowing configured latency
+0:00:07.375317215 18293 0x7fa3e0002a50 WARN              rtpsession gstrtpsession.c:2499:gst_rtp_session_chain_send_rtp_common:<rtpsession4> Can't determine running time for this packet without knowing configured latency
+0:00:07.377746190 18293 0x7fa3e00014a0 WARN         rtpjitterbuffer rtpjitterbuffer.c:833:rtp_jitter_buffer_calculate_pts: backward timestamps at server, schedule resync
+ristsink1: rist/x-sender-stats, sent-original-packets=(guint64)322, sent-retransmitted-packets=(guint64)0, session-stats=(GValueArray)< "rist/x-sender-session-stats\,\ session-id\=\(int\)0\,\ sent-original-packets\=\(guint64\)1\,\ sent-retransmitted-packets\=\(guint64\)0\,\ round-trip-time\=\(guint64\)0\,\ rr-packets-received\=\(uint\)0\,\ rr-fraction-lost\=\(double\)0\;", "rist/x-sender-session-stats\,\ session-id\=\(int\)1\,\ sent-original-packets\=\(guint64\)194\,\ sent-retransmitted-packets\=\(guint64\)0\,\ round-trip-time\=\(guint64\)0\,\ rr-packets-received\=\(uint\)0\,\ rr-fraction-lost\=\(double\)0\;", "rist/x-sender-session-stats\,\ session-id\=\(int\)2\,\ sent-original-packets\=\(guint64\)108\,\ sent-retransmitted-packets\=\(guint64\)0\,\ round-trip-time\=\(guint64\)0\,\ rr-packets-received\=\(uint\)0\,\ rr-fraction-lost\=\(double\)0\;", "rist/x-sender-session-stats\,\ session-id\=\(int\)3\,\ sent-original-packets\=\(guint64\)19\,\ sent-retransmitted-packets\=\(guint64\)0\,\ round-trip-time\=\(guint64\)0\,\ rr-packets-received\=\(uint\)0\,\ rr-fraction-lost\=\(double\)0\;" >;
+  Configured sender rtpbin latency: 200ms
+    Sender rtpsession0 not found
+    Set sender rtpsession1 ntp-time-source to running-time
+    Set sender rtpsession2 ntp-time-source to running-time
+    Set sender rtpsession3 ntp-time-source to running-time
+  Configured receiver rtpbin latency: 200ms
+    Receiver rtpsession0 not found
+    Receiver rtpsession1 not found
+    Receiver rtpsession2 not found
+    Receiver rtpsession3 not found
+0:00:07.520601412 18293 0x7fa3e83bd480 WARN               rtpsource rtpsource.c:1719:rtp_source_get_new_sr: running time not set, can not create SR for SSRC 34
+0:00:07.520619126 18293 0x7fa3e83bd480 WARN              rtpsession rtpsession.c:4560:generate_rtcp: source 00000022 can not generate RTCP
+0:00:07.520642210 18293 0x7fa3e83bd480 ERROR             rtpsession rtpsession.c:4853:rtp_session_on_timeout: generated empty RTCP messages for all the sources
+0:00:07.619383538 18293 0x7fa3e0000e80 WARN               rtpsource rtpsource.c:1381:update_receiver_stats: probation: seqnr 8137 != expected 7718 (SSRC 34 curr_probation 1 probation 2)
+0:00:07.619844634 18293 0x7fa3e00045e0 WARN             ristrtxsend gstristrtxsend.c:452:gst_rist_rtx_send_src_event:<rist_rtx_send2> requested seqnum 8137 has not been transmitted yet in the original stream; either the remote end is not configured correctly, or the source is too slow
+ristsink1: rist/x-sender-stats, sent-original-packets=(guint64)592, sent-retransmitted-packets=(guint64)0, session-stats=(GValueArray)< "rist/x-sender-session-stats\,\ session-id\=\(int\)0\,\ sent-original-packets\=\(guint64\)118\,\ sent-retransmitted-packets\=\(guint64\)0\,\ round-trip-time\=\(guint64\)0\,\ rr-packets-received\=\(uint\)0\,\ rr-fraction-lost\=\(double\)0\;", "rist/x-sender-session-stats\,\ session-id\=\(int\)1\,\ sent-original-packets\=\(guint64\)194\,\ sent-retransmitted-packets\=\(guint64\)0\,\ round-trip-time\=\(guint64\)0\,\ rr-packets-received\=\(uint\)0\,\ rr-fraction-lost\=\(double\)0\;", "rist/x-sender-session-stats\,\ session-id\=\(int\)2\,\ sent-original-packets\=\(guint64\)163\,\ sent-retransmitted-packets\=\(guint64\)0\,\ round-trip-time\=\(guint64\)0\,\ rr-packets-received\=\(uint\)0\,\ rr-fraction-lost\=\(double\)0\;", "rist/x-sender-session-stats\,\ session-id\=\(int\)3\,\ sent-original-packets\=\(guint64\)117\,\ sent-retransmitted-packets\=\(guint64\)0\,\ round-trip-time\=\(guint64\)0\,\ rr-packets-received\=\(uint\)0\,\ rr-fraction-lost\=\(double\)0\;" >;
+0:00:07.933031493 18293 0x7fa3e00045e0 WARN             ristrtxsend gstristrtxsend.c:452:gst_rist_rtx_send_src_event:<rist_rtx_send2> requested seqnum 8137 has not been transmitted yet in the original stream; either the remote end is not configured correctly, or the source is too slow
+0:00:07.970387905 18293 0x7fa3e83c5b30 WARN              rtpsession rtpsession.c:4082:session_nack: Removing 1 expired NACKS
+0:00:08.077742952 18293 0x7fa3e83b8b40 WARN              rtpsession rtpsession.c:4082:session_nack: Removing 1 expired NACKS
+0:00:08.200149503 18293 0x7fa3e837f500 WARN              rtpsession rtpsession.c:4082:session_nack: Removing 1 expired NACKS

@@ -167,7 +167,7 @@ impl ObjectImpl for ControllerImpl {
         // Install a periodic tick to poll ristsink stats and adjust bitrate
         // Use the same interval as dispatcher to avoid conflicts
         let weak = obj.downgrade();
-    let id = gst::glib::timeout_add(Duration::from_millis(750), move || {
+        let id = gst::glib::timeout_add(Duration::from_millis(750), move || {
             // Offset slightly from dispatcher
             if let Some(obj) = weak.upgrade() {
                 obj.imp().tick();
@@ -704,7 +704,9 @@ impl ControllerImpl {
                             .get::<u64>("sent-retransmitted-packets")
                             .unwrap_or(0);
                         // RTT from RIST stats is in nanoseconds, convert to milliseconds
-                        let rtt_ns = session_struct.get::<u64>("round-trip-time").unwrap_or(50_000_000); // 50ms default
+                        let rtt_ns = session_struct
+                            .get::<u64>("round-trip-time")
+                            .unwrap_or(50_000_000); // 50ms default
                         let rtt_ms = rtt_ns as f64 / 1_000_000.0;
 
                         total_original += sent_original;
@@ -724,9 +726,13 @@ impl ControllerImpl {
             // RTT from RIST stats may be in ns (u64) or ms (f64)
             if let Ok(rtt_ns) = stats.get::<u64>("round-trip-time") {
                 let rtt_ms = rtt_ns as f64 / 1_000_000.0;
-                if rtt_ms > 0.0 { rtts.push(rtt_ms); }
+                if rtt_ms > 0.0 {
+                    rtts.push(rtt_ms);
+                }
             } else if let Ok(rtt_ms_f) = stats.get::<f64>("round-trip-time") {
-                if rtt_ms_f > 0.0 { rtts.push(rtt_ms_f); }
+                if rtt_ms_f > 0.0 {
+                    rtts.push(rtt_ms_f);
+                }
             }
         }
 

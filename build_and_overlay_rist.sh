@@ -32,6 +32,8 @@ if [ ! -d "$build_dir" ]; then
     echo "Setting up meson build with GPL support..."
     meson setup "$build_dir" \
         --prefix="$install_prefix" \
+        --wrap-mode=nofallback \
+        --default-library=shared \
         -Dgpl=enabled \
         -Dbuildtype=release \
         -Ddoc=disabled \
@@ -55,6 +57,8 @@ else
     echo "Build directory exists, reconfiguring..."
     cd "$build_dir"
                 meson configure \
+                --wrap-mode=nofallback \
+                --default-library=shared \
                 -Dgpl=enabled \
                 -Dlibav=enabled \
                 -Ddevtools=disabled \

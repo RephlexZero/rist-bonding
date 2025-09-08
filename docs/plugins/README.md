@@ -1,3 +1,20 @@
+# RIST dispatcher notes
+
+## Updates
+
+- ristsink now includes receiver report fields per session in `rist/x-sender-session-stats`:
+  - `rr-packets-received` (monotonic)
+  - `rr-fraction-lost` (if available)
+
+- The Rust dispatcher prefers receiver-delivered rate for capacity estimates:
+  - capacity ≈ delivered_pps / last_share (falls back to sender goodput when RR missing)
+
+- Added micro-probe controls to keep learning under light load:
+  - `probe-boost` (default 0.12)
+  - `probe-period-ms` (default 800)
+
+- Existing `probe-ratio` epsilon mix and `max-link-share` cap are preserved.
+
 # GStreamer Elements for RIST Bonding
 
 This workspace provides advanced GStreamer elements focused on RIST (Reliable Internet Stream Transport) bonding and adaptive control. The elements are implemented in Rust and exposed through the `rist-elements` crate.
