@@ -7,6 +7,12 @@ pub enum RuntimeError {
     #[error("Qdisc error: {0}")]
     Qdisc(#[from] crate::qdisc::QdiscError),
 
+    #[error("Command failed: {0}")]
+    CommandFailed(String),
+
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
     #[error("Invalid parameters: {0}")]
     InvalidParams(String),
 }

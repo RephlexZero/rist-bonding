@@ -16,3 +16,6 @@ futures = { version = "0.3.31", optional = true }
 
 [dev-dependencies]
 futures = "0.3.31"
+nix = { version = "0.29.0", default-features = false, features = ["sched"] }
+socket2 = "0.5"
+libc = "0.2"

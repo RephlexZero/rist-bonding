@@ -2,9 +2,9 @@
 
 use log::{debug, info, warn};
 use std::fmt;
+use std::process::Output;
 use thiserror::Error;
 use tokio::process::Command;
-use std::process::Output;
 
 #[derive(Error, Debug)]
 pub enum QdiscError {
@@ -67,7 +67,9 @@ impl QdiscManager {
     }
 
     async fn interface_exists(&self, interface: &str) -> Result<bool, QdiscError> {
-        let out = self.run_ip(&["-o", "link", "show", "dev", interface]).await?;
+        let out = self
+            .run_ip(&["-o", "link", "show", "dev", interface])
+            .await?;
         if out.status.success() {
             return Ok(true);
         }
@@ -106,47 +108,25 @@ impl QdiscManager {
             warn!("Failed to run tc delete on {}: {}", interface, e);
         }
 
-        // If rate limiting is requested, use HTB root + class, then attach netem under the class.
-        // Otherwise, apply netem directly as root.
-        let use_htb = config.rate_bps > 0;
-
-        if use_htb {
-            let rate_kbit = (config.rate_bps / 1000).max(1); // kbit/s
-            let out = self
-                .run_tc(&["qdisc", "add", "dev", interface, "root", "handle", "1:", "htb", "default", "10"])
-                .await?;
-            if !out.status.success() {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                if stderr.contains("Operation not permitted") {
-                    return Err(QdiscError::PermissionDenied);
-                }
-                return Err(QdiscError::CommandFailed(stderr.to_string()));
-            }
-
-            let class_args = [
-                "class", "add", "dev", interface, "parent", "1:", "classid", "1:10", "htb",
-                "rate", &format!("{}kbit", rate_kbit), "ceil", &format!("{}kbit", rate_kbit),
-            ];
-            let out = self.run_tc(&class_args).await?;
-            if !out.status.success() {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                if stderr.contains("Operation not permitted") {
-                    return Err(QdiscError::PermissionDenied);
-                }
-                return Err(QdiscError::CommandFailed(stderr.to_string()));
-            }
-        }
+        // Prefer netem's built-in rate limiting for simplicity and reliability.
+        // We'll attach a single netem qdisc at root and pass along rate/delay/loss/etc.
+        // no HTB usage
 
         // Build netem arguments
-        let mut netem_args: Vec<String> = vec!["qdisc".into(), "add".into(), "dev".into(), interface.into()];
+        let mut netem_args: Vec<String> =
+            vec!["qdisc".into(), "add".into(), "dev".into(), interface.into()];
 
-        if use_htb {
-            netem_args.extend(["parent".into(), "1:10".into(), "handle".into(), "10:".into()]);
-        } else {
-            netem_args.extend(["root".into(), "handle".into(), "10:".into()]);
-        }
+        // Always attach netem at root
+        netem_args.extend(["root".into(), "handle".into(), "10:".into()]);
 
         netem_args.push("netem".into());
+
+        // Rate limiting (if requested)
+        if config.rate_bps > 0 {
+            let rate_kbit = (config.rate_bps / 1000).max(1); // kbit/s
+            netem_args.push("rate".into());
+            netem_args.push(format!("{}kbit", rate_kbit));
+        }
 
         // Delay and optional jitter
         if config.delay_us > 0 {
@@ -203,7 +183,10 @@ impl QdiscManager {
             .run_tc(&["qdisc", "del", "dev", interface, "root"])
             .await?;
         if !out.status.success() {
-            debug!("No qdisc to delete on {} or insufficient permissions", interface);
+            debug!(
+                "No qdisc to delete on {} or insufficient permissions",
+                interface
+            );
         }
         Ok(())
     }
@@ -263,11 +246,15 @@ impl QdiscManager {
 
         // Add ingress qdisc to base interface (ignore 'File exists')
         let out = self
-            .run_tc(&["qdisc", "add", "dev", interface, "handle", "ffff:", "ingress"])
+            .run_tc(&[
+                "qdisc", "add", "dev", interface, "handle", "ffff:", "ingress",
+            ])
             .await?;
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr);
-            if !(stderr.contains("File exists") || stderr.contains("RTNETLINK answers: File exists")) {
+            if !(stderr.contains("File exists")
+                || stderr.contains("RTNETLINK answers: File exists"))
+            {
                 if stderr.contains("Operation not permitted") {
                     return Err(QdiscError::PermissionDenied);
                 }
@@ -283,7 +270,9 @@ impl QdiscManager {
         let out = self.run_tc(&filt_args).await?;
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr);
-            if !(stderr.contains("File exists") || stderr.contains("RTNETLINK answers: File exists")) {
+            if !(stderr.contains("File exists")
+                || stderr.contains("RTNETLINK answers: File exists"))
+            {
                 if stderr.contains("Operation not permitted") {
                     return Err(QdiscError::PermissionDenied);
                 }
@@ -360,23 +349,33 @@ impl QdiscManager {
                 for (i, t) in toks.iter().enumerate() {
                     if *t == "Sent" {
                         if let Some(vs) = toks.get(i + 1) {
-                            if let Ok(v) = vs.parse::<u64>() { sent_bytes = v; }
+                            if let Ok(v) = vs.parse::<u64>() {
+                                sent_bytes = v;
+                            }
                         }
                     }
                     if *t == "pkt" && i > 0 {
-                        if let Ok(v) = toks[i - 1].parse::<u64>() { sent_pkts = v; }
+                        if let Ok(v) = toks[i - 1].parse::<u64>() {
+                            sent_pkts = v;
+                        }
                     }
                     if t.contains("dropped") {
                         if let Some(next) = toks.get(i + 1) {
                             let cleaned = next.trim_end_matches([',', ')']);
-                            if let Ok(v) = cleaned.parse::<u64>() { dropped = v; }
+                            if let Ok(v) = cleaned.parse::<u64>() {
+                                dropped = v;
+                            }
                         }
                     }
                 }
             }
         }
 
-        Ok(InterfaceStats { sent_bytes, sent_packets: sent_pkts, dropped })
+        Ok(InterfaceStats {
+            sent_bytes,
+            sent_packets: sent_pkts,
+            dropped,
+        })
     }
 
     /// Heuristic check whether tc can be used (indicates NET_ADMIN or equivalent capability)
