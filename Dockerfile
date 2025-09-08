@@ -77,8 +77,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install newer meson version via pip
-RUN pip3 install --break-system-packages meson
+# Install UV and use it to install meson to /usr/local/bin
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:${PATH}"
+RUN uv tool install meson && ln -sf /root/.local/bin/meson /usr/local/bin/meson
 
 # --------------------------------------------------------------------
 # Install Rust

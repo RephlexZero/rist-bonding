@@ -31,7 +31,9 @@
         "tamasfe.even-better-toml",
         "usernamehw.errorlens",
         "fill-labs.dependi",
-        "mechatroner.rainbow-csv"
+        "mechatroner.rainbow-csv",
+        "GitHub.copilot-chat",
+        "GitHub.copilot"
       ]
     }
   },

@@ -4,13 +4,10 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: rist-bonding-dev
-    privileged: true  # Required for network namespace management
     cap_add:
       - NET_ADMIN
       - SYS_ADMIN  # Required for mounting /run/netns and namespace operations
     volumes:
       - .:/workspace
-      - /lib/modules:/lib/modules:ro
-      - /run/netns:/run/netns:shared  # Share network namespaces with host
     working_dir: /workspace
     command: sleep infinity

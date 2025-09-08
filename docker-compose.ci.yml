@@ -12,17 +12,10 @@ services:
       - SYS_ADMIN  # Required for mounting /run/netns and namespace operations
     volumes:
       - .:/workspace
-      - /lib/modules:/lib/modules:ro
-      - /run/netns:/run/netns:shared  # Share network namespaces with host
-      # Use named volume for cargo cache in CI
-      - cargo-cache:/root/.cargo
     working_dir: /workspace
     command: sleep infinity
     environment:
       - CARGO_HOME=/root/.cargo
-    # Enable interactive mode for CI
     stdin_open: true
     tty: true
-
-volumes:
-  cargo-cache:
+https://lichess.org/analysis#5
