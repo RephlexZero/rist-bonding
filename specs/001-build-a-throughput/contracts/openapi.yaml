@@ -1,0 +1,77 @@
+openapi: 3.0.3
+info:
+  title: RIST Bonding Control API
+  version: 0.1.0
+servers:
+  - url: http://localhost:8080
+paths:
+  /transmitter/start:
+    post:
+      summary: Start contribution session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                target_bitrate_kbps:
+                  type: integer
+                latency_target_ms:
+                  type: integer
+              required: [target_bitrate_kbps]
+      responses:
+        '200':
+          description: Started
+  /transmitter/stop:
+    post:
+      summary: Stop contribution session
+      responses:
+        '200':
+          description: Stopped
+  /links:
+    get:
+      summary: List link status
+      responses:
+        '200':
+          description: OK
+  /forwarder/destinations:
+    get:
+      summary: List destinations
+      responses:
+        '200':
+          description: OK
+    post:
+      summary: Add destination
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                url:
+                  type: string
+              required: [name, url]
+      responses:
+        '201':
+          description: Created
+    delete:
+      summary: Remove destination by id
+      parameters:
+        - in: query
+          name: id
+          schema:
+            type: string
+          required: true
+      responses:
+        '204':
+          description: Deleted
+  /metrics:
+    get:
+      summary: Aggregated metrics
+      responses:
+        '200':
+          description: OK
