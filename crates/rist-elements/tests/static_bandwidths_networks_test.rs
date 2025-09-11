@@ -175,32 +175,37 @@ async fn test_static_bandwidths_convergence() {
     // Create sender pipeline with real RIST sinks
     let sender_pipeline = gst::Pipeline::new();
 
-    // Raw video RTP source (~5000 kbps): I420 140x100 @ 30 fps
+    // H.265 RTP source: 1080p30 at ~3000 kbps (low-latency settings)
     let av_source: gst::Element = {
         let bin = gst::Bin::new();
         let videotestsrc = gst::ElementFactory::make("videotestsrc")
             .property("is-live", true)
             .property_from_str("pattern", "smpte")
-            .property("do-timestamp", true) // Ensure proper timestamps
+            .property("do-timestamp", true)
             .build()
             .unwrap();
         let videoconvert = gst::ElementFactory::make("videoconvert").build().unwrap();
-    let capsfilter = gst::ElementFactory::make("capsfilter")
+        let capsfilter = gst::ElementFactory::make("capsfilter")
             .property(
                 "caps",
                 gst::Caps::builder("video/x-raw")
-            .field("format", "I420")
-            .field("width", 140i32)
-            .field("height", 100i32)
-            .field("framerate", gst::Fraction::new(30, 1))
+                    .field("format", "I420")
+                    .field("width", 1920i32)
+                    .field("height", 1080i32)
+                    .field("framerate", gst::Fraction::new(30, 1))
                     .build(),
             )
             .build()
             .unwrap();
-        // RTP payloader for raw video
-        let rtpvrawpay = gst::ElementFactory::make("rtpvrawpay")
+        let x265enc = gst::ElementFactory::make("x265enc")
+            .property("bitrate", 3000u32) // kbps
+            .property_from_str("speed-preset", "ultrafast")
+            .property_from_str("tune", "zerolatency")
+            .build()
+            .unwrap();
+        let h265parse = gst::ElementFactory::make("h265parse").build().unwrap();
+        let rtph265pay = gst::ElementFactory::make("rtph265pay")
             .property("mtu", 1200u32)
-            // Set payload type and SSRC on the payloader instead of forcing caps downstream
             .property("pt", 96u32)
             .property("ssrc", 0x0022u32)
             .build()
@@ -210,18 +215,22 @@ async fn test_static_bandwidths_convergence() {
             &videotestsrc,
             &videoconvert,
             &capsfilter,
-            &rtpvrawpay,
+            &x265enc,
+            &h265parse,
+            &rtph265pay,
         ])
         .unwrap();
         gst::Element::link_many([
             &videotestsrc,
             &videoconvert,
             &capsfilter,
-            &rtpvrawpay,
+            &x265enc,
+            &h265parse,
+            &rtph265pay,
         ])
         .unwrap();
 
-        let src_pad = rtpvrawpay.static_pad("src").unwrap();
+        let src_pad = rtph265pay.static_pad("src").unwrap();
         let ghost_pad = gst::GhostPad::with_target(&src_pad).unwrap();
         ghost_pad.set_active(true).unwrap();
         bin.add_pad(&ghost_pad).unwrap();
@@ -246,14 +255,13 @@ async fn test_static_bandwidths_convergence() {
     dispatcher.set_property("metrics-export-interval-ms", 250u64);
 
     // Create single RIST sink with bonding addresses and custom dispatcher
-    // IMPORTANT: Append "/<ifname>" to each address to force SO_BINDTODEVICE on the udpsink sockets.
-    // This ensures egress via the intended shaped veth device in this environment.
+    // Use plain addresses to allow RTCP path learning; routing is enforced via host routes.
     let sender_bonding_addresses = link_configs
         .iter()
         .zip(profiles.iter().map(|(_, port)| *port))
         .map(|(cfg, port)| {
             let (_tx_ip, rx_ip) = get_connection_ips(cfg);
-            format!("{}:{}/{}", rx_ip, port, cfg.tx_interface)
+            format!("{}:{}", rx_ip, port)
         })
         .collect::<Vec<_>>()
         .join(",");
@@ -263,8 +271,7 @@ async fn test_static_bandwidths_convergence() {
     .property("address", get_connection_ips(&link_configs[0]).1)
     .property("port", profiles[0].1 as u32)
         .property("bonding-addresses", &sender_bonding_addresses)
-        // Bind primary bond early as well
-        .property("multicast-iface", &link_configs[0].tx_interface)
+        
         .property("dispatcher", &dispatcher) // Use our custom EWMA dispatcher
     // Speed up RTCP so we see RR/RTT signals sooner
     .property("min-rtcp-interval", 50u32)
@@ -279,15 +286,23 @@ async fn test_static_bandwidths_convergence() {
     println!("Sender bonding addresses: {}", sender_bonding_addresses);
     println!("Using custom EWMA dispatcher for bonding");
 
-    // Add elements to sender pipeline and insert a capsfilter to set a fixed RTP SSRC
+    // Add elements to sender pipeline and insert a capsfilter to set a fixed RTP SSRC in caps
     sender_pipeline.add(&av_source).unwrap();
     // Insert a queue to decouple upstream from ristsink
     let queue = gst::ElementFactory::make("queue").build().unwrap();
     sender_pipeline.add(&queue).unwrap();
+    let capsfilter_ssrc = gst::ElementFactory::make("capsfilter")
+        .property(
+            "caps",
+            gst::Caps::builder("application/x-rtp").field("ssrc", 0x0022u32).build(),
+        )
+        .build()
+        .unwrap();
+    sender_pipeline.add(&capsfilter_ssrc).unwrap();
     sender_pipeline.add(&rist_sink).unwrap();
 
-    // Link source -> queue -> RIST sink (payloader already sets PT/SSRC)
-    gst::Element::link_many([&av_source, &queue, &rist_sink]).unwrap();
+    // Link source -> queue -> capsfilter(ssrc) -> RIST sink
+    gst::Element::link_many([&av_source, &queue, &capsfilter_ssrc, &rist_sink]).unwrap();
     println!(
         "  Connected av_source -> capsfilter(ssrc) -> ristsink (with internal EWMA dispatcher)"
     );
@@ -301,7 +316,7 @@ async fn test_static_bandwidths_convergence() {
         .zip(profiles.iter().map(|(_, port)| *port))
         .map(|(cfg, port)| {
             let (_tx_ip, rx_ip) = get_connection_ips(cfg);
-            format!("{}:{}/{}", rx_ip, port, cfg.rx_interface)
+            format!("{}:{}", rx_ip, port)
         })
         .collect::<Vec<_>>()
         .join(",");
@@ -311,9 +326,8 @@ async fn test_static_bandwidths_convergence() {
     .property("address", get_connection_ips(&link_configs[0]).1)
     .property("port", profiles[0].1 as u32)
         .property("bonding-addresses", &bonding_addresses) // All receiver addresses
-        .property("multicast-iface", &link_configs[0].rx_interface)
-    // Help internal rtpbin map dynamic PT=96 to RAW caps
-    .property("encoding-name", "RAW")
+    // Help internal rtpbin map dynamic PT=96 to H265 caps
+    .property("encoding-name", "H265")
         .property("receiver-buffer", 2000u32)
     // Speed up RR emission to improve feedback
     .property("min-rtcp-interval", 50u32)
@@ -329,7 +343,9 @@ async fn test_static_bandwidths_convergence() {
         .property("drop-on-latency", true) // Drop late packets
         .build()
         .unwrap();
-    let rtpvrawdepay = gst::ElementFactory::make("rtpvrawdepay").build().unwrap();
+    let rtph265depay = gst::ElementFactory::make("rtph265depay").build().unwrap();
+    let h265parse = gst::ElementFactory::make("h265parse").build().unwrap();
+    let avdec_h265 = gst::ElementFactory::make("avdec_h265").build().unwrap();
     let videoconvert = gst::ElementFactory::make("videoconvert").build().unwrap();
     let appsink = gst::ElementFactory::make("appsink")
         .property("sync", false) // Don't sync to clock for testing
@@ -341,7 +357,9 @@ async fn test_static_bandwidths_convergence() {
         .add_many([
             &rist_src,
             &rtpjitterbuffer,
-            &rtpvrawdepay,
+            &rtph265depay,
+            &h265parse,
+            &avdec_h265,
             &videoconvert,
             &appsink,
         ])
@@ -349,7 +367,9 @@ async fn test_static_bandwidths_convergence() {
     gst::Element::link_many([
         &rist_src,
         &rtpjitterbuffer,
-        &rtpvrawdepay,
+        &rtph265depay,
+        &h265parse,
+        &avdec_h265,
         &videoconvert,
         &appsink,
     ])
