@@ -1,0 +1,1 @@
+cargo test -p rist-elements --test static_bandwidths_networks_test -- --nocapture

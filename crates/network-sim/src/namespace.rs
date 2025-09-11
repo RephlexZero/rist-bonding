@@ -41,6 +41,69 @@ async fn run_ip_cmd_check(args: &[&str]) -> Result<(), RuntimeError> {
     Ok(())
 }
 
+async fn run_sysctl_cmd(args: &[&str]) -> Result<Output, RuntimeError> {
+    debug!("Running: sysctl {}", args.join(" "));
+    let output = Command::new("sysctl").args(args).output().await?;
+    Ok(output)
+}
+
+async fn run_sysctl_cmd_check(args: &[&str]) -> Result<(), RuntimeError> {
+    let output = run_sysctl_cmd(args).await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(RuntimeError::CommandFailed(stderr.to_string()));
+    }
+    Ok(())
+}
+
+/// Set permissive sysctls on an interface to support symmetric routing in tests
+async fn set_interface_sysctls(
+    rx_namespace: Option<&str>,
+    iface: &str,
+) -> Result<(), RuntimeError> {
+    let rp_filter_key = format!("net.ipv4.conf.{}.rp_filter", iface);
+    let accept_local_key = format!("net.ipv4.conf.{}.accept_local", iface);
+
+    if let Some(ns) = rx_namespace {
+        // execute sysctl inside namespace
+        let _ = run_ip_cmd(&["netns", "exec", ns, "sysctl", "-w", &rp_filter_key, "=2"]).await?;
+        let _ = run_ip_cmd(&["netns", "exec", ns, "sysctl", "-w", &accept_local_key, "=1"]).await?;
+    } else {
+        // root namespace
+        run_sysctl_cmd_check(&["-w", &rp_filter_key, "=2"]).await?;
+        run_sysctl_cmd_check(&["-w", &accept_local_key, "=1"]).await?;
+    }
+
+    Ok(())
+}
+
+/// Add an explicit host route to ensure traffic to `dest_ip` egresses via `iface`
+async fn add_host_route(
+    rx_namespace: Option<&str>,
+    dest_ip: &str,
+    iface: &str,
+) -> Result<(), RuntimeError> {
+    if let Some(ns) = rx_namespace {
+        // ip netns exec <ns> ip route replace <dest_ip> dev <iface> scope host
+        run_ip_cmd_check(&[
+            "netns",
+            "exec",
+            ns,
+            "ip",
+            "route",
+            "replace",
+            dest_ip,
+            "dev",
+            iface,
+            "scope",
+            "host",
+        ])
+        .await
+    } else {
+        run_ip_cmd_check(&["route", "replace", dest_ip, "dev", iface, "scope", "host"]).await
+    }
+}
+
 /// Create and configure a shaped veth pair with optional namespace isolation
 pub async fn create_shaped_veth_pair(
     qdisc_manager: &QdiscManager,
@@ -105,6 +168,36 @@ pub async fn create_shaped_veth_pair(
         // Configure RX interface in root namespace
         run_ip_cmd_check(&["addr", "add", &config.rx_ip, "dev", &config.rx_interface]).await?;
         run_ip_cmd_check(&["link", "set", "dev", &config.rx_interface, "up"]).await?;
+    }
+
+    // Extract plain IPs (without CIDR) for routing configuration
+    let (tx_ip_nocidr, rx_ip_nocidr) = get_connection_ips(config);
+
+    // Set sysctls to support symmetric routing for both ends
+    // - rp_filter=2 (loose) avoids dropping replies due to asymmetric routing
+    // - accept_local=1 allows local addresses on veth pairs
+    set_interface_sysctls(None, &config.tx_interface).await.ok();
+    match &config.rx_namespace {
+        Some(ns) => {
+            set_interface_sysctls(Some(ns), &config.rx_interface).await.ok();
+        }
+        None => {
+            set_interface_sysctls(None, &config.rx_interface).await.ok();
+        }
+    }
+
+    // Add explicit host routes so that traffic to the peer goes out via the intended iface
+    // Route to RX via TX iface (root namespace)
+    add_host_route(None, &rx_ip_nocidr, &config.tx_interface).await.ok();
+    // For reply path:
+    if let Some(ref rx_ns) = config.rx_namespace {
+        // In RX namespace, route to TX via RX iface
+        add_host_route(Some(rx_ns), &tx_ip_nocidr, &config.rx_interface)
+            .await
+            .ok();
+    } else {
+        // Same namespace: add reverse host route as well
+        add_host_route(None, &tx_ip_nocidr, &config.rx_interface).await.ok();
     }
 
     // Apply shaping to TX interface

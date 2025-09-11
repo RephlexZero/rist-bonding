@@ -231,7 +231,8 @@ async fn test_static_bandwidths_convergence() {
     // Dispatcher configured for EWMA with real stats
     let dispatcher = create_dispatcher(Some(&[0.25, 0.25, 0.25, 0.25]));
     dispatcher.set_property("strategy", "ewma");
-    dispatcher.set_property("auto-balance", true);
+    // Defer auto-balance until RTT is observed
+    dispatcher.set_property("auto-balance", false);
     // Use SWRR (smooth weighted round robin) scheduler which has better burst behavior than DRR
     dispatcher.set_property("scheduler", "swrr");
     dispatcher.set_property("quantum-bytes", 1200u32); // align with RTP MTU
@@ -246,8 +247,7 @@ async fn test_static_bandwidths_convergence() {
 
     // Create single RIST sink with bonding addresses and custom dispatcher
     // IMPORTANT: Append "/<ifname>" to each address to force SO_BINDTODEVICE on the udpsink sockets.
-    // ristsink parses "address:port[/iface]" and sets the child udpsink "multicast-iface" property,
-    // which triggers SO_BINDTODEVICE in multiudpsink and ensures egress via the specified veth device.
+    // This ensures egress via the intended shaped veth device in this environment.
     let sender_bonding_addresses = link_configs
         .iter()
         .zip(profiles.iter().map(|(_, port)| *port))
@@ -263,8 +263,8 @@ async fn test_static_bandwidths_convergence() {
     .property("address", get_connection_ips(&link_configs[0]).1)
     .property("port", profiles[0].1 as u32)
         .property("bonding-addresses", &sender_bonding_addresses)
-        // Also set the top-level multicast-iface so the primary bond (session 0) is bound early
-    .property("multicast-iface", &link_configs[0].tx_interface)
+        // Bind primary bond early as well
+        .property("multicast-iface", &link_configs[0].tx_interface)
         .property("dispatcher", &dispatcher) // Use our custom EWMA dispatcher
     // Speed up RTCP so we see RR/RTT signals sooner
     .property("min-rtcp-interval", 50u32)
@@ -296,7 +296,6 @@ async fn test_static_bandwidths_convergence() {
     let receiver_pipeline = gst::Pipeline::new();
 
     // RIST source configured for bonding - listen on RECEIVER addresses (rx_ip)
-    // Append "/<ifname>" to bind the receiving sockets to the veth RX device as well.
     let bonding_addresses = link_configs
         .iter()
         .zip(profiles.iter().map(|(_, port)| *port))
@@ -312,8 +311,7 @@ async fn test_static_bandwidths_convergence() {
     .property("address", get_connection_ips(&link_configs[0]).1)
     .property("port", profiles[0].1 as u32)
         .property("bonding-addresses", &bonding_addresses) // All receiver addresses
-        // Ensure primary bond binds to the RX veth device early as well
-    .property("multicast-iface", &link_configs[0].rx_interface)
+        .property("multicast-iface", &link_configs[0].rx_interface)
     // Help internal rtpbin map dynamic PT=96 to RAW caps
     .property("encoding-name", "RAW")
         .property("receiver-buffer", 2000u32)
@@ -387,20 +385,21 @@ async fn test_static_bandwidths_convergence() {
                 rtpbin.set_property("drop-on-latency", true);
                 rtpbin.set_property("do-sync-event", true);
                 println!("  Configured sender rtpbin latency: {}ms", latency_ms);
-
                 // Configure internal rtpsession elements to use running-time for RTCP
                 if let Ok(rtpbin_bin) = rtpbin.downcast::<gst::Bin>() {
-                    for session_id in 0..4 {
-                        if let Some(rtpsession) =
-                            rtpbin_bin.by_name(&format!("rtpsession{}", session_id))
-                        {
+                    // First attempt: enumerate by known names (for determinism in logs)
+                    for session_id in 0..8 {
+                        if let Some(rtpsession) = rtpbin_bin.by_name(&format!("rtpsession{}", session_id)) {
                             rtpsession.set_property_from_str("ntp-time-source", "running-time");
-                            println!(
-                                "    Set sender rtpsession{} ntp-time-source to running-time",
-                                session_id
-                            );
-                        } else {
-                            println!("    Sender rtpsession{} not found", session_id);
+                            println!("    Set sender rtpsession{} ntp-time-source to running-time", session_id);
+                        }
+                    }
+                    // Fallback: iterate all children and set on any element exposing the property
+                    for child in rtpbin_bin.children() {
+                        let name = child.name();
+                        if name.starts_with("rtpsession") {
+                            child.set_property_from_str("ntp-time-source", "running-time");
+                            println!("    Set sender {} ntp-time-source to running-time", name);
                         }
                     }
                 }
@@ -410,20 +409,19 @@ async fn test_static_bandwidths_convergence() {
                 rtpbin.set_property("drop-on-latency", true);
                 rtpbin.set_property("do-sync-event", true);
                 println!("  Configured receiver rtpbin latency: {}ms", latency_ms);
-
                 // Configure receiver rtpsession elements
                 if let Ok(rtpbin_bin) = rtpbin.downcast::<gst::Bin>() {
-                    for session_id in 0..4 {
-                        if let Some(rtpsession) =
-                            rtpbin_bin.by_name(&format!("rtpsession{}", session_id))
-                        {
+                    for session_id in 0..8 {
+                        if let Some(rtpsession) = rtpbin_bin.by_name(&format!("rtpsession{}", session_id)) {
                             rtpsession.set_property_from_str("ntp-time-source", "running-time");
-                            println!(
-                                "    Set receiver rtpsession{} ntp-time-source to running-time",
-                                session_id
-                            );
-                        } else {
-                            println!("    Receiver rtpsession{} not found", session_id);
+                            println!("    Set receiver rtpsession{} ntp-time-source to running-time", session_id);
+                        }
+                    }
+                    for child in rtpbin_bin.children() {
+                        let name = child.name();
+                        if name.starts_with("rtpsession") {
+                            child.set_property_from_str("ntp-time-source", "running-time");
+                            println!("    Set receiver {} ntp-time-source to running-time", name);
                         }
                     }
                 }
@@ -451,6 +449,34 @@ async fn test_static_bandwidths_convergence() {
     // Try configuring rtpsession elements again after more time
     configure_rtpbin_latency(&rist_sink, 200);
     configure_rtpbin_latency(&rist_src, 200);
+
+    // Wait briefly for RTT to become non-zero before enabling auto-balance
+    let main_ctx = glib::MainContext::default();
+    let mut rtt_ready = false;
+    for _ in 0..20 { // ~4s: 20 * 200ms
+        // let GLib dispatch events
+        for _ in 0..10 { while main_ctx.iteration(false) {} }
+        // Check stats for non-zero RTT
+        if let Some(stats_struct) = rist_sink.property::<Option<gst::Structure>>("stats") {
+            if let Ok(session_stats) = stats_struct.get::<glib::ValueArray>("session-stats") {
+                for session_value in session_stats.iter() {
+                    if let Ok(session_struct) = session_value.get::<gst::Structure>() {
+                        let rtt = session_struct.get::<u64>("round-trip-time").unwrap_or(0);
+                        if rtt > 0 { rtt_ready = true; break; }
+                    }
+                }
+            }
+        }
+        if rtt_ready { break; }
+        sleep(Duration::from_millis(200)).await;
+    }
+    println!("RTT ready: {}", rtt_ready);
+    if !rtt_ready {
+        println!("Warning: RTT not observed within wait window; enabling auto-balance anyway");
+    }
+    // Enable auto-balance (after RTT if available, or after timeout)
+    dispatcher.set_property("auto-balance", true);
+    println!("Auto-balance enabled");
 
     // Monitor for rebalancing behavior
     let test_secs = 30u64;
