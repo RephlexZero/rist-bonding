@@ -79,18 +79,22 @@ pub(crate) fn pick_output_index_swrr_with_hysteresis(
         return (current_idx, false);
     }
 
-    // Apply switch threshold hysteresis: prefer staying on current pad unless the best
-    // candidate beats the current by the configured ratio.
-    // Threshold is expressed as ratio >= switch_threshold to switch (default ~1.05).
-    let mut selected_idx = best_idx;
-    if current_idx < n && best_idx != current_idx {
-        let cur_val = swrr_counters[current_idx];
-        let eps = 1e-12;
-        let ratio = (best_value + eps) / (cur_val + eps);
-        if ratio < switch_threshold.max(1.0) {
-            selected_idx = current_idx;
+    let selected_idx = if switch_threshold >= 1.0 {
+        // Apply switch threshold hysteresis: prefer staying on current pad unless the best
+        // candidate beats the current by the configured ratio.
+        let mut idx = best_idx;
+        if current_idx < n && best_idx != current_idx {
+            let cur_val = swrr_counters[current_idx];
+            let eps = 1e-12;
+            let ratio = (best_value + eps) / (cur_val + eps);
+            if ratio < switch_threshold.max(1.0) {
+                idx = current_idx;
+            }
         }
-    }
+        idx
+    } else {
+        best_idx
+    };
     let weight_sum: f64 = adjusted_weights.iter().sum();
     if weight_sum > 0.0 {
         swrr_counters[selected_idx] -= weight_sum;

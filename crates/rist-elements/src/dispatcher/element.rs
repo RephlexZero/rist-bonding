@@ -222,6 +222,10 @@ impl ObjectImpl for DispatcherImpl {
                 let v = value.get::<u32>().unwrap_or(12).min(1000);
                 *self.inner.min_burst_pkts.lock() = v;
             }
+            24 => {
+                let v = value.get::<bool>().unwrap_or(false);
+                *self.inner.use_switch_threshold.lock() = v;
+            }
             _ => {}
         }
     }
@@ -271,6 +275,7 @@ impl ObjectImpl for DispatcherImpl {
             }
             22 => self.inner.quantum_bytes.lock().to_value(),
             23 => self.inner.min_burst_pkts.lock().to_value(),
+            24 => self.inner.use_switch_threshold.lock().to_value(),
             _ => "".to_value(),
         }
     }
@@ -518,7 +523,11 @@ impl DispatcherImpl {
         let (chosen_idx, did_switch) = match scheduler {
             Scheduler::Swrr => {
                 let min_hold_ms = *inner.min_hold_ms.lock();
-                let switch_threshold = *inner.switch_threshold.lock();
+                let switch_threshold = if *inner.use_switch_threshold.lock() {
+                    *inner.switch_threshold.lock()
+                } else {
+                    0.0
+                };
                 let health_warmup_ms = *inner.health_warmup_ms.lock();
                 let weights = st.weights.clone();
                 let current_idx = st.next_out;

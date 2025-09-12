@@ -255,6 +255,8 @@ async fn test_bonded_links_static_stress() {
     sender.set_state(gst::State::Playing).unwrap();
     sleep(Duration::from_millis(500)).await;
 
+    
+
     // Wait for RTT briefly before enabling auto-balance (best-effort)
     let mut rtt_ready = false;
     for _ in 0..20 {

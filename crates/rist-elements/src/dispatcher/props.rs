@@ -151,6 +151,11 @@ pub(crate) fn properties() -> &'static [glib::ParamSpec] {
                 .maximum(1000)
                 .default_value(12)
                 .build(),
+            glib::ParamSpecBoolean::builder("enable-switch-threshold")
+                .nick("Enable SWRR switch-threshold")
+                .blurb("When true, applies switch-threshold hysteresis in SWRR scheduler")
+                .default_value(false)
+                .build(),
         ]
     });
     PROPS.as_ref()

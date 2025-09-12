@@ -129,6 +129,7 @@ pub struct DispatcherInner {
     pub scheduler: Mutex<Scheduler>,
     pub quantum_bytes: Mutex<u32>,
     pub min_burst_pkts: Mutex<u32>,
+    pub use_switch_threshold: Mutex<bool>,
     pub flow_watchdog_id: Mutex<Option<glib::SourceId>>,
 }
 
@@ -141,8 +142,7 @@ impl Default for DispatcherInner {
             srcpad_counter: Mutex::new(0),
             rebalance_interval_ms: Mutex::new(500),
             strategy: Mutex::new(Strategy::default()),
-            // Align with property default (caps-any = true)
-            caps_any: Mutex::new(true),
+            caps_any: Mutex::new(false),
             auto_balance: Mutex::new(true),
             min_hold_ms: Mutex::new(200),
             switch_threshold: Mutex::new(1.05),
@@ -163,6 +163,7 @@ impl Default for DispatcherInner {
             scheduler: Mutex::new(Scheduler::Swrr),
             quantum_bytes: Mutex::new(1200),
             min_burst_pkts: Mutex::new(12),
+            use_switch_threshold: Mutex::new(false),
             flow_watchdog_id: Mutex::new(None),
         }
     }
