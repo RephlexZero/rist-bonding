@@ -61,8 +61,10 @@ pub(crate) fn pick_output_index_drr_burst_aware(p: DrrPickParams<'_>) -> usize {
         }
         for (i, deficit) in p.deficits.iter_mut().enumerate() {
             if i < p.weights.len() && i < p.link_stats.len() {
+                // Penalize higher RTT: scale by 1 / (rtt_ratio ^ 0.8)
                 let rtt_ratio = (p.link_stats[i].ewma_rtt / min_rtt).max(1.0);
-                let scaled_quantum = quantum_f * p.weights[i] * rtt_ratio.powf(0.8);
+                let rtt_penalty = rtt_ratio.powf(0.8);
+                let scaled_quantum = quantum_f * p.weights[i] / rtt_penalty;
                 *deficit += scaled_quantum as i64;
             } else if i < p.weights.len() {
                 *deficit += (p.weights[i] * quantum_f) as i64;

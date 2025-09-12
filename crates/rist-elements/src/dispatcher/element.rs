@@ -218,6 +218,10 @@ impl ObjectImpl for DispatcherImpl {
                 let v = value.get::<u32>().unwrap_or(1500).clamp(256, 16384);
                 *self.inner.quantum_bytes.lock() = v;
             }
+            23 => {
+                let v = value.get::<u32>().unwrap_or(12).min(1000);
+                *self.inner.min_burst_pkts.lock() = v;
+            }
             _ => {}
         }
     }
@@ -266,6 +270,7 @@ impl ObjectImpl for DispatcherImpl {
                 }
             }
             22 => self.inner.quantum_bytes.lock().to_value(),
+            23 => self.inner.min_burst_pkts.lock().to_value(),
             _ => "".to_value(),
         }
     }

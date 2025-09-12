@@ -36,7 +36,11 @@ pub(crate) fn emit_metrics_message(inner: &DispatcherInner) {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
-    let buffers_processed = 0u64;
+    // Report processed (original) packet count observed by dispatcher
+    let buffers_processed = {
+        let st = inner.state.lock();
+        st.orig_packets
+    };
     let src_pad_count = weights.len() as u32;
 
     let current_weights_json = serde_json::to_string(&weights).unwrap_or_default();

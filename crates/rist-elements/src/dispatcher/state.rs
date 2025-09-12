@@ -141,7 +141,8 @@ impl Default for DispatcherInner {
             srcpad_counter: Mutex::new(0),
             rebalance_interval_ms: Mutex::new(500),
             strategy: Mutex::new(Strategy::default()),
-            caps_any: Mutex::new(false),
+            // Align with property default (caps-any = true)
+            caps_any: Mutex::new(true),
             auto_balance: Mutex::new(true),
             min_hold_ms: Mutex::new(200),
             switch_threshold: Mutex::new(1.05),

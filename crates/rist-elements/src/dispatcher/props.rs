@@ -144,6 +144,13 @@ pub(crate) fn properties() -> &'static [glib::ParamSpec] {
                 .maximum(16384)
                 .default_value(1500)
                 .build(),
+            glib::ParamSpecUInt::builder("min-burst-pkts")
+                .nick("DRR min burst (packets)")
+                .blurb("Minimum consecutive packets before allowing DRR link switch")
+                .minimum(0)
+                .maximum(1000)
+                .default_value(12)
+                .build(),
         ]
     });
     PROPS.as_ref()
