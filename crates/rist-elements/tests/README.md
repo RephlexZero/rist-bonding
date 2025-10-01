@@ -1,132 +1,54 @@
-# Test Organization for rist-elements
+# rist-elements Test Suite
 
-This document describes the new organized test structure for the rist-elements crate.
+Structure and usage notes for the bonding test harness.
 
-## Overview
-
-The integration_tests crate has been **removed** and its functionality merged into rist-elements to:
-- Eliminate circular dependencies
-- Reduce redundancy and maintenance overhead
-- Simplify the workspace structure
-- Organize tests by type for better maintainability
-
-## New Test Structure
-
-Tests are now organized in subdirectories by type:
-
-### Unit Tests (`unit/`)
-Pure unit tests that don't require external dependencies like GStreamer pipelines or networking:
-- `unit/swrr_algorithm.rs` - SWRR algorithm logic tests
-- `unit/ewma_algorithm.rs` - EWMA algorithm tests
-
-### Integration Tests (`integration/`)
-Tests that involve GStreamer pipelines, elements, and cross-component interactions:
-- `integration/pipeline_tests.rs` - GStreamer pipeline validation
-- `integration/network_integration.rs` - Network namespace integration tests
-- `integration/element_integration.rs` - Element behavior tests
-
-### Stress Tests (`stress/`)
-Performance and load testing:
-- `stress/pad_lifecycle.rs` - Pad creation/deletion stress tests
-- `stress/stats_polling.rs` - Statistics collection stress tests
-
-### Scenario Tests (`scenarios/`)
-Specific use-case and workflow testing:
-- `scenarios/recovery_scenarios.rs` - Recovery behavior tests
-- `scenarios/weighted_flow.rs` - Weighted flow distribution tests
-- `scenarios/rist_integration.rs` - RIST protocol integration tests
-- `scenarios/stats_driven_rebalancing.rs` - Statistics-driven rebalancing tests
-
-## Running Tests
-
-### All tests
-```bash
-cargo test -p rist-elements
-```
-
-### By category
-```bash
-# Unit tests only
-cargo test -p rist-elements --test unit_tests
-
-# Integration tests only  
-cargo test -p rist-elements --test integration_tests
-
-# Stress tests only
-cargo test -p rist-elements --test stress_tests
-
-# Scenario tests only
-cargo test -p rist-elements --test scenario_tests
-```
-
-### Network namespace tests (requires root)
-```bash
-# Using the wrapper script (recommended)
-./scripts/run_automated_integration_sudo.sh
-
-# Direct (be careful about root-owned files)
-sudo -E cargo test -p rist-elements --test integration_tests -- --nocapture
-```
-
-### Individual test in a category
-```bash
-cargo test -p rist-elements --test unit_tests unit::swrr_algorithm::test_basic_property_access
-```
-
-## Directory Structure
+## Layout
 
 ```
 tests/
-├── README.md
-├── unit_tests.rs          # Entry point for unit tests
-├── integration_tests.rs   # Entry point for integration tests  
-├── stress_tests.rs        # Entry point for stress tests
-├── scenario_tests.rs      # Entry point for scenario tests
-├── unit/
-│   ├── mod.rs
-│   ├── swrr_algorithm.rs
-│   └── ewma_algorithm.rs
-├── integration/
-│   ├── mod.rs
-│   ├── pipeline_tests.rs
-│   ├── network_integration.rs
-│   └── element_integration.rs
-├── stress/
-│   ├── mod.rs
-│   ├── pad_lifecycle.rs
-│   └── stats_polling.rs
-└── scenarios/
-    ├── mod.rs
-    ├── recovery_scenarios.rs
-    ├── weighted_flow.rs
-    ├── rist_integration.rs
-    └── stats_driven_rebalancing.rs
+├── unit/                        # Pure Rust unit tests (scheduler math, helpers)
+├── stress/                      # Long-running validation (pad churn, stats polling)
+├── scenarios/                   # Multi-stage bonding stories
+├── integration/                 # GStreamer pipelines with namespaces
+├── bonded_links_static_stress.rs# Convergence check under fixed capacities
+├── static_bandwidths_networks_test.rs
+├── quad_links_bonding_modes.rs
+├── realistic_network_evaluation.rs
+└── ... (entry points: unit_tests.rs, stress_tests.rs, scenario_tests.rs, integration_tests.rs)
 ```
 
-## Dependencies
+The standalone `.rs` files at the top level are invoked directly by cargo (e.g. `bonded_links_static_stress`). They provide targeted checks outside the generic entry points.
 
-The test dependencies are now included directly in rist-elements' `dev-dependencies`:
-- `anyhow` - Error handling
-- `chrono` - Time handling with serde support
-- `serial_test` - Sequential test execution
-- `serde_json` - JSON serialization for test artifacts
-- `tracing-subscriber` - Logging support
+## Running Tests
 
-Network-related dependencies are gated behind the `netns-sim` feature (enabled by default):
-- `netns-testbench` - Network namespace orchestration
-- `scenarios` - Test scenario definitions
-- `tokio` - Async runtime
+```bash
+# Everything (requires patched GStreamer + CAP_NET_ADMIN)
+cargo test -p rist-elements --all-features
 
-## Artifacts
+# Unit layer only (fast, no namespaces)
+cargo test -p rist-elements unit_tests
 
-Test artifacts are written to:
-1. `TEST_ARTIFACTS_DIR` environment variable, if set
-2. `CARGO_TARGET_DIR/test-artifacts`, if `CARGO_TARGET_DIR` is set  
-3. `<workspace>/target/test-artifacts` (default)
+# Integration pipelines (creates namespaces and veth pairs)
+sudo -E cargo test -p rist-elements integration_tests -- --nocapture
 
-## Migration Notes
+# Static convergence showcase used in docs
+cargo test -p rist-elements bonded_links_static_stress -- --nocapture
+```
 
-- The old `integration_tests` crate has been completely removed
-- All functionality has been moved into `rist-elements/tests/` with proper directory organization
-- Tests are now organized in subdirectories by type, making them easier to find and maintain
-- Scripts and documentation updated to reference the new test structure
+The namespace-oriented suites (`integration`, `scenarios`, `stress`) call into the `network-sim` crate to shape traffic. Running them without elevated privileges results in a permission error—rerun with `sudo -E` or inside the devcontainer.
+
+## Test Artifacts
+
+Outputs (metrics, debug JSON) are written to `target/test-artifacts/` unless `TEST_ARTIFACTS_DIR` is defined. Cleanups run automatically, but you can delete the directory before re-running:
+
+```bash
+rm -rf target/test-artifacts
+```
+
+## Tips
+
+- Export `RUST_LOG=rist_elements=debug,network_sim=info` to trace scheduling and TC actions concurrently.
+- Use `GST_DEBUG=ristdispatcher:5,rist*:4` when reproducing pipeline-level issues.
+- If a test aborts, prune stray namespaces with `sudo ip netns delete rist-sender rist-receiver 2>/dev/null || true` before rerunning.
+
+See `/docs/testing/README.md` for broader guidance covering CI flows and environment requirements.
