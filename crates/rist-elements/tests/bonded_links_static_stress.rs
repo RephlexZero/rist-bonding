@@ -8,8 +8,13 @@ use gst::prelude::*;
 use gstreamer as gst;
 
 #[cfg(feature = "network-sim")]
-use std::ffi::CString;
+use gst::MessageView;
+#[cfg(feature = "network-sim")]
+use serial_test::serial;
+
 use gstristelements::testing::{create_dispatcher, init_for_tests};
+#[cfg(feature = "network-sim")]
+use std::ffi::CString;
 
 #[cfg(feature = "network-sim")]
 use ::network_sim::{
@@ -52,6 +57,7 @@ fn mk_profile(idx: usize, rate_kbps: u32, delay_ms: u32, loss_pct: f32, port: u1
 }
 
 #[cfg(feature = "network-sim")]
+#[serial]
 #[tokio::test]
 async fn test_bonded_links_static_stress() {
     if std::env::var_os("GST_DEBUG").is_none() {
@@ -62,8 +68,7 @@ async fn test_bonded_links_static_stress() {
     }
     init_for_tests();
 
-    let debug_cfg =
-        CString::new("ristdispatcher:INFO,ristrtxsend:ERROR,*:WARNING").unwrap();
+    let debug_cfg = CString::new("ristdispatcher:INFO,ristrtxsend:ERROR,*:WARNING").unwrap();
     unsafe {
         gst::ffi::gst_debug_set_threshold_from_string(debug_cfg.as_ptr(), glib::ffi::GTRUE);
     }
@@ -498,6 +503,479 @@ async fn test_bonded_links_static_stress() {
             max_err, tol, target_label
         );
     }
+}
+
+#[cfg(feature = "network-sim")]
+#[serial]
+#[tokio::test]
+async fn test_bonded_links_static_stress_recorded() {
+    if std::env::var_os("GST_DEBUG").is_none() {
+        std::env::set_var(
+            "GST_DEBUG",
+            "ristdispatcher:INFO,ristrtxsend:ERROR,*:WARNING",
+        );
+    }
+    init_for_tests();
+
+    let debug_cfg = CString::new("ristdispatcher:INFO,ristrtxsend:ERROR,*:WARNING").unwrap();
+    unsafe {
+        gst::ffi::gst_debug_set_threshold_from_string(debug_cfg.as_ptr(), glib::ffi::GTRUE);
+    }
+
+    let output_path = std::env::temp_dir().join("bonded_links_static_stress_recorded.mp4");
+    if output_path.exists() {
+        let _ = std::fs::remove_file(&output_path);
+    }
+    eprintln!("recording output to {:?}", output_path);
+    let output_location = output_path.to_string_lossy().into_owned();
+
+    // Require NET_ADMIN
+    let qdisc = QdiscManager::new();
+    if !qdisc.has_net_admin().await {
+        eprintln!("Skipping: requires NET_ADMIN");
+        return;
+    }
+
+    // Four links with total capacity < encoder bitrate (3 Mbps)
+    // Capacity split (kbps): [1000, 700, 350, 150] total=2200
+    let profiles = vec![
+        mk_profile(0, 1000, 20, 0.001, 6000),
+        mk_profile(1, 700, 30, 0.002, 6002),
+        mk_profile(2, 350, 45, 0.003, 6004),
+        mk_profile(3, 150, 60, 0.004, 6006),
+    ];
+    let total_capacity: u32 = profiles.iter().map(|p| p.rate_kbps).sum();
+    let expected: Vec<f64> = profiles
+        .iter()
+        .map(|p| p.rate_kbps as f64 / total_capacity as f64)
+        .collect();
+
+    // Create shaped veth pairs (egress on TX, ingress mirror on RX)
+    let mut links: Vec<ShapedVethConfig> = Vec::with_capacity(profiles.len());
+    for p in &profiles {
+        let cfg = ShapedVethConfig {
+            tx_interface: p.veth_tx.clone(),
+            rx_interface: p.veth_rx.clone(),
+            tx_ip: format!("{}/30", p.tx_ip),
+            rx_ip: format!("{}/30", p.rx_ip),
+            rx_namespace: None,
+            network_params: NetworkParams {
+                delay_ms: p.delay_ms,
+                loss_pct: p.loss_pct,
+                rate_kbps: p.rate_kbps,
+                jitter_ms: 0,
+                reorder_pct: 0.0,
+                duplicate_pct: 0.0,
+                loss_corr_pct: 0.0,
+            },
+        };
+        create_shaped_veth_pair(&qdisc, &cfg).await.expect("veth");
+        let _ = apply_ingress_params(&qdisc, &cfg.rx_interface, &cfg.network_params).await;
+        links.push(cfg);
+    }
+
+    // Sender pipeline: H.265 1080p30 at ~3000 kbps, tuned for recording scenario
+    let sender = gst::Pipeline::new();
+    let av_source: gst::Element = {
+        let bin = gst::Bin::new();
+        let videotestsrc = gst::ElementFactory::make("videotestsrc")
+            .property("is-live", true)
+            .property_from_str("pattern", "smpte")
+            .property("do-timestamp", true)
+            .build()
+            .unwrap();
+        let videoconvert = gst::ElementFactory::make("videoconvert").build().unwrap();
+        let capsfilter = gst::ElementFactory::make("capsfilter")
+            .property(
+                "caps",
+                gst::Caps::builder("video/x-raw")
+                    .field("format", "I420")
+                    .field("width", 1920i32)
+                    .field("height", 1080i32)
+                    .field("framerate", gst::Fraction::new(30, 1))
+                    .build(),
+            )
+            .build()
+            .unwrap();
+        let x265enc = gst::ElementFactory::make("x265enc")
+            .property("bitrate", 3000u32)
+            .property_from_str("speed-preset", "ultrafast")
+            .property_from_str("tune", "zerolatency")
+            .build()
+            .unwrap();
+        let h265parse = gst::ElementFactory::make("h265parse").build().unwrap();
+        let rtph265pay = gst::ElementFactory::make("rtph265pay")
+            .property("mtu", 1200u32)
+            .property("pt", 96u32)
+            .property("ssrc", 0x22u32)
+            .build()
+            .unwrap();
+        bin.add_many([
+            &videotestsrc,
+            &videoconvert,
+            &capsfilter,
+            &x265enc,
+            &h265parse,
+            &rtph265pay,
+        ])
+        .unwrap();
+        gst::Element::link_many([
+            &videotestsrc,
+            &videoconvert,
+            &capsfilter,
+            &x265enc,
+            &h265parse,
+            &rtph265pay,
+        ])
+        .unwrap();
+        let src_pad = rtph265pay.static_pad("src").unwrap();
+        let ghost = gst::GhostPad::with_target(&src_pad).unwrap();
+        ghost.set_active(true).unwrap();
+        bin.add_pad(&ghost).unwrap();
+        bin.upcast()
+    };
+
+    // Dispatcher (EWMA + SWRR)
+    let dispatcher = create_dispatcher(Some(&[0.25, 0.25, 0.25, 0.25]));
+    dispatcher.set_property("strategy", "ewma");
+    dispatcher.set_property("scheduler", "drr");
+    dispatcher.set_property("quantum-bytes", 1200u32);
+    dispatcher.set_property("min-hold-ms", 200u64);
+    dispatcher.set_property("switch-threshold", 1.05f64);
+    dispatcher.set_property("ewma-rtx-penalty", 0.30f64);
+    dispatcher.set_property("ewma-rtt-penalty", 0.10f64);
+    dispatcher.set_property("rebalance-interval-ms", 500u64);
+    dispatcher.set_property("metrics-export-interval-ms", 250u64);
+    dispatcher.set_property("auto-balance", false);
+
+    // ristsink (bonding)
+    let sender_bonds = links
+        .iter()
+        .zip(profiles.iter())
+        .map(|(cfg, p)| {
+            let (_tx, rx) = get_connection_ips(cfg);
+            format!("{}:{}", rx, p.port)
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let rist_sink = gst::ElementFactory::make("ristsink")
+        .property("address", &profiles[0].rx_ip)
+        .property("port", profiles[0].port as u32)
+        .property("bonding-addresses", &sender_bonds)
+        .property("dispatcher", &dispatcher)
+        .property("min-rtcp-interval", 50u32)
+        .property("sender-buffer", 1000u32)
+        .property("stats-update-interval", 500u32)
+        .property("multicast-loopback", false)
+        .build()
+        .unwrap();
+
+    sender.add(&av_source).unwrap();
+    let queue = gst::ElementFactory::make("queue").build().unwrap();
+    let caps_ssrc = gst::ElementFactory::make("capsfilter")
+        .property(
+            "caps",
+            gst::Caps::builder("application/x-rtp")
+                .field("ssrc", 0x22u32)
+                .build(),
+        )
+        .build()
+        .unwrap();
+    sender.add_many([&queue, &caps_ssrc, &rist_sink]).unwrap();
+    gst::Element::link_many([&av_source, &queue, &caps_ssrc, &rist_sink]).unwrap();
+
+    // Receiver pipeline
+    let receiver = gst::Pipeline::new();
+    let bus = receiver.bus().unwrap();
+    let recv_bonds = links
+        .iter()
+        .zip(profiles.iter())
+        .map(|(cfg, p)| {
+            let (_tx, rx) = get_connection_ips(cfg);
+            format!("{}:{}", rx, p.port)
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let rist_src = gst::ElementFactory::make("ristsrc")
+        .property("address", &profiles[0].rx_ip)
+        .property("port", profiles[0].port as u32)
+        .property("bonding-addresses", &recv_bonds)
+        .property("encoding-name", "H265")
+        .property("receiver-buffer", 2000u32)
+        .property("reorder-section", 2000u32)
+        .property("max-rtx-retries", 0u32)
+        .property("min-rtcp-interval", 50u32)
+        .property("multicast-loopback", false)
+        .build()
+        .unwrap();
+    let jb = gst::ElementFactory::make("rtpjitterbuffer")
+        .property("latency", 200u32)
+        .property("drop-on-latency", true)
+        .property("do-retransmission", false)
+        .build()
+        .unwrap();
+    let depay = gst::ElementFactory::make("rtph265depay").build().unwrap();
+    let parse = gst::ElementFactory::make("h265parse").build().unwrap();
+    let tee = gst::ElementFactory::make("tee").build().unwrap();
+    let queue_play = gst::ElementFactory::make("queue").build().unwrap();
+    let fakesink = gst::ElementFactory::make("fakesink")
+        .property("sync", false)
+        .property("silent", true)
+        .build()
+        .unwrap();
+    let queue_record = gst::ElementFactory::make("queue").build().unwrap();
+    let mp4mux = gst::ElementFactory::make("mp4mux")
+        .property("faststart", true)
+        .build()
+        .unwrap();
+    let filesink = gst::ElementFactory::make("filesink")
+        .property("location", &output_location)
+        .property("sync", false)
+        .build()
+        .unwrap();
+    receiver
+        .add_many([
+            &rist_src,
+            &jb,
+            &depay,
+            &parse,
+            &tee,
+            &queue_play,
+            &fakesink,
+            &queue_record,
+            &mp4mux,
+            &filesink,
+        ])
+        .unwrap();
+    gst::Element::link_many([&rist_src, &jb, &depay, &parse, &tee]).unwrap();
+
+    let tee_play_pad = tee.request_pad_simple("src_%u").expect("tee play pad");
+    let queue_play_sink = queue_play.static_pad("sink").expect("queue sink pad");
+    tee_play_pad
+        .link(&queue_play_sink)
+        .expect("link tee->queue_play");
+    drop(queue_play_sink);
+    gst::Element::link_many([&queue_play, &fakesink]).unwrap();
+
+    let tee_record_pad = tee.request_pad_simple("src_%u").expect("tee record pad");
+    let queue_record_sink = queue_record.static_pad("sink").expect("queue sink pad");
+    tee_record_pad
+        .link(&queue_record_sink)
+        .expect("link tee->queue_record");
+    drop(queue_record_sink);
+
+    let mux_sink_pad = mp4mux
+        .request_pad_simple("video_0")
+        .expect("request mp4 video pad");
+    let queue_record_src = queue_record.static_pad("src").expect("queue src pad");
+    queue_record_src
+        .link(&mux_sink_pad)
+        .expect("link queue_record->mp4");
+    drop(queue_record_src);
+    mp4mux.link(&filesink).unwrap();
+
+    // Play
+    receiver.set_state(gst::State::Playing).unwrap();
+    sender.set_state(gst::State::Playing).unwrap();
+    sleep(Duration::from_millis(500)).await;
+
+    // Wait for RTT briefly before enabling auto-balance (best-effort)
+    let mut rtt_ready = false;
+    for _ in 0..20 {
+        if let Some(stats) = rist_sink.property::<Option<gst::Structure>>("stats") {
+            if let Ok(arr) = stats.get::<glib::ValueArray>("session-stats") {
+                for v in arr.iter() {
+                    if let Ok(s) = v.get::<gst::Structure>() {
+                        let rtt = s.get::<u64>("round-trip-time").unwrap_or(0);
+                        if rtt > 0 {
+                            rtt_ready = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if rtt_ready {
+            break;
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+    dispatcher.set_property("auto-balance", true);
+
+    // Observe dispatcher weights for ~60s (configurable)
+    let iterations: usize = std::env::var("BOND_STRESS_ITERATIONS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(240); // 240 * 250ms = 60s
+    let sample_interval = Duration::from_millis(250);
+
+    let main_ctx = glib::MainContext::default();
+    let mut last_weights: Option<Vec<f64>> = None;
+    let mut history: Vec<Vec<f64>> = Vec::new();
+    let mut prev_original: Vec<u64> = Vec::new();
+    let mut accum_original_delta: Vec<f64> = Vec::new();
+    let mut empirical_history: Vec<Vec<f64>> = Vec::new();
+
+    for _ in 0..iterations {
+        for _ in 0..3 {
+            while main_ctx.iteration(false) {}
+        }
+        while let Some(msg) = bus.pop() {
+            match msg.view() {
+                MessageView::Error(err) => {
+                    panic!(
+                        "Receiver bus error from {:?}: {} ({:?})",
+                        err.src().map(|s| s.path_string()),
+                        err.error(),
+                        err.debug()
+                    );
+                }
+                MessageView::Eos(_) => {
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let s: String = dispatcher.property("current-weights");
+        if let Ok(v) = serde_json::from_str::<Vec<f64>>(&s) {
+            if !v.is_empty() && v.iter().all(|w| w.is_finite() && *w >= 0.0) {
+                if last_weights.as_ref().map(|lw| lw != &v).unwrap_or(true) {
+                    eprintln!("weights update: {:?}", v);
+                }
+                last_weights = Some(v.clone());
+                history.push(v);
+            }
+        }
+        if let Some(stats) = rist_sink.property::<Option<gst::Structure>>("stats") {
+            if let Ok(arr) = stats.get::<glib::ValueArray>("session-stats") {
+                if prev_original.is_empty() && !arr.is_empty() {
+                    prev_original = vec![0u64; arr.len()];
+                    accum_original_delta = vec![0f64; arr.len()];
+                }
+                if !arr.is_empty() {
+                    let mut delta_vec: Vec<f64> = Vec::with_capacity(arr.len());
+                    for (i, val) in arr.iter().enumerate() {
+                        if let Ok(sess) = val.get::<gst::Structure>() {
+                            let sent_original =
+                                sess.get::<u64>("sent-original-packets").unwrap_or(0);
+                            if i < prev_original.len() {
+                                let delta = sent_original.saturating_sub(prev_original[i]);
+                                prev_original[i] = sent_original;
+                                if i < accum_original_delta.len() {
+                                    accum_original_delta[i] += delta as f64;
+                                }
+                                delta_vec.push(delta as f64);
+                            }
+                        }
+                    }
+                    if !delta_vec.is_empty() && delta_vec.len() == accum_original_delta.len() {
+                        empirical_history.push(delta_vec);
+                    }
+                }
+            }
+        }
+        sleep(sample_interval).await;
+    }
+
+    receiver.send_event(gst::event::Eos::new());
+    let mut eos_received = false;
+    for _ in 0..20 {
+        for _ in 0..3 {
+            while main_ctx.iteration(false) {}
+        }
+        while let Some(msg) = bus.pop() {
+            match msg.view() {
+                MessageView::Error(err) => {
+                    panic!(
+                        "Receiver bus error during EOS from {:?}: {} ({:?})",
+                        err.src().map(|s| s.path_string()),
+                        err.error(),
+                        err.debug()
+                    );
+                }
+                MessageView::Eos(_) => {
+                    eos_received = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        if eos_received {
+            break;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    if !eos_received {
+        eprintln!("EOS not observed on receiver bus after waiting; continuing shutdown");
+    }
+
+    // Tidy shutdown
+    let _ = sender.set_state(gst::State::Ready);
+    let _ = receiver.set_state(gst::State::Ready);
+    sleep(Duration::from_millis(500)).await;
+    let _ = sender.set_state(gst::State::Null);
+    let _ = receiver.set_state(gst::State::Null);
+    mp4mux.release_request_pad(&mux_sink_pad);
+    tee.release_request_pad(&tee_play_pad);
+    tee.release_request_pad(&tee_record_pad);
+    for cfg in &links {
+        let _ = remove_ingress_params(&qdisc, &cfg.rx_interface).await;
+    }
+    let _ = cleanup_rist_test_links(&qdisc, &links).await;
+
+    let observed_final = last_weights.expect("No dispatcher weights observed");
+    assert_eq!(observed_final.len(), expected.len());
+
+    // Compute averaged weights over last N samples to smooth transient fluctuations
+    let window = 10usize.min(history.len());
+    let averaged: Vec<f64> = if window > 0 {
+        history
+            .iter()
+            .rev()
+            .take(window)
+            .fold(vec![0.0; expected.len()], |mut acc, v| {
+                for (i, w) in v.iter().enumerate() {
+                    acc[i] += *w;
+                }
+                acc
+            })
+            .into_iter()
+            .map(|sum| sum / window as f64)
+            .collect()
+    } else {
+        observed_final.clone()
+    };
+
+    eprintln!("expected fractions (capacity): {:?}", expected);
+    eprintln!("final weights:              {:?}", observed_final);
+    eprintln!("avg(last {}):               {:?}", window, averaged);
+
+    let total_sent: f64 = accum_original_delta.iter().sum();
+    assert!(
+        total_sent > 0.0,
+        "No RIST traffic observed; sender stats remained at zero"
+    );
+    let per_link_totals: Vec<f64> = accum_original_delta.iter().map(|v| *v).collect();
+    for (idx, total) in per_link_totals.iter().enumerate() {
+        assert!(
+            *total > 0.0,
+            "Link {} transmitted no packets during recording",
+            idx
+        );
+    }
+    let share: Vec<f64> = per_link_totals.iter().map(|v| v / total_sent).collect();
+    eprintln!(
+        "observed packet share (cumulative original packets): {:?}",
+        share
+    );
+
+    let metadata = std::fs::metadata(&output_path).expect("recorded file metadata");
+    assert!(metadata.len() > 0, "Recorded MP4 output file is empty");
+    eprintln!(
+        "recorded MP4 available at {:?} ({} bytes)",
+        output_path,
+        metadata.len()
+    );
 }
 
 #[cfg(not(feature = "network-sim"))]
