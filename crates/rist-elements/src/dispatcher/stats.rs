@@ -41,10 +41,29 @@ pub(crate) fn update_weights_from_stats(inner: &DispatcherInner, stats: &gst::St
                     let sent_retrans = session_struct
                         .get::<u64>("sent-retransmitted-packets")
                         .unwrap_or(0);
-                    let rr_recv_u = session_struct
-                        .get::<u32>("rr-packets-received")
-                        .map(|v| v as u64)
-                        .or_else(|_| session_struct.get::<u64>("rr-packets-received"))
+                    let rr_have = session_struct
+                        .get::<bool>("rr-have-report")
+                        .unwrap_or(false);
+                    let rr_highest = session_struct
+                        .get::<u64>("rr-extended-highest-seq")
+                        .or_else(|_| {
+                            session_struct
+                                .get::<u32>("rr-extended-highest-seq")
+                                .map(|v| v as u64)
+                        })
+                        .unwrap_or(0);
+                    let rr_packets_lost = session_struct
+                        .get::<i64>("rr-packets-lost")
+                        .or_else(|_| {
+                            session_struct
+                                .get::<i32>("rr-packets-lost")
+                                .map(|v| v as i64)
+                        })
+                        .or_else(|_| {
+                            session_struct
+                                .get::<u64>("rr-packets-lost")
+                                .map(|v| v as i64)
+                        })
                         .unwrap_or(0);
                     let rtt_ms = session_struct
                         .get::<u64>("round-trip-time")
@@ -72,14 +91,54 @@ pub(crate) fn update_weights_from_stats(inner: &DispatcherInner, stats: &gst::St
                                 + (1.0 - link_stats.alpha) * link_stats.ewma_rtx_rate;
                             link_stats.ewma_rtt = link_stats.alpha * rtt_ms
                                 + (1.0 - link_stats.alpha) * link_stats.ewma_rtt;
-                            let delta_rr =
-                                rr_recv_u.saturating_sub(link_stats.prev_rr_received) as f64;
-                            let delivered_pps = delta_rr / delta_time;
-                            link_stats.ewma_delivered_pps = link_stats.alpha * delivered_pps
-                                + (1.0 - link_stats.alpha) * link_stats.ewma_delivered_pps;
+                            if rr_have {
+                                if std::env::var("EWMA_DEBUG").is_ok() {
+                                    eprintln!(
+                                        "rr_state link{}: prev_hi={} hi={} prev_lost={} lost={}",
+                                        idx,
+                                        link_stats.prev_rb_highest_seq,
+                                        rr_highest,
+                                        link_stats.prev_rb_packets_lost,
+                                        rr_packets_lost
+                                    );
+                                }
+                                link_stats.prev_rr_fraction =
+                                    session_struct.get::<f64>("rr-fraction-lost").unwrap_or(0.0);
+                                if link_stats.prev_rb_highest_seq > 0
+                                    && rr_highest >= link_stats.prev_rb_highest_seq
+                                {
+                                    let delta_expected =
+                                        rr_highest - link_stats.prev_rb_highest_seq;
+                                    let prev_lost = link_stats.prev_rb_packets_lost.max(0);
+                                    let lost_now = rr_packets_lost.max(0);
+                                    let delta_lost = if lost_now >= prev_lost {
+                                        (lost_now - prev_lost) as u64
+                                    } else {
+                                        0
+                                    };
+                                    let delta_delivered = delta_expected.saturating_sub(delta_lost);
+                                    if delta_delivered > 0 {
+                                        let delivered_pps = delta_delivered as f64 / delta_time;
+                                        if std::env::var("EWMA_DEBUG").is_ok() {
+                                            eprintln!(
+                                                "rr_debug link{}: delta_recv={} pps={:.2}",
+                                                idx, delta_delivered, delivered_pps
+                                            );
+                                        }
+                                        link_stats.ewma_delivered_pps = link_stats.alpha
+                                            * delivered_pps
+                                            + (1.0 - link_stats.alpha)
+                                                * link_stats.ewma_delivered_pps;
+                                        link_stats.prev_rr_received = link_stats
+                                            .prev_rr_received
+                                            .saturating_add(delta_delivered);
+                                    }
+                                }
+                                link_stats.prev_rb_highest_seq = rr_highest;
+                                link_stats.prev_rb_packets_lost = rr_packets_lost;
+                            }
                             link_stats.prev_sent_original = sent_original;
                             link_stats.prev_sent_retransmitted = sent_retrans;
-                            link_stats.prev_rr_received = rr_recv_u;
                             link_stats.prev_timestamp = now;
                         }
                     }
@@ -160,6 +219,9 @@ pub(crate) fn update_weights_from_stats_legacy(
                 link_stats.prev_sent_original = sent_original;
                 link_stats.prev_sent_retransmitted = sent_retrans;
                 link_stats.prev_timestamp = now;
+                link_stats.prev_rb_highest_seq = 0;
+                link_stats.prev_rb_packets_lost = 0;
+                link_stats.prev_rr_received = 0;
             }
         }
     }

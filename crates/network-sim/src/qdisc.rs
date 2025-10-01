@@ -185,11 +185,16 @@ impl QdiscManager {
         interface: &str,
         config: NetemConfig,
     ) -> Result<(), QdiscError> {
-        info!("[ns={}] Configuring interface {} with {}", ns, interface, config);
+        info!(
+            "[ns={}] Configuring interface {} with {}",
+            ns, interface, config
+        );
 
         // Delete existing qdisc (best effort)
         let _ = tokio::process::Command::new("ip")
-            .args(["netns", "exec", ns, "tc", "qdisc", "del", "dev", interface, "root"])
+            .args([
+                "netns", "exec", ns, "tc", "qdisc", "del", "dev", interface, "root",
+            ])
             .output()
             .await;
 
@@ -272,12 +277,17 @@ impl QdiscManager {
     #[cfg(target_os = "linux")]
     pub async fn clear_interface_in_ns(&self, ns: &str, interface: &str) -> Result<(), QdiscError> {
         let out = tokio::process::Command::new("ip")
-            .args(["netns", "exec", ns, "tc", "qdisc", "del", "dev", interface, "root"])
+            .args([
+                "netns", "exec", ns, "tc", "qdisc", "del", "dev", interface, "root",
+            ])
             .output()
             .await?;
         if !out.status.success() {
             // Best-effort; log/debug
-            debug!("[ns={}] clear_interface_in_ns non-success: {}", ns, out.status);
+            debug!(
+                "[ns={}] clear_interface_in_ns non-success: {}",
+                ns, out.status
+            );
         }
         Ok(())
     }
@@ -504,7 +514,9 @@ impl QdiscManager {
         interface: &str,
     ) -> Result<InterfaceStats, QdiscError> {
         let out = tokio::process::Command::new("ip")
-            .args(["netns", "exec", ns, "tc", "-s", "qdisc", "show", "dev", interface])
+            .args([
+                "netns", "exec", ns, "tc", "-s", "qdisc", "show", "dev", interface,
+            ])
             .output()
             .await
             .map_err(QdiscError::from)?;

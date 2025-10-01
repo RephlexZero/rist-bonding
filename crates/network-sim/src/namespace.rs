@@ -86,17 +86,7 @@ async fn add_host_route(
     if let Some(ns) = rx_namespace {
         // ip netns exec <ns> ip route replace <dest_ip> dev <iface> scope host
         run_ip_cmd_check(&[
-            "netns",
-            "exec",
-            ns,
-            "ip",
-            "route",
-            "replace",
-            dest_ip,
-            "dev",
-            iface,
-            "scope",
-            "host",
+            "netns", "exec", ns, "ip", "route", "replace", dest_ip, "dev", iface, "scope", "host",
         ])
         .await
     } else {
@@ -179,7 +169,9 @@ pub async fn create_shaped_veth_pair(
     set_interface_sysctls(None, &config.tx_interface).await.ok();
     match &config.rx_namespace {
         Some(ns) => {
-            set_interface_sysctls(Some(ns), &config.rx_interface).await.ok();
+            set_interface_sysctls(Some(ns), &config.rx_interface)
+                .await
+                .ok();
         }
         None => {
             set_interface_sysctls(None, &config.rx_interface).await.ok();
@@ -188,7 +180,9 @@ pub async fn create_shaped_veth_pair(
 
     // Add explicit host routes so that traffic to the peer goes out via the intended iface
     // Route to RX via TX iface (root namespace)
-    add_host_route(None, &rx_ip_nocidr, &config.tx_interface).await.ok();
+    add_host_route(None, &rx_ip_nocidr, &config.tx_interface)
+        .await
+        .ok();
     // For reply path:
     if let Some(ref rx_ns) = config.rx_namespace {
         // In RX namespace, route to TX via RX iface
@@ -197,7 +191,9 @@ pub async fn create_shaped_veth_pair(
             .ok();
     } else {
         // Same namespace: add reverse host route as well
-        add_host_route(None, &tx_ip_nocidr, &config.rx_interface).await.ok();
+        add_host_route(None, &tx_ip_nocidr, &config.rx_interface)
+            .await
+            .ok();
     }
 
     // Apply shaping to TX interface

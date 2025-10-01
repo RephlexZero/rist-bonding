@@ -163,11 +163,17 @@ async fn test_static_bandwidths_convergence() {
             network_params: p.to_params(),
         };
         if let Err(e) = create_shaped_veth_pair(&qdisc, &cfg).await {
-            panic!("Network setup failed for {}-{}: {}", cfg.tx_interface, cfg.rx_interface, e);
+            panic!(
+                "Network setup failed for {}-{}: {}",
+                cfg.tx_interface, cfg.rx_interface, e
+            );
         }
         // Optionally shape ingress on RX to model downstream constraints
         if let Err(e) = apply_ingress_params(&qdisc, &cfg.rx_interface, &cfg.network_params).await {
-            eprintln!("Warning: ingress apply failed on {}: {}", cfg.rx_interface, e);
+            eprintln!(
+                "Warning: ingress apply failed on {}: {}",
+                cfg.rx_interface, e
+            );
         }
         link_configs.push(cfg);
     }
@@ -268,13 +274,12 @@ async fn test_static_bandwidths_convergence() {
 
     let rist_sink = gst::ElementFactory::make("ristsink")
         // Set primary destination as first profile; bonding will include all
-    .property("address", get_connection_ips(&link_configs[0]).1)
-    .property("port", profiles[0].1 as u32)
+        .property("address", get_connection_ips(&link_configs[0]).1)
+        .property("port", profiles[0].1 as u32)
         .property("bonding-addresses", &sender_bonding_addresses)
-        
         .property("dispatcher", &dispatcher) // Use our custom EWMA dispatcher
-    // Speed up RTCP so we see RR/RTT signals sooner
-    .property("min-rtcp-interval", 50u32)
+        // Speed up RTCP so we see RR/RTT signals sooner
+        .property("min-rtcp-interval", 50u32)
         .property("sender-buffer", 1000u32)
         .property("stats-update-interval", 500u32)
         .property("multicast-loopback", false)
@@ -294,7 +299,9 @@ async fn test_static_bandwidths_convergence() {
     let capsfilter_ssrc = gst::ElementFactory::make("capsfilter")
         .property(
             "caps",
-            gst::Caps::builder("application/x-rtp").field("ssrc", 0x0022u32).build(),
+            gst::Caps::builder("application/x-rtp")
+                .field("ssrc", 0x0022u32)
+                .build(),
         )
         .build()
         .unwrap();
@@ -323,14 +330,14 @@ async fn test_static_bandwidths_convergence() {
 
     let rist_src = gst::ElementFactory::make("ristsrc")
         // Bind to first receiver address for primary connection
-    .property("address", get_connection_ips(&link_configs[0]).1)
-    .property("port", profiles[0].1 as u32)
+        .property("address", get_connection_ips(&link_configs[0]).1)
+        .property("port", profiles[0].1 as u32)
         .property("bonding-addresses", &bonding_addresses) // All receiver addresses
-    // Help internal rtpbin map dynamic PT=96 to H265 caps
-    .property("encoding-name", "H265")
+        // Help internal rtpbin map dynamic PT=96 to H265 caps
+        .property("encoding-name", "H265")
         .property("receiver-buffer", 2000u32)
-    // Speed up RR emission to improve feedback
-    .property("min-rtcp-interval", 50u32)
+        // Speed up RR emission to improve feedback
+        .property("min-rtcp-interval", 50u32)
         .property("multicast-loopback", false)
         .build()
         .expect("Failed to create ristsrc - ensure gst-plugins-bad with RIST support is installed");
@@ -409,9 +416,14 @@ async fn test_static_bandwidths_convergence() {
                 if let Ok(rtpbin_bin) = rtpbin.downcast::<gst::Bin>() {
                     // First attempt: enumerate by known names (for determinism in logs)
                     for session_id in 0..8 {
-                        if let Some(rtpsession) = rtpbin_bin.by_name(&format!("rtpsession{}", session_id)) {
+                        if let Some(rtpsession) =
+                            rtpbin_bin.by_name(&format!("rtpsession{}", session_id))
+                        {
                             rtpsession.set_property_from_str("ntp-time-source", "running-time");
-                            println!("    Set sender rtpsession{} ntp-time-source to running-time", session_id);
+                            println!(
+                                "    Set sender rtpsession{} ntp-time-source to running-time",
+                                session_id
+                            );
                         }
                     }
                     // Fallback: iterate all children and set on any element exposing the property
@@ -432,9 +444,14 @@ async fn test_static_bandwidths_convergence() {
                 // Configure receiver rtpsession elements
                 if let Ok(rtpbin_bin) = rtpbin.downcast::<gst::Bin>() {
                     for session_id in 0..8 {
-                        if let Some(rtpsession) = rtpbin_bin.by_name(&format!("rtpsession{}", session_id)) {
+                        if let Some(rtpsession) =
+                            rtpbin_bin.by_name(&format!("rtpsession{}", session_id))
+                        {
                             rtpsession.set_property_from_str("ntp-time-source", "running-time");
-                            println!("    Set receiver rtpsession{} ntp-time-source to running-time", session_id);
+                            println!(
+                                "    Set receiver rtpsession{} ntp-time-source to running-time",
+                                session_id
+                            );
                         }
                     }
                     for child in rtpbin_bin.children() {
@@ -473,21 +490,29 @@ async fn test_static_bandwidths_convergence() {
     // Wait briefly for RTT to become non-zero before enabling auto-balance
     let main_ctx = glib::MainContext::default();
     let mut rtt_ready = false;
-    for _ in 0..20 { // ~4s: 20 * 200ms
+    for _ in 0..20 {
+        // ~4s: 20 * 200ms
         // let GLib dispatch events
-        for _ in 0..10 { while main_ctx.iteration(false) {} }
+        for _ in 0..10 {
+            while main_ctx.iteration(false) {}
+        }
         // Check stats for non-zero RTT
         if let Some(stats_struct) = rist_sink.property::<Option<gst::Structure>>("stats") {
             if let Ok(session_stats) = stats_struct.get::<glib::ValueArray>("session-stats") {
                 for session_value in session_stats.iter() {
                     if let Ok(session_struct) = session_value.get::<gst::Structure>() {
                         let rtt = session_struct.get::<u64>("round-trip-time").unwrap_or(0);
-                        if rtt > 0 { rtt_ready = true; break; }
+                        if rtt > 0 {
+                            rtt_ready = true;
+                            break;
+                        }
                     }
                 }
             }
         }
-        if rtt_ready { break; }
+        if rtt_ready {
+            break;
+        }
         sleep(Duration::from_millis(200)).await;
     }
     println!("RTT ready: {}", rtt_ready);

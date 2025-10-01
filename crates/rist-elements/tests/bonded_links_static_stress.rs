@@ -6,6 +6,9 @@
 
 use gst::prelude::*;
 use gstreamer as gst;
+
+#[cfg(feature = "network-sim")]
+use std::ffi::CString;
 use gstristelements::testing::{create_dispatcher, init_for_tests};
 
 #[cfg(feature = "network-sim")]
@@ -52,9 +55,18 @@ fn mk_profile(idx: usize, rate_kbps: u32, delay_ms: u32, loss_pct: f32, port: u1
 #[tokio::test]
 async fn test_bonded_links_static_stress() {
     if std::env::var_os("GST_DEBUG").is_none() {
-        std::env::set_var("GST_DEBUG", "ristdispatcher:INFO,*:WARNING");
+        std::env::set_var(
+            "GST_DEBUG",
+            "ristdispatcher:INFO,ristrtxsend:ERROR,*:WARNING",
+        );
     }
     init_for_tests();
+
+    let debug_cfg =
+        CString::new("ristdispatcher:INFO,ristrtxsend:ERROR,*:WARNING").unwrap();
+    unsafe {
+        gst::ffi::gst_debug_set_threshold_from_string(debug_cfg.as_ptr(), glib::ffi::GTRUE);
+    }
 
     // Require NET_ADMIN
     let qdisc = QdiscManager::new();
@@ -125,7 +137,7 @@ async fn test_bonded_links_static_stress() {
             .build()
             .unwrap();
         let x265enc = gst::ElementFactory::make("x265enc")
-            .property("bitrate", 3000u32)
+            .property("bitrate", 2200u32)
             .property_from_str("speed-preset", "ultrafast")
             .property_from_str("tune", "zerolatency")
             .build()
@@ -165,7 +177,7 @@ async fn test_bonded_links_static_stress() {
     // Dispatcher (EWMA + SWRR)
     let dispatcher = create_dispatcher(Some(&[0.25, 0.25, 0.25, 0.25]));
     dispatcher.set_property("strategy", "ewma");
-    dispatcher.set_property("scheduler", "swrr");
+    dispatcher.set_property("scheduler", "drr");
     dispatcher.set_property("quantum-bytes", 1200u32);
     dispatcher.set_property("min-hold-ms", 200u64);
     dispatcher.set_property("switch-threshold", 1.05f64);
@@ -228,6 +240,8 @@ async fn test_bonded_links_static_stress() {
         .property("bonding-addresses", &recv_bonds)
         .property("encoding-name", "H265")
         .property("receiver-buffer", 2000u32)
+        .property("reorder-section", 2000u32)
+        .property("max-rtx-retries", 0u32)
         .property("min-rtcp-interval", 50u32)
         .property("multicast-loopback", false)
         .build()
@@ -235,27 +249,25 @@ async fn test_bonded_links_static_stress() {
     let jb = gst::ElementFactory::make("rtpjitterbuffer")
         .property("latency", 200u32)
         .property("drop-on-latency", true)
+        .property("do-retransmission", false)
         .build()
         .unwrap();
     let depay = gst::ElementFactory::make("rtph265depay").build().unwrap();
     let parse = gst::ElementFactory::make("h265parse").build().unwrap();
-    let dec = gst::ElementFactory::make("avdec_h265").build().unwrap();
     let sink = gst::ElementFactory::make("fakesink")
         .property("sync", false)
         .property("silent", true)
         .build()
         .unwrap();
     receiver
-        .add_many([&rist_src, &jb, &depay, &parse, &dec, &sink])
+        .add_many([&rist_src, &jb, &depay, &parse, &sink])
         .unwrap();
-    gst::Element::link_many([&rist_src, &jb, &depay, &parse, &dec, &sink]).unwrap();
+    gst::Element::link_many([&rist_src, &jb, &depay, &parse, &sink]).unwrap();
 
     // Play
     receiver.set_state(gst::State::Playing).unwrap();
     sender.set_state(gst::State::Playing).unwrap();
     sleep(Duration::from_millis(500)).await;
-
-    
 
     // Wait for RTT briefly before enabling auto-balance (best-effort)
     let mut rtt_ready = false;

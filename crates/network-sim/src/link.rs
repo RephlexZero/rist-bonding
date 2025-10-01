@@ -7,8 +7,8 @@ use crate::qdisc::QdiscManager;
 use crate::runtime;
 use crate::types::{NetworkParams, RuntimeError};
 use std::io::Result;
-use tokio::process::Command;
 use std::process::Stdio;
+use tokio::process::Command;
 
 #[derive(Debug, Clone)]
 pub struct VethPairConfig {
@@ -72,7 +72,9 @@ impl VethPair {
         // Create veth pair
         exec_ok(
             "ip",
-            &["link", "add", &cfg.tx_if, "type", "veth", "peer", "name", &cfg.rx_if],
+            &[
+                "link", "add", &cfg.tx_if, "type", "veth", "peer", "name", &cfg.rx_if,
+            ],
         )
         .await?;
 
@@ -109,11 +111,7 @@ impl VethPair {
                 .await?;
             }
             None => {
-                exec_ok(
-                    "ip",
-                    &["addr", "add", &cfg.tx_ip_cidr, "dev", &cfg.tx_if],
-                )
-                .await?;
+                exec_ok("ip", &["addr", "add", &cfg.tx_ip_cidr, "dev", &cfg.tx_if]).await?;
                 exec_ok("ip", &["link", "set", &cfg.tx_if, "up"]).await?;
             }
         }
@@ -140,14 +138,14 @@ impl VethPair {
                     &["netns", "exec", ns, "ip", "link", "set", &cfg.rx_if, "up"],
                 )
                 .await?;
-                exec_ok("ip", &["netns", "exec", ns, "ip", "link", "set", "lo", "up"]).await?;
-            }
-            None => {
                 exec_ok(
                     "ip",
-                    &["addr", "add", &cfg.rx_ip_cidr, "dev", &cfg.rx_if],
+                    &["netns", "exec", ns, "ip", "link", "set", "lo", "up"],
                 )
                 .await?;
+            }
+            None => {
+                exec_ok("ip", &["addr", "add", &cfg.rx_ip_cidr, "dev", &cfg.rx_if]).await?;
                 exec_ok("ip", &["link", "set", &cfg.rx_if, "up"]).await?;
             }
         }
@@ -223,11 +221,17 @@ fn into_io(e: RuntimeError) -> std::io::Error {
 }
 
 async fn exec_ok(cmd: &str, args: &[&str]) -> Result<()> {
-    let out = tokio::process::Command::new(cmd).args(args).output().await?;
+    let out = tokio::process::Command::new(cmd)
+        .args(args)
+        .output()
+        .await?;
     if out.status.success() {
         Ok(())
     } else {
         let stderr = String::from_utf8_lossy(&out.stderr);
-        Err(std::io::Error::other(format!("{} {:?} failed: {}", cmd, args, stderr)))
+        Err(std::io::Error::other(format!(
+            "{} {:?} failed: {}",
+            cmd, args, stderr
+        )))
     }
 }

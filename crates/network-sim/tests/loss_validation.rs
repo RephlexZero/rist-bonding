@@ -1,7 +1,7 @@
 //! Validate that configured packet loss is approximately observed end-to-end.
 
 use network_sim::qdisc::QdiscManager;
-use network_sim::{NetworkParams};
+use network_sim::NetworkParams;
 
 #[tokio::test]
 async fn test_loss_enforcement_udp() {
@@ -14,7 +14,7 @@ async fn test_loss_enforcement_udp() {
     // Build a single veth pair in root namespace
     #[cfg(target_os = "linux")]
     {
-        use network_sim::{link::{VethPairConfig, VethPair}};
+        use network_sim::link::{VethPair, VethPairConfig};
         use tokio::net::UdpSocket;
         use tokio::time::{sleep, Duration};
 

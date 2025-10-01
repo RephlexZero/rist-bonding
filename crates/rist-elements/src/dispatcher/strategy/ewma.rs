@@ -1,59 +1,71 @@
 use crate::dispatcher::state::{DispatcherInner, State};
 
 pub(crate) fn calculate_ewma_weights(inner: &DispatcherInner, state: &mut State) -> bool {
-    let mut new_weights = vec![0.0; state.weights.len()];
-    let mut total = 0.0;
-
-    let n = state.weights.len() as f64;
-    let base_eps = *inner.probe_ratio.lock();
-    let share_floor = if n > 0.0 {
-        (base_eps.max(1e-9)) / n
-    } else {
-        0.0
-    };
-
-    for (i, stats) in state.link_stats.iter().enumerate() {
-        if i >= new_weights.len() {
-            break;
-        }
-        let last_share = state
-            .weights
-            .get(i)
-            .copied()
-            .unwrap_or_else(|| if n > 0.0 { 1.0 / n } else { 1.0 })
-            .max(share_floor);
-        let delivered = if stats.ewma_delivered_pps > 0.0 {
-            stats.ewma_delivered_pps
-        } else {
-            stats.ewma_goodput
-        };
-        let cap_est = delivered / last_share;
-        let gp = cap_est.max(1.0).powf(0.5);
-        let alpha = *inner.ewma_rtx_penalty.lock();
-        let beta = *inner.ewma_rtt_penalty.lock();
-        let q_rtx = 1.0 / (1.0 + alpha * stats.ewma_rtx_rate);
-        let q_rtt = 1.0 / (1.0 + beta * (stats.ewma_rtt / 50.0).max(0.1));
-        let mut w = gp * q_rtx * q_rtt;
-        w = w.max(1e-6);
-        new_weights[i] = w;
-        total += w;
+    let count = state.weights.len();
+    if count == 0 {
+        return false;
     }
 
-    if total <= 0.0 {
+    let base_eps = *inner.probe_ratio.lock();
+    let alpha_penalty = *inner.ewma_rtx_penalty.lock();
+    let beta_penalty = *inner.ewma_rtt_penalty.lock();
+
+    let prev_weights = if state.weights.is_empty() {
+        vec![1.0 / count as f64; count]
+    } else {
+        state.weights.clone()
+    };
+
+    let mut scores = vec![0.0; count];
+    for i in 0..count {
+        if let Some(stats) = state.link_stats.get(i) {
+            let delivered_pps = if stats.prev_rr_received > 0 && stats.ewma_delivered_pps > 0.0 {
+                stats.ewma_delivered_pps
+            } else {
+                stats.ewma_goodput
+            }
+            .max(1.0);
+
+            let loss_term = (1.0 - stats.ewma_rtx_rate)
+                .max(0.05)
+                .powf(1.5 + alpha_penalty);
+            let rtt_term = 1.0 / (1.0 + beta_penalty * (stats.ewma_rtt / 45.0).max(0.2));
+            scores[i] = (delivered_pps * loss_term * rtt_term).max(1e-6);
+        }
+    }
+
+    let mut score_sum: f64 = scores.iter().sum();
+    if score_sum <= 0.0 {
+        scores.fill(1.0);
+        score_sum = scores.iter().sum();
+    }
+    let mut new_weights: Vec<f64> = scores.iter().map(|s| s / score_sum).collect();
+
+    let smoothing = 0.9;
+    for (i, w) in new_weights.iter_mut().enumerate() {
+        let prev = prev_weights
+            .get(i)
+            .copied()
+            .unwrap_or_else(|| 1.0 / count as f64);
+        *w = smoothing * *w + (1.0 - smoothing) * prev;
+    }
+
+    let mut sum = new_weights.iter().sum::<f64>();
+    if sum <= 0.0 {
         return false;
     }
     for w in &mut new_weights {
-        *w /= total;
+        *w /= sum;
     }
 
     let cap = *inner.max_link_share.lock();
     if cap < 1.0 {
-        let mut capped = vec![false; new_weights.len()];
+        let mut capped = vec![false; count];
         let mut remaining = 1.0;
         let mut iter = 0;
         loop {
             iter += 1;
-            if iter > new_weights.len() + 1 {
+            if iter > count + 1 {
                 break;
             }
             let mut under_sum = 0.0;
@@ -108,7 +120,7 @@ pub(crate) fn calculate_ewma_weights(inner: &DispatcherInner, state: &mut State)
         }
         let idx = state.probe_idx.min(new_weights.len() - 1);
         new_weights[idx] *= 1.0 + probe_boost;
-        let sum: f64 = new_weights.iter().sum();
+        sum = new_weights.iter().sum::<f64>();
         if sum > 0.0 {
             for w in &mut new_weights {
                 *w /= sum;
@@ -121,9 +133,10 @@ pub(crate) fn calculate_ewma_weights(inner: &DispatcherInner, state: &mut State)
     if elapsed < 5.0 {
         eps = eps.max(0.12);
     }
-    if n > 0.0 && eps > 0.0 {
+    if count > 0 && eps > 0.0 {
+        let mix = eps / count as f64;
         for w in &mut new_weights {
-            *w = (1.0 - eps) * *w + eps / n;
+            *w = (1.0 - eps) * *w + mix;
         }
     }
 
@@ -134,7 +147,7 @@ pub(crate) fn calculate_ewma_weights(inner: &DispatcherInner, state: &mut State)
             break;
         }
     }
-    if changed {
+    if changed || state.weights.len() != new_weights.len() {
         state.weights = new_weights;
         state.swrr_counters.fill(0.0);
         let quantum = *inner.quantum_bytes.lock() as i64;
