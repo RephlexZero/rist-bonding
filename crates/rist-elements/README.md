@@ -48,16 +48,18 @@ Common property patterns:
 
 ## Tests
 
-All tests live under `crates/rist-elements/tests/`. Key suites:
+All tests live under `crates/rist-elements/tests/`. Frequently used targets:
 
 - `cargo test -p rist-elements bonded_links_static_stress -- --nocapture`
-  - Validates convergence on asymmetric bandwidths using the network simulator.
-- `cargo test -p rist-elements static_bandwidths_networks_test -- --nocapture`
-  - Exercises scheduler behaviour with multiple deterministic profiles.
-- `cargo test -p rist-elements --all-features`
-  - Runs unit, integration, and stress tests (requires patched GStreamer and CAP_NET_ADMIN for namespace work).
+  - Canonical convergence showcase built on the network simulator.
+- `cargo test -p rist-elements integration_tests -- --nocapture`
+  - End-to-end bonding matrix (requires patched GStreamer + CAP_NET_ADMIN).
+- `cargo test -p rist-elements stress_tests -- --nocapture`
+  - Longer-running drift and failover coverage (same requirements as integration).
+- `cargo test -p rist-elements unit_tests`
+  - Pure Rust helpers without namespaces.
 
-Use `sudo -E` when running scenarios that create namespaces (the tests will emit a clear permission error otherwise).
+Run with `sudo -E` if your user lacks `CAP_NET_ADMIN`; the namespace-aware tests exit early with a clear warning otherwise.
 
 ## Interaction With Other Crates
 

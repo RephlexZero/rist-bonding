@@ -11,9 +11,8 @@ tests/
 ├── scenarios/                   # Multi-stage bonding stories
 ├── integration/                 # GStreamer pipelines with namespaces
 ├── bonded_links_static_stress.rs# Convergence check under fixed capacities
-├── static_bandwidths_networks_test.rs
-├── quad_links_bonding_modes.rs
-├── realistic_network_evaluation.rs
+├── quad_links_bonding_modes.rs  # Legacy bonding mode regression pack
+├── single_link_test.rs          # RIST smoke path without bonding
 └── ... (entry points: unit_tests.rs, stress_tests.rs, scenario_tests.rs, integration_tests.rs)
 ```
 

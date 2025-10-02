@@ -34,7 +34,7 @@ Unset `GST_DEBUG` for cleaner CI output once a scenario is stable.
 ## Useful Scripts
 
 ```bash
-./run_test.sh                             # Wrapper that builds the stack and runs key suites
+./run_convergence_test.sh                # Canonical convergence harness (expects staged overlay)
 ./scripts/run_automated_integration_sudo.sh  # Convenience for privileged integration tests
 ```
 

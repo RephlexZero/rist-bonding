@@ -54,8 +54,7 @@ Many tests expect to run inside the devcontainer or on a host with `iproute2` av
 ## How the Bonding Tests Use It
 
 - `bonded_links_static_stress` applies asymmetrical bandwidth ceilings and fixed RTT values to demonstrate dispatcher convergence.
-- `static_bandwidths_networks_test` rotates through the presets to validate steady-state weight assignments.
-- Higher-level scenario tests create temporary namespaces (`rist-sender`, `rist-receiver`) and wire them together using the provided helpers.
+- Unit-level helpers reuse the same `QdiscManager` plumbing for lighter validation in CI.
 
 ## Troubleshooting
 

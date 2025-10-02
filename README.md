@@ -22,7 +22,7 @@ A unified workspace for bonding-aware RIST streaming: patched GStreamer C plugin
 | Patched RIST C plugin | `gstreamer/subprojects/gst-plugins-bad/gst/rist/` | Adds telemetry and bonding support to `ristsrc`, `ristsink`, RTX helpers |
 | Rust GStreamer plugin | `crates/rist-elements/` | Hosts `ristdispatcher`, `dynbitrate`, optional test elements, and scheduling logic |
 | Network simulation | `crates/network-sim/` | Applies Linux TC profiles from tests, provides namespace helpers |
-| Helper scripts | `build_gstreamer.sh`, `build_and_overlay_rist.sh`, `run_test.sh` | Automate rebuilds and local validation |
+| Helper scripts | `build_gstreamer.sh`, `run_convergence_test.sh` | Automate rebuilds and convergence validation |
 | Docs | `docs/plugins/`, `docs/testing/` | Background on dispatcher behavior and test workflows |
 
 ## Patched GStreamer RIST Plugin (C)
@@ -45,13 +45,12 @@ The project tracks upstream `gst-plugins-bad` but ships a maintained overlay for
    git submodule update --init --recursive
    ```
 2. Install build dependencies (`meson`, `ninja`, GStreamer dev packages, compiler toolchain).
-3. Build and install using the provided helper (sets GPL, disables unused components):
+3. Stage the patched plugin using the helper (sets GPL, disables unused components):
    ```bash
-   sudo ./build_gstreamer.sh
-   # or ./build_gstreamer.sh --clean to reset the meson build directory
+   ./build_gstreamer.sh        # pass --clean to force a fresh Meson build
    ```
-   The script produces a shared library at `/usr/local/lib/gstreamer-1.0/libgstrist*.so` and refreshes the library cache.
-4. If you prefer a manual build, run `meson setup gstreamer/build ...` followed by `ninja -C gstreamer/build install`, mirroring the flags inside the script.
+   Artifacts land under `target/gstreamer/`; source `target/gstreamer/env.sh` to expose the staged overlay.
+4. If you prefer a manual build, run `meson setup gstreamer/build ...` followed by `meson compile`/`meson install`, mirroring the flags inside the script.
 
 ## Rust GStreamer Plugin (`rist-elements`)
 
@@ -92,9 +91,9 @@ The crate is consumed directly by Rust tests and external tools; no shared libra
 ## Building the Full Stack
 
 1. **Prepare host**: install Rust toolchain (via `rustup`), Meson/Ninja, GStreamer dev headers, and ensure CAP_NET_ADMIN is available for TC-based tests.
-2. **Compile patched GStreamer**: run `./build_gstreamer.sh` (or the manual Meson steps) to install the modified C plugins.
+2. **Stage patched GStreamer**: run `./build_gstreamer.sh` (or mirror the Meson flags manually) to build into `target/gstreamer/`. Source `target/gstreamer/env.sh` afterwards.
 3. **Compile Rust plugins**: `cargo build --release -p rist-elements --all-features` and optionally `cargo build -p network-sim`.
-4. **Expose plugins**: add `export GST_PLUGIN_PATH=$PWD/target/release:$GST_PLUGIN_PATH` when testing locally; copy `.so` files into `/usr/lib/gstreamer-1.0/` for system-wide availability.
+4. **Expose plugins**: keep `GST_PLUGIN_PATH` pointed at `target/release` for the Rust plugin and rely on the staged overlay exported by the env helper. System-wide installs remain optional.
 5. **Verify**: `gst-inspect-1.0 ristdispatcher` and `gst-inspect-1.0 ristsink` should both succeed. Use `GST_DEBUG=rist*:3` for sanity checks.
 
 ## Testing & Validation
@@ -107,12 +106,12 @@ The crate is consumed directly by Rust tests and external tools; no shared libra
   ```bash
   cargo test -p rist-elements bonded_links_static_stress -- --nocapture
   ```
-  This spins up namespaces, applies asymmetric bandwidth ceilings through `network-sim`, and shows the dispatcher converging onto the true link rates.
+  This spins up namespaces, applies asymmetric bandwidth ceilings through `network-sim`, and shows the dispatcher converging onto the true link rates. Use `./run_convergence_test.sh` for the repository defaults (GST debug filters and env helper sourcing).
 - Exercise network primitives in isolation:
   ```bash
   cargo test -p network-sim --all-features
   ```
-- Integration tests that require elevated privileges can be rerun with `sudo -E` (see `run_test.sh` for an automated example).
+- Integration tests that require elevated privileges can be rerun with `sudo -E` (see `run_convergence_test.sh` for the tuned defaults).
 
 ## Operational Tips
 
