@@ -127,7 +127,6 @@ The crate is consumed directly by Rust tests and external tools; no shared libra
 ## Development Environment
 
 - The repo is VS Code devcontainer-ready (`.devcontainer/`), bundling Rust, Meson, GStreamer toolchains, and CAP_NET_ADMIN permissions. Open the folder in VS Code and choose “Reopen in Container” for a fully provisioned environment.
-- `plan.md` outlines longer-term roadmap items, while `docs/testing/` contains namespace diagrams and walkthroughs for CI pipelines.
 
 ## Handover Checklist
 
