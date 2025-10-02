@@ -47,7 +47,7 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
     shift
-end
+done
 
 if $CLEAN; then
     echo "==> Cleaning previous artifacts"
@@ -91,18 +91,24 @@ popd >/dev/null
 mkdir -p "$OVERLAY_DIR"
 
 copy_plugins() {
-    local src="$1"
-    if [[ -d "$src/gstreamer-1.0" ]]; then
-        rsync -a --delete "$src/gstreamer-1.0/" "$OVERLAY_DIR/"
+    local src="$1/gstreamer-1.0"
+    if [[ -d "$src" ]]; then
+        echo "==> Staging plugins from $src"
+        if [[ -d "$OVERLAY_DIR" ]]; then
+            find "$OVERLAY_DIR" -mindepth 1 -exec rm -rf {} +
+        fi
+        cp -a "$src/." "$OVERLAY_DIR/"
+        return 0
     fi
+    return 1
 }
 
 # Stage plugin directories from common lib paths.
-copy_plugins "$PREFIX/lib"
-copy_plugins "$PREFIX/lib64"
+copy_plugins "$PREFIX/lib" ||
+copy_plugins "$PREFIX/lib64" ||
 copy_plugins "$PREFIX/lib/x86_64-linux-gnu"
 
-if [[ ! -d "$OVERLAY_DIR" || -z $(ls -A "$OVERLAY_DIR" 2>/dev/null) ]]; then
+if [[ ! -d "$OVERLAY_DIR" || -z "$(ls -A "$OVERLAY_DIR" 2>/dev/null)" ]]; then
     echo "warning: no plugins were staged under $OVERLAY_DIR" >&2
     echo "check the build output above for install errors" >&2
 fi
