@@ -40,17 +40,30 @@ The project tracks upstream `gst-plugins-bad` but ships a maintained overlay for
 
 **Build & Install**
 
+The GStreamer submodule is now built automatically by cargo's build system:
+
 1. Ensure submodules are present (the repo already vendors GStreamer):
    ```bash
    git submodule update --init --recursive
    ```
 2. Install build dependencies (`meson`, `ninja`, GStreamer dev packages, compiler toolchain).
-3. Stage the patched plugin using the helper (sets GPL, disables unused components):
+3. Simply run cargo build - the build.rs script will automatically build GStreamer:
+   ```bash
+   cargo build --release
+   ```
+   The build script checks if GStreamer needs building and runs `build_gstreamer.sh` automatically.
+   Artifacts land under `target/gstreamer/install` and environment variables are configured automatically.
+
+4. **Manual build option**: You can still run `./build_gstreamer.sh` directly if needed:
    ```bash
    ./build_gstreamer.sh        # pass --clean to force a fresh Meson build
+   source target/gstreamer/env.sh  # set environment variables manually
    ```
-   Artifacts land under `target/gstreamer/`; source `target/gstreamer/env.sh` to expose the staged overlay.
-4. If you prefer a manual build, run `meson setup gstreamer/build ...` followed by `meson compile`/`meson install`, mirroring the flags inside the script.
+
+5. **Force rebuild**: Set environment variable to force GStreamer rebuild:
+   ```bash
+   FORCE_GSTREAMER_BUILD=1 cargo build --release
+   ```
 
 ## Rust GStreamer Plugin (`rist-elements`)
 
@@ -90,11 +103,76 @@ The crate is consumed directly by Rust tests and external tools; no shared libra
 
 ## Building the Full Stack
 
-1. **Prepare host**: install Rust toolchain (via `rustup`), Meson/Ninja, GStreamer dev headers, and ensure CAP_NET_ADMIN is available for TC-based tests.
-2. **Stage patched GStreamer**: run `./build_gstreamer.sh` (or mirror the Meson flags manually) to build into `target/gstreamer/`. Source `target/gstreamer/env.sh` afterwards.
-3. **Compile Rust plugins**: `cargo build --release -p rist-elements --all-features` and optionally `cargo build -p network-sim`.
-4. **Expose plugins**: keep `GST_PLUGIN_PATH` pointed at `target/release` for the Rust plugin and rely on the staged overlay exported by the env helper. System-wide installs remain optional.
-5. **Verify**: `gst-inspect-1.0 ristdispatcher` and `gst-inspect-1.0 ristsink` should both succeed. Use `GST_DEBUG=rist*:3` for sanity checks.
+The build process is **completely automated** - just run `cargo build` and everything happens automatically!
+
+### Quick Start
+
+```bash
+# Clone the repo
+git clone <repo-url>
+cd rist-bonding
+
+# Just build - that's it!
+cargo build
+```
+
+**What happens automatically:**
+1. Git submodules are initialized (if needed)
+2. GStreamer is built with patched RIST plugin (if needed)
+3. Environment variables are configured (via `.cargo/config.toml`)
+4. All Rust crates are built with correct linkage
+
+No manual steps required!
+
+### Makefile Targets (Optional)
+
+For convenience, make targets are also available:
+
+```bash
+make build        # Same as cargo build
+make gstreamer    # Explicitly rebuild GStreamer
+make test         # Run all tests
+make verify       # Verify build is working
+make clean        # Clean Rust artifacts (keeps GStreamer)
+make clean-all    # Clean everything including GStreamer
+```
+
+### Environment Setup
+
+The `.cargo/config.toml` automatically configures:
+- `PKG_CONFIG_PATH` - Points to built GStreamer for compilation
+- `GST_PLUGIN_PATH` - Plugin search paths for runtime
+- `LD_LIBRARY_PATH` - Library paths for linking and runtime
+
+For manual environment setup or shell scripts:
+```bash
+source target/gstreamer/env.sh
+```
+
+Or use direnv (`.envrc` is provided):
+```bash
+direnv allow
+```
+
+### Force Rebuild
+
+To force GStreamer to rebuild:
+```bash
+FORCE_GSTREAMER_BUILD=1 cargo build --release
+# Or use the script directly:
+./build_gstreamer.sh --clean
+```
+
+### Verify Installation
+
+```bash
+# Check GStreamer plugins
+gst-inspect-1.0 ristsink    # C plugin with telemetry patches
+gst-inspect-1.0 ristdispatcher  # Rust plugin
+
+# Enable verbose logging if needed
+export GST_DEBUG=rist*:5
+```
 
 ## Testing & Validation
 

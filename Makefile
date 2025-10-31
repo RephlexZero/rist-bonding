@@ -1,43 +1,79 @@
-# Makefile for RIST Bonding Docker operations
-.PHONY: help build test clean dev network bench multi
+# Makefile for RIST Bonding Project
+.PHONY: help build test clean dev network bench multi gstreamer verify
 
 # Default target
 help:
-	@echo "RIST Bonding Docker Testing"
-	@echo "Available targets:"
-	@echo "  build     - Build Docker images"
-	@echo "  test      - Run all tests in Docker"
-	@echo "  clean     - Clean up Docker resources"
-	@echo "  dev       - Start interactive development container"
-	@echo "  network   - Show network status inside container"
-	@echo "  bench     - Run benchmarks"
-	@echo "  multi     - Run multi-container tests"
+	@echo "RIST Bonding Project"
+	@echo ""
+	@echo "Quick Start:"
+	@echo "  cargo build      # Builds everything automatically!"
+	@echo ""
+	@echo "Available make targets:"
+	@echo "  build     - Build the Rust project (same as cargo build)"
+	@echo "  verify    - Verify the build and plugins are working"
+	@echo "  gstreamer - Explicitly build/rebuild GStreamer"
+	@echo "  test      - Run all tests"
+	@echo "  clean     - Clean build artifacts (keeps GStreamer)"
+	@echo "  clean-all - Clean everything including GStreamer build"
+	@echo ""
+	@echo "Note: 'cargo build' automatically handles:"
+	@echo "  - Git submodule initialization"
+	@echo "  - GStreamer building (first time only)"
+	@echo "  - Environment configuration"
+	@echo ""
+	@echo "Docker targets:"
+	@echo "  docker-build - Build Docker images"
+	@echo "  docker-test  - Run all tests in Docker"
+	@echo "  dev          - Start interactive development container"
+	@echo "  network      - Show network status inside container"
+	@echo "  bench        - Run benchmarks"
+	@echo "  multi        - Run multi-container tests"
 
-# Build Docker images
+# Build the Rust project (same as cargo build, GStreamer auto-built if needed)
 build:
+	@cargo build
+
+# Build release version (same as cargo build --release)
+build-release:
+	@cargo build --release
+
+# Build GStreamer explicitly
+gstreamer:
+	@./build_gstreamer.sh
+
+# Verify the build
+verify:
+	@./verify-build.sh
+
+# Run tests
+test:
+	@cargo test
+
+# Clean Rust artifacts only
+clean:
+	@cargo clean
+
+# Clean everything including GStreamer
+clean-all: clean
+	@rm -rf target/gstreamer
+	@echo "==> Cleaned all build artifacts"
+
+# Docker-related targets
+docker-build:
 	@./scripts/docker-test.sh build
 
-# Run all tests
-test:
+docker-test:
 	@./scripts/docker-test.sh test
 
-# Start development container
 dev:
 	@./scripts/docker-test.sh dev
 
-# Clean up Docker resources
-clean:
-	@./scripts/docker-test.sh clean
-
-# Show network status
 network:
 	@./scripts/docker-test.sh network
 
-# Run benchmarks
 bench:
 	@./scripts/docker-test.sh bench
 
-# Run multi-container tests
 multi:
 	@./scripts/docker-test.sh multi
 
