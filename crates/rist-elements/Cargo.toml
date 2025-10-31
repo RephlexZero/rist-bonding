@@ -16,13 +16,13 @@ parking_lot = "0.12.4"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.143"
 
-gstreamer = { version = "0.24.1"}
-gstreamer-base = { version = "0.24.0"}
-gstreamer-rtp = { version = "0.24.0"}
-gstreamer-video = { version = "0.24.1"}
+gstreamer = { version = "0.24.1" }
+gstreamer-base = { version = "0.24.0" }
+gstreamer-rtp = { version = "0.24.0" }
+gstreamer-video = { version = "0.24.1" }
 
-gstreamer-app = { version = "0.24.0"}
-gstreamer-audio = { version = "0.24.0"}
+gstreamer-app = { version = "0.24.0" }
+gstreamer-audio = { version = "0.24.0" }
 
 once_cell = "1.21.3"
 
@@ -47,6 +47,9 @@ serde_json = "1.0.143"
 serial_test = "3.2.0"
 
 [build-dependencies]
+# Force build script to run and check/build GStreamer
+# Without this, build.rs may not execute
+built = "0.7"
 
 [features]
 default = ["test-plugin", "network-sim"]
