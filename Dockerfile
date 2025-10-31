@@ -1,4 +1,4 @@
-# Dev container for RIST bonding development (build GStreamer from source)
+ # Dev container for RIST bonding development (build GStreamer from source)
 FROM ubuntu:latest
 
 # Avoid interactive prompts
@@ -75,6 +75,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     netcat-openbsd \
     tcpdump \
     ca-certificates \
+    # SSH support
+    openssh-server \
+    openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Install UV and use it to install meson to /usr/local/bin
