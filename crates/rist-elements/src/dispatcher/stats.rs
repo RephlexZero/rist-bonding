@@ -22,6 +22,9 @@ pub(crate) fn update_weights_from_stats(inner: &DispatcherInner, stats: &gst::St
     let strategy = *inner.strategy.lock();
     let mut state = inner.state.lock();
     let now = std::time::Instant::now();
+    let elapsed_since_start = now
+        .saturating_duration_since(state.started_at)
+        .as_secs_f64();
 
     if let Ok(sess_stats_value) = stats.get::<glib::Value>("session-stats") {
         if let Ok(sess_array) = sess_stats_value.get::<glib::ValueArray>() {
@@ -72,6 +75,16 @@ pub(crate) fn update_weights_from_stats(inner: &DispatcherInner, stats: &gst::St
                         .unwrap_or(50.0);
 
                     if let Some(link_stats) = state.link_stats.get_mut(idx) {
+                        let target_alpha = if elapsed_since_start < 5.0 {
+                            0.6
+                        } else if elapsed_since_start < 20.0 {
+                            0.4
+                        } else {
+                            0.25
+                        };
+                        if (link_stats.alpha - target_alpha).abs() > f64::EPSILON {
+                            link_stats.alpha = target_alpha;
+                        }
                         let delta_time =
                             now.duration_since(link_stats.prev_timestamp).as_secs_f64();
                         if delta_time > 0.1 {
@@ -183,12 +196,25 @@ pub(crate) fn update_weights_from_stats_legacy(
     while state.link_stats.len() < num_links {
         state.link_stats.push(LinkStats::default());
     }
+    let elapsed_since_start = now
+        .saturating_duration_since(state.started_at)
+        .as_secs_f64();
     for (link_idx, link_stats) in state.link_stats.iter_mut().enumerate() {
         let session_key = format!("session-{}", link_idx);
         if let Ok(sent_original) = stats
             .get::<u64>(&format!("{}.sent-original-packets", session_key))
             .or_else(|_| stats.get::<u64>("sent-original-packets"))
         {
+            let target_alpha = if elapsed_since_start < 5.0 {
+                0.6
+            } else if elapsed_since_start < 20.0 {
+                0.4
+            } else {
+                0.25
+            };
+            if (link_stats.alpha - target_alpha).abs() > f64::EPSILON {
+                link_stats.alpha = target_alpha;
+            }
             let sent_retrans = stats
                 .get::<u64>(&format!("{}.sent-retransmitted-packets", session_key))
                 .or_else(|_| stats.get::<u64>("sent-retransmitted-packets"))

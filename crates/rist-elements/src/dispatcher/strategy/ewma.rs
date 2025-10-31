@@ -9,6 +9,7 @@ pub(crate) fn calculate_ewma_weights(inner: &DispatcherInner, state: &mut State)
     let base_eps = *inner.probe_ratio.lock();
     let alpha_penalty = *inner.ewma_rtx_penalty.lock();
     let beta_penalty = *inner.ewma_rtt_penalty.lock();
+    let elapsed = state.started_at.elapsed().as_secs_f64();
 
     let prev_weights = if state.weights.is_empty() {
         vec![1.0 / count as f64; count]
@@ -28,9 +29,10 @@ pub(crate) fn calculate_ewma_weights(inner: &DispatcherInner, state: &mut State)
 
             let loss_term = (1.0 - stats.ewma_rtx_rate)
                 .max(0.05)
-                .powf(1.5 + alpha_penalty);
+                .powf(2.2 + alpha_penalty);
+            let reliability_penalty = 1.0 / (1.0 + 20.0 * stats.ewma_rtx_rate.max(0.0).powf(1.2));
             let rtt_term = 1.0 / (1.0 + beta_penalty * (stats.ewma_rtt / 45.0).max(0.2));
-            scores[i] = (delivered_pps * loss_term * rtt_term).max(1e-6);
+            scores[i] = (delivered_pps * loss_term * rtt_term * reliability_penalty).max(1e-6);
         }
     }
 
@@ -41,13 +43,23 @@ pub(crate) fn calculate_ewma_weights(inner: &DispatcherInner, state: &mut State)
     }
     let mut new_weights: Vec<f64> = scores.iter().map(|s| s / score_sum).collect();
 
-    let smoothing = 0.9;
+    let base_smoothing = if elapsed < 5.0 {
+        0.45
+    } else if elapsed < 20.0 {
+        0.65
+    } else {
+        0.85
+    };
     for (i, w) in new_weights.iter_mut().enumerate() {
         let prev = prev_weights
             .get(i)
             .copied()
             .unwrap_or_else(|| 1.0 / count as f64);
-        *w = smoothing * *w + (1.0 - smoothing) * prev;
+        let raw_weight = *w;
+        let delta = (raw_weight - prev).abs();
+        let adapt = (delta / 0.2).clamp(0.0, 1.0);
+        let smoothing = (base_smoothing - adapt * 0.3).clamp(0.35, 0.9);
+        *w = smoothing * raw_weight + (1.0 - smoothing) * prev;
     }
 
     let mut sum = new_weights.iter().sum::<f64>();
