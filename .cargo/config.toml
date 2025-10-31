@@ -1,5 +1,5 @@
 # Cargo configuration for rist-bonding project
-# This file sets default arguments for cargo commands
+# This file sets default arguments for cargo commands and environment
 
 [test]
 # Always run tests with single thread to avoid race conditions
@@ -11,3 +11,31 @@ args = ["--test-threads=1"]
 # Force each test binary to run its tests sequentially
 # This prevents GLib main context conflicts between tests within the same binary
 RUST_TEST_THREADS = "1"
+
+# GStreamer environment - point pkg-config to our built GStreamer
+# The build.rs script will automatically build GStreamer if needed
+PKG_CONFIG_PATH = { value = "target/gstreamer/install/lib/pkgconfig:target/gstreamer/install/lib64/pkgconfig:target/gstreamer/install/lib/x86_64-linux-gnu/pkgconfig", relative = true }
+
+# GStreamer plugin paths for runtime
+GST_PLUGIN_PATH = { value = "target/gstreamer/overlay:target/gstreamer/install/lib/gstreamer-1.0:target/gstreamer/install/lib64/gstreamer-1.0", relative = true }
+
+# Library paths for linking
+LD_LIBRARY_PATH = { value = "target/gstreamer/install/lib:target/gstreamer/install/lib64:target/gstreamer/install/lib/x86_64-linux-gnu", relative = true }
+
+# Force rebuild of GStreamer by setting this to "1"
+# FORCE_GSTREAMER_BUILD = "1"
+
+[build]
+# Ensure the build script always runs to check GStreamer
+# This allows build.rs to verify and build GStreamer as needed
+rustflags = []
+
+# Platform-specific linker configuration
+[target.x86_64-unknown-linux-gnu]
+rustflags = [
+    # Add rpath so runtime linker finds our GStreamer libraries
+    "-C",
+    "link-arg=-Wl,-rpath,$ORIGIN/../../gstreamer/install/lib",
+    "-C",
+    "link-arg=-Wl,-rpath,$ORIGIN/../../gstreamer/install/lib64",
+]
